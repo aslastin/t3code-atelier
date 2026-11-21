@@ -12,11 +12,13 @@ function normalizeConfiguredBaseDir(t3Home: Option.Option<string>): Option.Optio
 
 export function resolveDesktopBaseDir(input: {
   readonly homeDirectory: string;
+  readonly isDevelopment: boolean;
   readonly joinPath: JoinPath;
   readonly t3Home: Option.Option<string>;
 }): string {
   return Option.getOrElse(normalizeConfiguredBaseDir(input.t3Home), () =>
-    input.joinPath(input.homeDirectory, ".t3"),
+    // Development keeps ~/.t3/dev, which the dev runner and server expect.
+    input.joinPath(input.homeDirectory, input.isDevelopment ? ".t3" : ".t3-atelier"),
   );
 }
 
