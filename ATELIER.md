@@ -60,10 +60,32 @@ not imported.
 Both apps register the `t3code://` link scheme, so macOS opens external `t3code://` links (pairing
 links, Codex sign-in handoff) in only one of them.
 
-## Updates
+## Rebuild and update the installed app
 
-Local builds have no update feed, so there is no auto-update. To update, sync with upstream
-(below) and rebuild.
+Local builds have no update feed, so **Check for updates** stays disabled and there is no
+auto-update. To update, rebuild and replace the app. Your data lives outside the app bundle, in
+`~/.t3-atelier` and `~/Library/Application Support/t3code-atelier`, so replacing the app keeps
+threads, projects, and settings.
+
+Version Atelier builds as `<upstream version>+atelier.<N>`, for example `0.1.11+atelier.2`. Take
+the upstream version from `apps/desktop/package.json`. Increase `N` when a build adds fork
+features, and start again at `1` when the upstream version changes. Keeping the upstream version
+in front keeps client and server version checks working as for upstream, and Atelier never edits
+the `package.json` versions, which upstream releases change.
+
+```sh
+git switch <branch you build from>
+git merge <feature branch>        # or git pull
+vp i                              # dependencies may have changed
+vp run dist:desktop:dmg --build-version 0.1.11+atelier.2
+```
+
+Then quit T3 Code (Atelier) with Cmd+Q, open the new DMG from `release/`, drag the app to
+**Applications**, and choose **Replace**. Database migrations run on the next launch.
+
+A build can migrate the database forward, so an older build may not open the newer data. Before a
+big update, quit the app and back up the data with `cp -R ~/.t3-atelier ~/.t3-atelier.bak`. Old
+DMGs pile up in `release/`; delete the ones you no longer need.
 
 ## Development mode
 
