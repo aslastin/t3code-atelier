@@ -86,6 +86,10 @@ vp run dist:atelier:dmg
 Then quit T3 Code (Atelier) with Cmd+Q, open the new DMG from `release/`, drag the app to
 **Applications**, and choose **Replace**. Database migrations run on the next launch.
 
+electron-builder drops `+atelier.<N>` from the DMG file name (`T3-Code-<upstream version>-<arch>.dmg`,
+so each build overwrites the last) and from the version Finder shows. The app's About panel shows
+the full version.
+
 A build can migrate the database forward, so an older build may not open the newer data. Before a
 big update, quit the app and back up the data with `cp -R ~/.t3-atelier ~/.t3-atelier.bak`. Old
 DMGs pile up in `release/`; delete the ones you no longer need.

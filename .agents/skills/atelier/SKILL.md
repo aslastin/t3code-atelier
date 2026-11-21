@@ -48,8 +48,10 @@ Use when the user asks to build, rebuild, install, or update the installed app. 
    vp run dist:atelier:dmg
    ```
 
-   It prints `[atelier-dmg] building T3 Code (Atelier) <version>` and writes
-   `release/T3-Code-<version>-<arch>.dmg`. Pass extra flags such as `--arch x64` after the command.
+   It prints `[atelier-dmg] building T3 Code (Atelier) <version>`, and the desktop build lists the
+   artifacts at the end. electron-builder drops `+atelier.<N>` from file names, so the DMG is
+   `release/T3-Code-<upstream version>-<arch>.dmg` and each build overwrites the previous one.
+   Pass extra flags such as `--arch x64` after the command.
 
 3. Before replacing the installed app, check whether it is running with
    `lsappinfo info -only pid io.github.aslastin.t3code-atelier`: it prints `"pid"=<n>` only while
@@ -58,7 +60,7 @@ Use when the user asks to build, rebuild, install, or update the installed app. 
 4. Install the DMG you just built:
 
    ```sh
-   dmg="release/T3-Code-<version>-<arch>.dmg"
+   dmg="release/T3-Code-<upstream version>-<arch>.dmg"
    mnt="$(mktemp -d)"
    hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg"
    rm -rf "/Applications/T3 Code (Atelier).app"
@@ -69,9 +71,16 @@ Use when the user asks to build, rebuild, install, or update the installed app. 
    Only ever replace `T3 Code (Atelier).app`. The official `T3 Code (Beta).app` must stay
    untouched.
 
-5. Verify with
-   `plutil -extract CFBundleShortVersionString raw "/Applications/T3 Code (Atelier).app/Contents/Info.plist"`
-   and report the installed version to the user.
+5. Verify the installed version and report it to the user. `Info.plist` and Finder show only the
+   upstream version; the app itself, its About panel, and version checks use the full one. Read it
+   from the app bundle, running from `scripts/`, which has `@electron/asar`:
+
+   ```sh
+   node -e 'const asar = require("@electron/asar"); console.log(JSON.parse(asar.extractFile(process.argv[1], "package.json")).version)' "/Applications/T3 Code (Atelier).app/Contents/Resources/app.asar"
+   ```
+
+   Also confirm `plutil -extract CFBundleIdentifier raw "/Applications/T3 Code (Atelier).app/Contents/Info.plist"`
+   prints `io.github.aslastin.t3code-atelier`.
 
 User data lives in `~/.t3-atelier` and `~/Library/Application Support/t3code-atelier`, outside the
 app, so replacing the app keeps it. A new build may migrate the database forward, so before an
