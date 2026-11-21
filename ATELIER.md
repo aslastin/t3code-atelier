@@ -15,7 +15,10 @@ appears in the app version as `+atelier.<N>`.
 1. **Atelier identity.** The app is named **T3 Code (Atelier)**, uses the Atelier icon from
    `assets/atelier/`, and has its own bundle id (`io.github.aslastin.t3code-atelier`), data
    directory (`~/.t3-atelier`), and Electron profile
-   (`~/Library/Application Support/t3code-atelier`), so it runs next to the official app.
+   (`~/Library/Application Support/t3code-atelier`), so it runs next to the official app. Inside
+   the app, a bordeaux leather strip with a brass stitch tops the sidebar and fills the send
+   button. **Settings → Appearance → Environment identification** switches it to a version pill
+   or turns it off.
 
 ## Build the macOS app
 

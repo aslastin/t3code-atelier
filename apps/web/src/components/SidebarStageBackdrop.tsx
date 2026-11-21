@@ -2,12 +2,13 @@ import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentIdentificationMode } from "@t3tools/contracts";
 import { useId } from "react";
 
+import { AtelierStageArt } from "./AtelierStageArt";
 import { APP_STAGE_LABEL } from "../branding";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
 import { primaryServerConfigAtom } from "../state/server";
 
-export type SidebarStageBackdropVariant = "nightly" | "dev";
-export type EnvironmentIdentificationPillLabel = "Dev" | "Nightly";
+export type SidebarStageBackdropVariant = "nightly" | "dev" | "atelier";
+export type EnvironmentIdentificationPillLabel = "Dev" | "Nightly" | "Atelier";
 
 const STAGE_BACKDROP_VIEW_BOX = "0 0 8192 96";
 
@@ -21,6 +22,7 @@ export function resolveSidebarStageBackdropVariant(
   const normalized = stageLabel.trim().toLowerCase();
   if (normalized === "nightly") return "nightly";
   if (normalized === "dev") return "dev";
+  if (normalized === "atelier") return "atelier";
   return null;
 }
 
@@ -32,6 +34,8 @@ export function resolveEnvironmentIdentificationPillLabel(
   if (normalized === "dev") return "Dev";
   // oxlint-disable-next-line t3code/no-untranslated-copy -- release channel names
   if (normalized === "nightly") return "Nightly";
+  // oxlint-disable-next-line t3code/no-untranslated-copy -- fork product name
+  if (normalized === "atelier") return "Atelier";
   return null;
 }
 
@@ -63,10 +67,12 @@ export function SidebarStageBackdrop({ variant }: { variant: SidebarStageBackdro
 }
 
 function StageBackdropArt({ variant }: { variant: SidebarStageBackdropVariant }) {
+  if (variant === "atelier") return <AtelierStageArt />;
   return variant === "nightly" ? <NightlySkyArt /> : <DevBlueprintArt />;
 }
 
 export function StageBackdropButtonArt({ variant }: { variant: SidebarStageBackdropVariant }) {
+  if (variant === "atelier") return <AtelierStageArt compact />;
   return variant === "nightly" ? <NightlySkyArt compact /> : <DevBlueprintArt compact />;
 }
 
