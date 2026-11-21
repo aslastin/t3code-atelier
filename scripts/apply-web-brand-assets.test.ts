@@ -29,6 +29,13 @@ it.layer(NodeServices.layer)("apply-web-brand-assets", (it) => {
         (yield* fs.readDirectory(targetDirectory)).toSorted(),
         WEB_ICON_FILENAMES,
       );
+      // Atelier fork: production builds, including the boot splash, use the Atelier icon.
+      const path = yield* Path.Path;
+      const repoRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
+      assert.deepStrictEqual(
+        yield* fs.readFile(path.join(targetDirectory, "apple-touch-icon.png")),
+        yield* fs.readFile(path.join(repoRoot, "assets/atelier/atelier-web-apple-touch-180.png")),
+      );
     }),
   );
 
