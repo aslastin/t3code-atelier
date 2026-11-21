@@ -59,6 +59,15 @@ function environmentIdentificationOptions(
       ["none", msg("None")],
     ];
   }
+  if (stageVariant === "atelier") {
+    return [
+      ["artwork", ENVIRONMENT_IDENTIFICATION_LABELS.artwork],
+      ["nightly-artwork", msg("Nightly artwork")],
+      ["dev-artwork", msg("Dev artwork")],
+      ["pill", msg("Version pill")],
+      ["none", msg("None")],
+    ];
+  }
   if (stageVariant === "nightly") {
     return [
       ["artwork", msg("Nightly artwork")],

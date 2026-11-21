@@ -34,7 +34,7 @@ export class MigrateDevDbSharedHomeError extends Schema.TaggedError<MigrateDevDb
   {},
 ) {
   override get message(): string {
-    return "Refusing to rebuild the shared ~/.t3 database. Use an isolated --base-dir.";
+    return "Refusing to rebuild a live ~/.t3 or ~/.t3-atelier database. Use an isolated --base-dir.";
   }
 }
 
@@ -124,6 +124,8 @@ export interface RunMigrateDevDbInput {
 export interface RunMigrateDevDbOptions {
   /** Test override for the directory writes must never target. */
   readonly sharedHome?: string | undefined;
+  /** Test override for the Atelier install home, preferred as the default source. */
+  readonly atelierHome?: string | undefined;
 }
 
 interface KeptProject {
@@ -493,8 +495,15 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   const path = yield* Path.Path;
 
   const sharedHome = path.resolve(options.sharedHome ?? path.join(NodeOS.homedir(), ".t3"));
+  const atelierHome = path.resolve(
+    options.atelierHome ?? path.join(NodeOS.homedir(), ".t3-atelier"),
+  );
+  const atelierSource = path.join(atelierHome, "userdata", "statev2.sqlite");
   const sourcePath = path.resolve(
-    input.source ?? path.join(sharedHome, "userdata", "statev2.sqlite"),
+    input.source ??
+      ((yield* fs.exists(atelierSource).pipe(Effect.orElseSucceed(() => false)))
+        ? atelierSource
+        : path.join(sharedHome, "userdata", "statev2.sqlite")),
   );
 
   const baseDir =
@@ -511,11 +520,12 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   if (!(yield* fs.exists(sourcePath))) {
     return yield* new MigrateDevDbSourceMissingError({ sourcePath });
   }
-  const [canonicalBaseDir, canonicalSharedHome] = yield* Effect.all([
+  const [canonicalBaseDir, canonicalSharedHome, canonicalAtelierHome] = yield* Effect.all([
     fs.realPath(baseDir).pipe(Effect.orElseSucceed(() => baseDir)),
     fs.realPath(sharedHome).pipe(Effect.orElseSucceed(() => sharedHome)),
+    fs.realPath(atelierHome).pipe(Effect.orElseSucceed(() => atelierHome)),
   ]);
-  if (canonicalBaseDir === canonicalSharedHome) {
+  if (canonicalBaseDir === canonicalSharedHome || canonicalBaseDir === canonicalAtelierHome) {
     return yield* new MigrateDevDbSharedHomeError();
   }
   // Both destination and snapshot are deleted below; reject sources resolving to either.
@@ -639,7 +649,9 @@ export const migrateDevDbCommand = Command.make(
     ),
     source: Flag.String("source").pipe(
       Flag.optional,
-      Flag.withDescription("Source database. Defaults to ~/.t3/userdata/statev2.sqlite."),
+      Flag.withDescription(
+        "Source database. Defaults to ~/.t3-atelier/userdata/statev2.sqlite, else ~/.t3/userdata/statev2.sqlite.",
+      ),
     ),
   },
   ({ projects, threadsPerProject, baseDir, source }) =>

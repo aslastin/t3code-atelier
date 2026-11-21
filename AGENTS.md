@@ -214,3 +214,7 @@ Architecture and its constraints: `docs/internals/overview.md`. Glossary: `docs/
 
 - Security is important, but should not be over-indexed on, especially for dev mode/maintainer-only features.
 - Before a security audit or triaging a vulnerability report, read [SECURITY.md](SECURITY.md) for the trust model and what is intended.
+
+## Fork: T3 Code Atelier
+
+This checkout is the T3 Code Atelier fork ([ATELIER.md](ATELIER.md)). To finish a fork feature, build or install the Atelier app, or sync with upstream, use the `atelier` skill (`.agents/skills/atelier/SKILL.md`).

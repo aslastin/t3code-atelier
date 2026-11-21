@@ -15,6 +15,14 @@ export const BRAND_ASSET_PATHS = {
   productionWebIcon192Png: "assets/prod/t3-black-web-icon-192x192.png",
   productionWebIcon512Png: "assets/prod/t3-black-web-icon-512x512.png",
 
+  atelierMacIconPng: "assets/atelier/atelier-macos-1024.png",
+  atelierWebFaviconIco: "assets/atelier/atelier-web-favicon.ico",
+  atelierWebFavicon16Png: "assets/atelier/atelier-web-favicon-16x16.png",
+  atelierWebFavicon32Png: "assets/atelier/atelier-web-favicon-32x32.png",
+  atelierWebAppleTouchIconPng: "assets/atelier/atelier-web-apple-touch-180.png",
+  atelierWebIcon192Png: "assets/atelier/atelier-web-icon-192x192.png",
+  atelierWebIcon512Png: "assets/atelier/atelier-web-icon-512x512.png",
+
   nightlyIconComposerProject: "assets/nightly/app-icon.icon",
   nightlyIosIconPng: "assets/nightly/nightly-ios-1024.png",
   nightlyMacIconPng: "assets/nightly/nightly-macos-1024.png",
@@ -78,13 +86,14 @@ const WEB_ICON_SOURCE_PATHS_BY_BRAND = {
     icon192Png: BRAND_ASSET_PATHS.nightlyWebIcon192Png,
     icon512Png: BRAND_ASSET_PATHS.nightlyWebIcon512Png,
   },
+  // Atelier fork: production web builds carry the Atelier icon, which also fills the boot splash.
   production: {
-    faviconIco: BRAND_ASSET_PATHS.productionWebFaviconIco,
-    favicon16Png: BRAND_ASSET_PATHS.productionWebFavicon16Png,
-    favicon32Png: BRAND_ASSET_PATHS.productionWebFavicon32Png,
-    appleTouchIconPng: BRAND_ASSET_PATHS.productionWebAppleTouchIconPng,
-    icon192Png: BRAND_ASSET_PATHS.productionWebIcon192Png,
-    icon512Png: BRAND_ASSET_PATHS.productionWebIcon512Png,
+    faviconIco: BRAND_ASSET_PATHS.atelierWebFaviconIco,
+    favicon16Png: BRAND_ASSET_PATHS.atelierWebFavicon16Png,
+    favicon32Png: BRAND_ASSET_PATHS.atelierWebFavicon32Png,
+    appleTouchIconPng: BRAND_ASSET_PATHS.atelierWebAppleTouchIconPng,
+    icon192Png: BRAND_ASSET_PATHS.atelierWebIcon192Png,
+    icon512Png: BRAND_ASSET_PATHS.atelierWebIcon512Png,
   },
 } as const satisfies Record<WebAssetBrand, Record<keyof typeof WEB_ICON_TARGET_FILENAMES, string>>;
 

@@ -1,8 +1,12 @@
 <p align="center">
   <a href="https://t3.codes">
-    <img src="./assets/prod/t3-black-web-icon-192x192.png" width="80" height="80" alt="T3 Code logo" />
+    <img src="./assets/atelier/atelier-web-icon-192x192.png" width="80" height="80" alt="T3 Code Atelier logo" />
   </a>
 </p>
+
+> **T3 Code Atelier** is an unofficial personal fork of [T3 Code](https://github.com/pingdotgg/t3code),
+> not affiliated with or endorsed by T3 Tools Inc. No prebuilt binaries are provided.
+> See [ATELIER.md](./ATELIER.md) for what differs and how to build it.
 
 <h1 align="center">T3 Code</h1>
 
