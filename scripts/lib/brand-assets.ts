@@ -15,6 +15,8 @@ export const BRAND_ASSET_PATHS = {
   productionWebIcon192Png: "assets/prod/t3-black-web-icon-192x192.png",
   productionWebIcon512Png: "assets/prod/t3-black-web-icon-512x512.png",
 
+  atelierMacIconPng: "assets/atelier/atelier-macos-1024.png",
+
   nightlyIconComposerProject: "assets/nightly/app-icon.icon",
   nightlyIosIconPng: "assets/nightly/nightly-ios-1024.png",
   nightlyMacIconPng: "assets/nightly/nightly-macos-1024.png",
