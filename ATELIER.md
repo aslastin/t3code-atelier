@@ -73,7 +73,10 @@ vp run dev:desktop  # Electron app
 ```
 
 Both run from source with hot reload. In a git worktree, state lives in that worktree's `.t3`;
-a plain clone uses `~/.t3/dev` unless you pass `--home-dir`. See
+a plain clone uses `~/.t3/dev` unless you pass `--home-dir`. A new worktree's first start seeds a
+read-only copy of recent data from the installed Atelier app (`~/.t3-atelier`), or from the
+official app (`~/.t3`) if Atelier has no data yet. `vp run migrate-dev-db` refreshes it from the
+same source. Dev never writes to either live install. See
 [docs/operations/development.md](./docs/operations/development.md). The desktop app shows the
 blue blueprint icon in development mode. This is intentional and keeps it apart from installed
 builds.

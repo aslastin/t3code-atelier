@@ -570,6 +570,34 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
         { sharedHome: sourceDir },
       ).pipe(Effect.flip);
       assert.equal(error._tag, "MigrateDevDbSharedHomeError");
+
+      const otherDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-other-" });
+      const atelierError = yield* runMigrateDevDb(
+        { baseDir: sourceDir, source, projects: 5, threadsPerProject: 10 },
+        { sharedHome: otherDir, atelierHome: sourceDir },
+      ).pipe(Effect.flip);
+      assert.equal(atelierError._tag, "MigrateDevDbSharedHomeError");
+    }),
+  );
+
+  it.effect("defaults the source to the Atelier install, else the shared home", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const withDb = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-with-" });
+      const withoutDb = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-without-" });
+      yield* createFixtureSource(withDb);
+      const run = (homes: { sharedHome: string; atelierHome: string }) =>
+        Effect.gen(function* () {
+          const destDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-dest-" });
+          return yield* runMigrateDevDb(
+            { baseDir: destDir, projects: 5, threadsPerProject: 10 },
+            homes,
+          );
+        });
+
+      // Reading the home without a database fails with MigrateDevDbSourceMissingError.
+      yield* run({ sharedHome: withoutDb, atelierHome: withDb });
+      yield* run({ sharedHome: withDb, atelierHome: withoutDb });
     }),
   );
 });

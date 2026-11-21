@@ -552,6 +552,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         // An explicit ~/.t3 would put state in the live userdata; leaving it implicit selects ~/.t3/dev.
         assert.equal(yield* homeFor("~/.t3"), undefined);
         assert.equal(yield* homeFor("/home/dev/.t3/"), undefined);
+        assert.equal(yield* homeFor("~/.t3-atelier"), undefined);
       }),
     );
 
@@ -882,6 +883,17 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           assert.deepStrictEqual(yield* spawnedArgs(false), []);
           const [seedArgs] = yield* spawnedArgs(undefined);
           assert.includeMembers([...(seedArgs ?? [])], ["--base-dir", path.join(root, ".t3")]);
+          assert.includeMembers(
+            [...(seedArgs ?? [])],
+            ["--source", path.join(home, ".t3", "userdata", "statev2.sqlite")],
+          );
+
+          // The Atelier install outranks the official one as the seed source.
+          const atelierSource = path.join(home, ".t3-atelier", "userdata", "statev2.sqlite");
+          NodeFS.mkdirSync(path.dirname(atelierSource), { recursive: true });
+          NodeFS.writeFileSync(atelierSource, "");
+          const [atelierSeedArgs] = yield* spawnedArgs(undefined);
+          assert.includeMembers([...(atelierSeedArgs ?? [])], ["--source", atelierSource]);
 
           // Either database means the worktree already has data.
           for (const name of ["state.sqlite", "statev2.sqlite"]) {
