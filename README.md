@@ -4,6 +4,10 @@
   </a>
 </p>
 
+> **T3 Code Atelier** is an unofficial personal fork of [T3 Code](https://github.com/pingdotgg/t3code),
+> not affiliated with or endorsed by T3 Tools Inc. No prebuilt binaries are provided.
+> See [ATELIER.md](./ATELIER.md) for what differs and how to build it.
+
 <h1 align="center">T3 Code</h1>
 
 <p align="center">The open-source control plane for coding agents.</p>
