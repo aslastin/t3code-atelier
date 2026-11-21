@@ -31,12 +31,11 @@ From the repository root:
 
 ```sh
 vp i
-vp run dist:desktop:dmg
+vp run dist:atelier:dmg
 ```
 
 The DMG is written to `release/`. The build is unsigned and targets the host architecture by
-default. Pass `--arch` for another target, for example
-`vp run dist:desktop:dmg --arch x64`, or use `dist:desktop:dmg:arm64` / `dist:desktop:dmg:x64`.
+default. Pass `--arch` for another target, for example `vp run dist:atelier:dmg --arch x64`.
 Cross-architecture builds need the matching Rust target
 (`rustup target add aarch64-apple-darwin x86_64-apple-darwin`).
 
@@ -67,17 +66,18 @@ auto-update. To update, rebuild and replace the app. Your data lives outside the
 `~/.t3-atelier` and `~/Library/Application Support/t3code-atelier`, so replacing the app keeps
 threads, projects, and settings.
 
-Version Atelier builds as `<upstream version>+atelier.<N>`, for example `0.1.11+atelier.2`. Take
-the upstream version from `apps/desktop/package.json`. Increase `N` when a build adds fork
-features, and start again at `1` when the upstream version changes. Keeping the upstream version
-in front keeps client and server version checks working as for upstream, and Atelier never edits
-the `package.json` versions, which upstream releases change.
+`vp run dist:atelier:dmg` versions the build as `<upstream version>+atelier.<N>`, for example
+`0.1.11+atelier.2`. The upstream version comes from `apps/desktop/package.json`, and `N` from
+`atelier-build-number`. Increase that number before a build that adds fork features, and set it
+back to `1` when the upstream version changes. Keeping the upstream version in front keeps client
+and server version checks working as for upstream, and Atelier never edits the `package.json`
+versions, which upstream releases change.
 
 ```sh
 git switch <branch you build from>
 git merge <feature branch>        # or git pull
 vp i                              # dependencies may have changed
-vp run dist:desktop:dmg --build-version 0.1.11+atelier.2
+vp run dist:atelier:dmg
 ```
 
 Then quit T3 Code (Atelier) with Cmd+Q, open the new DMG from `release/`, drag the app to
