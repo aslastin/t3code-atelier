@@ -9,14 +9,13 @@ There are no prebuilt binaries. Build it from source.
 
 ## Differences from upstream
 
-- **App name.** The app is named **T3 Code (Atelier)** instead of T3 Code (Beta).
-- **App icon.** Installed macOS builds use the Atelier icon from `assets/atelier/` instead of the
-  official black icon.
-- **Separate identity.** Bundle id `io.github.aslastin.t3code-atelier`, data in `~/.t3-atelier`,
-  and Electron profile `~/Library/Application Support/t3code-atelier`, so it runs next to the
-  official app.
+Each finished fork feature is numbered here. The latest number is in `atelier-build-number` and
+appears in the app version as `+atelier.<N>`.
 
-Features will be listed here as they land.
+1. **Atelier identity.** The app is named **T3 Code (Atelier)**, uses the Atelier icon from
+   `assets/atelier/`, and has its own bundle id (`io.github.aslastin.t3code-atelier`), data
+   directory (`~/.t3-atelier`), and Electron profile
+   (`~/Library/Application Support/t3code-atelier`), so it runs next to the official app.
 
 ## Build the macOS app
 
@@ -68,10 +67,14 @@ threads, projects, and settings.
 
 `vp run dist:atelier:dmg` versions the build as `<upstream version>+atelier.<N>`, for example
 `0.1.11+atelier.2`. The upstream version comes from `apps/desktop/package.json`, and `N` from
-`atelier-build-number`. Increase that number before a build that adds fork features, and set it
-back to `1` when the upstream version changes. Keeping the upstream version in front keeps client
-and server version checks working as for upstream, and Atelier never edits the `package.json`
-versions, which upstream releases change.
+`atelier-build-number`: the number of finished fork features. `N` goes up by one when a feature is
+finished, together with its entry in "Differences from upstream", and never resets, not even when
+the upstream version changes. Builds never change it. Keeping the upstream version in front keeps
+client and server version checks working as for upstream, and Atelier never edits the
+`package.json` versions, which upstream releases change.
+
+Agents follow these steps through the `atelier` skill in `.agents/skills/atelier/`: finishing a
+feature, building and installing the app, and syncing with upstream.
 
 ```sh
 git switch <branch you build from>

@@ -217,4 +217,4 @@ Architecture and its constraints: `docs/internals/overview.md`. Glossary: `docs/
 
 ## Fork: T3 Code Atelier
 
-This checkout is the T3 Code Atelier fork. Build its macOS app with `vp run dist:atelier:dmg`, not `dist:desktop:dmg`. Before a build that adds fork features, increase the number in `atelier-build-number`. See "Rebuild and update the installed app" in [ATELIER.md](ATELIER.md).
+This checkout is the T3 Code Atelier fork ([ATELIER.md](ATELIER.md)). To finish a fork feature, build or install the Atelier app, or sync with upstream, use the `atelier` skill (`.agents/skills/atelier/SKILL.md`).
