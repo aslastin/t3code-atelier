@@ -115,15 +115,41 @@ builds.
 
 ## Syncing with upstream
 
+Preview a sync before applying it. The preview rebases the fork onto upstream in a separate
+worktree, so the branch you build from stays untouched until you decide:
+
 ```sh
 git remote add upstream https://github.com/pingdotgg/t3code.git  # once
 git fetch upstream
-git rebase upstream/main
+git worktree add -b atelier/sync-preview ../t3code-atelier-sync main
+cd ../t3code-atelier-sync
+git rebase upstream/main     # conflicts show up here; git rebase --abort to back out
+vp i
 vp run check:changed
+base="$(git merge-base main upstream/main)"
+vp test run $(git diff --name-only --diff-filter=d "$base" main -- '*.test.*')   # fork's tests
 ```
 
-Keep fork changes in separate files where possible (like this one and `assets/atelier/`) so
-rebases stay conflict-free.
+`check:changed` compares against the fork's old `main`, so it tests what upstream changed. The last
+line runs the tests the fork added or changed, which tell you that each fork feature still works on
+top of the new upstream code. Also look at what upstream changed in files the fork edits, and at
+any new code that names the official app's data directory, bundle id, or profile: it can make
+Atelier use `~/.t3` without causing a conflict or a failing test.
+
+If everything passes, apply it and keep a tag to return to:
+
+```sh
+cd <your checkout>
+git tag atelier/pre-sync-<date> main
+git switch main
+git reset --hard atelier/sync-preview
+git worktree remove ../t3code-atelier-sync
+git branch -D atelier/sync-preview
+```
+
+The `atelier` skill runs these steps and, before changing anything, reports what the sync brings
+and whether it is safe. Keep fork changes in separate files where possible (like this one and
+`assets/atelier/`) so rebases stay conflict-free.
 
 ## Known limitations
 
