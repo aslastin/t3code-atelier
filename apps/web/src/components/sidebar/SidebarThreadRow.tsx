@@ -616,8 +616,9 @@ type SidebarThreadRowProps = {
   scratchMachineLabel: string | null;
   project: EnvironmentProject | null;
   projectDisplayName: string | null;
-  // Atelier fork: the thread's topic, on cards of the ungrouped sidebar.
+  // Atelier fork: the thread's topic, for the hover card, and on the card when `topicOnCard`.
   topicTitle?: string | null;
+  topicOnCard?: boolean;
   providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;
   timestampFormat: TimestampFormat;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
@@ -1593,7 +1594,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {/* Left of the status slot, the pin would slide when hover swaps the
                 label for the wider row controls. */}
               {pinIndicator}
-              {props.projectDisplayName && props.topicTitle ? (
+              {props.projectDisplayName && props.topicOnCard && props.topicTitle ? (
                 // Atelier fork: a long project name leaves room for the topic's start.
                 <span className="flex min-w-0 flex-1 items-center gap-1 font-normal text-secondary-label text-xs">
                   <span className="max-w-[45%] shrink-0 truncate">{props.projectDisplayName}</span>
@@ -1788,6 +1789,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
   thread: SidebarThreadSummary;
   project: EnvironmentProject | null;
   projectDisplayName: string | null;
+  topicTitle?: string | null;
   environmentLabel: string | null;
   environmentMachine: EnvironmentMachineKind;
   providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;
@@ -1988,7 +1990,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
           thread={checkoutThread}
           project={props.project}
           projectDisplayName={props.projectDisplayName}
-          topicTitle={null}
+          topicTitle={props.topicTitle ?? null}
           environmentLabel={props.environmentLabel}
           environmentMachine={props.environmentMachine}
           providerEntry={providerEntry}

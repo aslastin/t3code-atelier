@@ -1251,6 +1251,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   }, [clearSelection, revealWidensScope, setPersistedProjectScopeKeys, setPersistedTopicScopeKeys]);
   const revealActiveRow = useActiveRowReveal(routeReveal, routeRowThreadKey, routeKeyInPlace);
   const showProjectEnvironments = projectGroupsSpanEnvironments(projectGroups);
+  // Atelier fork: a thread's topic for its row and hover card.
+  const topicTitleOf = (thread: EnvironmentThreadShell) => {
+    const index = topicIndexes.get(thread.environmentId);
+    return index ? (threadTopicOf(index, thread)?.title ?? null) : null;
+  };
   const scratchMachineLabelFor = (
     thread: Pick<SidebarThreadSummary, "environmentId" | "projectId">,
   ) => {
@@ -3587,6 +3592,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           project={
                             projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
                           }
+                          topicTitle={topicTitleOf(thread)}
                           projectDisplayName={
                             projectDisplayNameByKey.get(
                               `${thread.environmentId}:${thread.projectId}`,
@@ -3810,16 +3816,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               environmentMachineById.get(thread.environmentId) ?? "server"
                             }
                             scratchMachineLabel={scratchMachineLabelFor(thread)}
-                            topicTitle={
-                              boringSidebarEnabled || !isCard
-                                ? null
-                                : (() => {
-                                    const index = topicIndexes.get(thread.environmentId);
-                                    return index
-                                      ? (threadTopicOf(index, thread)?.title ?? null)
-                                      : null;
-                                  })()
-                            }
+                            topicTitle={topicTitleOf(thread)}
+                            // Folder topics already name it; slim rows have no project line.
+                            topicOnCard={!boringSidebarEnabled && isCard}
                             project={
                               projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
                               null
