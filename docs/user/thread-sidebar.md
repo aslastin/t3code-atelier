@@ -11,6 +11,8 @@ the current project, or use a project's own new-thread action. A new thread carr
 your model and mode selections, unless the destination project has its own model default.
 Its branch and workspace mode come from your configured defaults. To continue in
 an existing worktree, use **New thread in this worktree** from the branch toolbar.
+The filter button next to **New thread** limits the thread list to the projects you pick;
+**Shift-click** or **Shift+Enter** adds or removes one without closing the menu.
 While the sidebar is filtered to one project, the sidebar's **New thread** button
 starts the thread in that project instead of asking which project to use.
 
@@ -175,7 +177,15 @@ Right-click a topic to rename it, start a thread in it, settle all its active th
 disband it. Disbanding keeps the threads in the folder. Both Settle topic and Disband topic can be
 undone. A topic with no active threads is hidden; its pinned, snoozed, and settled threads stay in
 it and bring it back when they return. Agents can also start threads in a topic or move them into
-one. Topics need a server that supports them, and the ungrouped sidebar does not show them.
+one. Topics need a server that supports them. The ungrouped sidebar has no topic headers; its
+thread cards name the topic after the project instead, and hovering a card shows the full name.
+
+To show only some topics, pick a project in the thread filter: its topics with active threads
+appear under it, with **No topic** for its other threads. Pick topics there, or search the filter
+for a topic by name. A project with picked topics shows only those, in both sidebar modes and in
+Pinned, Snoozed, and Settled; other picked projects still show in full. A thread's menu also
+offers **Filter by** its topic. While the filter holds a single topic, the ungrouped sidebar's
+**New thread** button starts the thread in it. Choose **All projects** to clear the filter.
 
 ## Settle finished work
 
