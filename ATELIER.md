@@ -19,6 +19,10 @@ appears in the app version as `+atelier.<N>`.
    the app, a bordeaux leather strip with a brass stitch tops the sidebar and fills the send
    button. **Settings → Appearance → Environment identification** switches it to a version pill
    or turns it off.
+2. **Thread topics.** In the boring sidebar, a project's threads can be filed under named topics:
+   create, rename, reorder, and collapse them, drag threads in and out, and start a new thread in
+   a topic. A collapsed topic shows a dot with its most urgent thread status. Agents can file
+   threads under a topic too.
 
 ## Build the macOS app
 
