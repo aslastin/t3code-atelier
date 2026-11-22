@@ -1,6 +1,7 @@
 import {
   CommandId,
   type OrchestrationV2Run,
+  type OrchestrationV2SourcePlanRef,
   OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2Subagent,
@@ -141,6 +142,7 @@ export interface EventSinkV2Shape {
     readonly runId: RunId;
     readonly activeAttemptId: RunAttemptId;
     readonly expectedStatus: OrchestrationV2Run["status"];
+    readonly expectedPlanContext?: OrchestrationV2SourcePlanRef["expectedSource"];
     /** Also refuse while this run interrupt request is stored without its result. */
     readonly unlessInterruptRequested?: {
       readonly requestId: OrchestrationV2TurnItem["id"];
@@ -151,6 +153,7 @@ export interface EventSinkV2Shape {
   }) => Effect.Effect<
     {
       readonly committed: boolean;
+      readonly planContextChanged?: boolean;
       readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
     },
     EventSinkV2Error
@@ -576,6 +579,16 @@ const layerBase: Layer.Layer<
                 committed: false as const,
                 storedEvents: [] as ReadonlyArray<OrchestrationV2StoredEvent>,
               };
+            }
+            if (input.expectedPlanContext) {
+              const expected = input.expectedPlanContext;
+              const matching = yield* sql`SELECT 1 FROM orchestration_v2_projection_threads
+                WHERE thread_id = ${input.threadId} AND project_id = ${expected.projectId}
+                  AND runtime_mode = ${expected.runtimeMode}
+                  AND json_extract(payload_json, '$.branch') IS ${expected.branch}
+                  AND json_extract(payload_json, '$.worktreePath') IS ${expected.worktreePath}`;
+              if (matching.length === 0)
+                return { committed: false as const, planContextChanged: true, storedEvents: [] };
             }
             if (input.unlessInterruptRequested !== undefined) {
               const { requestId, resultId } = input.unlessInterruptRequested;

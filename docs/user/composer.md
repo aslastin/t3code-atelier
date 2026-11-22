@@ -12,6 +12,44 @@ becomes an attachment when inserting it would exceed the message limit. On a
 hardware keyboard, use `Cmd+Shift+V` on Apple devices or `Ctrl+Shift+V` elsewhere
 to keep a large paste editable in the composer instead.
 
+## Plan mode
+
+Turn on **Settings → Labs → Plan mode** on the device where you want to start planning.
+Choose **Plan** in the composer or enter `/plan`. On web and desktop, **Shift+Tab**
+also switches modes in the message field. Describe what you want done, even for a
+one-step task. Selecting Plan asks the agent to propose how to do it or ask for
+a missing decision. Send feedback with **Refine** to revise the proposal. For a remote
+environment, its T3 Code server must also support plan implementation.
+
+During planning the agent can read the project, ask questions, and revise its proposal.
+Research subagents launched through T3 inherit Plan and share the current checkout.
+Project edits, commits, and MCP actions that change the environment require a switch
+to **Build**, including with Auto or Full access. Claude can save the proposal in
+its own plans directory.
+
+**Implement** sends the latest plan in the current thread and switches it to Build.
+**Implement in a new thread** opens a conversation in the same checkout with the
+selected model, permissions, and final plan. The original discussion stays in its
+thread. You can finish a plan started on another device with Labs turned off, or
+select **Build** or enter `/default` to leave planning. Finish or cancel pending
+turns before changing modes so queued feedback runs in the mode you chose.
+Open **Plan implementations** in the original thread’s right panel to revisit the
+threads started from each revision. In an implementation thread, open **Plan discussion**
+to return to the original conversation. On mobile, use the plan menu in the thread
+header. Restoring an archived implementation thread makes it appear
+in the list again.
+
+If the provider refuses to start implementation, address the error and choose
+**Resume** in the implementation thread. It sends the saved plan again.
+If another tool switches the checkout to a different Git branch before you choose
+**Implement**, restore the original branch or refine the plan on the current branch.
+Using **Revert** on the implementation message in the original thread returns
+the full proposal to the composer. If Build turns are still pending, they keep
+their mode. Once the queue is empty, you can switch back to Plan to refine it.
+In a separate implementation thread, **Revert** applies only to that conversation.
+The original discussion keeps the link to that implementation. To launch another
+version, open **Plan discussion** and refine the plan.
+
 ## Formatting
 
 The composer writes Markdown and shows it styled as you type. When your cursor

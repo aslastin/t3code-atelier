@@ -76,6 +76,7 @@ export function useComposerMenuItems({
   sideChatDisabledReason,
   freshSessionAvailable,
   compactSlashCommandAvailable,
+  planModesAvailable,
   selectedProvider,
   selectedProviderSkills,
   selectedProviderSlashCommands,
@@ -95,6 +96,7 @@ export function useComposerMenuItems({
   readonly sideChatAvailable: boolean;
   readonly sideChatDisabledReason: string | null;
   readonly freshSessionAvailable: boolean;
+  readonly planModesAvailable?: boolean;
   readonly compactSlashCommandAvailable: boolean;
   readonly selectedProvider: ProviderDriverKind;
   readonly selectedProviderSkills: ServerProvider["skills"];
@@ -262,6 +264,15 @@ export function useComposerMenuItems({
           label: "/model",
           description: gt("Switch response model for this thread"),
         },
+        ...(planModesAvailable
+          ? (["plan", "default"] as const).map((command) => ({
+              id: `slash:${command}`,
+              type: "slash-command" as const,
+              command,
+              label: `/${command}`,
+              description: command === "plan" ? gt("Plan mode") : gt("Build"),
+            }))
+          : []),
         ...(sideChatAvailable
           ? ([
               {
@@ -299,14 +310,19 @@ export function useComposerMenuItems({
       const providerSlashCommandItems = getProviderSlashCommandsForSlashMenu(
         selectedProviderSlashCommands,
         slashMenuSkills,
-      ).map((command) => ({
-        id: `provider-slash-command:${selectedProvider}:${command.name}`,
-        type: "provider-slash-command" as const,
-        provider: selectedProvider,
-        command,
-        label: `/${command.name}`,
-        description: command.description ?? command.input?.hint ?? gt("Run provider command"),
-      }));
+      )
+        .filter(
+          (command) =>
+            !planModesAvailable || (command.name !== "plan" && command.name !== "default"),
+        )
+        .map((command) => ({
+          id: `provider-slash-command:${selectedProvider}:${command.name}`,
+          type: "provider-slash-command" as const,
+          provider: selectedProvider,
+          command,
+          label: `/${command.name}`,
+          description: command.description ?? command.input?.hint ?? gt("Run provider command"),
+        }));
       const query = composerTrigger.query.trim().toLowerCase();
       const skillItems = slashMenuSkills.map((skill) => ({
         id: `skill:${selectedProvider}:${skill.name}`,

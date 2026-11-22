@@ -810,6 +810,7 @@ describe("threadHistoryPaging", () => {
     const populated = {
       ...projection,
       plans: Array.from({ length: 120 }, (_, index) => ({
+        ...(index === 119 ? { implementationThreadId: "new-thread" } : {}),
         id: `plan-${index}`,
         threadId: THREAD,
         runId: null,
@@ -842,7 +843,9 @@ describe("threadHistoryPaging", () => {
     const serializedBytes = Buffer.byteLength(JSON.stringify(bounded.projection), "utf8");
 
     expect(serializedBytes).toBeLessThanOrEqual(THREAD_HISTORY_PAGE_POLICY.maxEncodedBytes);
-    expect(bounded.projection.plans).toEqual([]);
+    expect(bounded.projection.plans).toMatchObject([
+      { id: "plan-119", markdown: "", implementationThreadId: "new-thread" },
+    ]);
     expect(bounded.projection.contextHandoffs).toEqual([]);
     expect(populated.plans).toHaveLength(120);
     expect(

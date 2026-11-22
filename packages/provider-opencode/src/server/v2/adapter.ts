@@ -67,7 +67,10 @@ import * as OpenCode2Server from "./OpenCode2Server.ts";
 import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
 import { readableProviderErrorMessage } from "../providerErrorMessage.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
-import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
+import {
+  buildRuntimeInstructions,
+  MARKDOWN_PLAN_SUBMISSION,
+} from "@t3tools/provider-core/server/runtimeInstructions";
 import { t3OrchestrationSystemPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
 import { HTML_RENDER_TOOL_NAME } from "@t3tools/shared/htmlRender";
@@ -181,7 +184,7 @@ const OpenCode2ProviderCapabilities = {
   planning: {
     emitsPlanUpdated: true,
     emitsTodoList: true,
-    emitsProposedPlan: false,
+    emitsProposedPlan: true,
     supportsStructuredQuestions: true,
     planDeltasHaveItemIds: false,
   },
@@ -229,7 +232,10 @@ interface TurnOwner {
   readonly runOrdinal: number;
   readonly rootNodeId: ProviderAdapter.ProviderAdapterV2TurnInput["rootNodeId"];
   readonly modelSelection: ModelSelection;
-  readonly runtimePolicy: Pick<ProviderAdapter.ProviderAdapterV2RuntimePolicy, "cwd">;
+  readonly runtimePolicy: Pick<
+    ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+    "cwd" | "interactionMode"
+  >;
 }
 
 interface ActiveTurn {
@@ -363,7 +369,7 @@ interface ThreadState {
   title: string | undefined;
   rules: ReadonlyArray<Rule> | undefined;
   policy: RulesPolicy;
-  readonly grants: Array<Rule>;
+  readonly grants: Record<"default" | "plan", Array<Rule>>;
   readonly calls: Map<string, SubagentCall>;
   subagent:
     | {
@@ -446,34 +452,44 @@ const mcpRules = (mcpServerName: string | null): ReadonlyArray<Rule> =>
         { action: `${mcpServerName}_*`, resource: "*", effect: "allow" },
       ];
 
+const planReadActions = ["read", "glob", "grep", "list", "todowrite", "question"];
+
 const sessionRules = (
   policy: RulesPolicy,
   paths: ReadonlyArray<Rule>,
   grants: ReadonlyArray<Rule>,
   mcpServerName: string | null,
-): ReadonlyArray<Rule> => [
-  ...(policy.runtimeMode === "full-access"
-    ? [rule("*", "allow")]
+): ReadonlyArray<Rule> =>
+  policy.interactionMode === "plan"
+    ? [
+        rule("*", "deny"),
+        ...planReadActions.map((action) => rule(action, "allow")),
+        ...paths.filter(
+          (entry) => entry.action === "read" || entry.action === "external_directory",
+        ),
+        ...mcpRules(mcpServerName),
+      ]
     : [
-        rule("shell", "ask"),
-        rule("edit", policy.runtimeMode === "auto-accept-edits" ? "allow" : "ask"),
-        rule("external_directory", "ask"),
-        // The thread's other folders count as workspace; `edit` still decides whether writes ask.
-        // A glob character in the path would allow sibling folders, so such a root keeps asking.
-        ...(policy.workspace?.extraRoots ?? [])
-          .filter((root) => !/[*?]/.test(root))
-          .map((root): Rule => ({
-            action: "external_directory",
-            resource: `${root.replace(/\/$/, "")}/*`,
-            effect: "allow",
-          })),
-      ]),
-  ...grants,
-  // Plan edits are re-allowed only for plan paths; free-tier sessions refuse denied shell/read.
-  ...(policy.interactionMode === "plan" ? [rule("edit", "deny")] : []),
-  ...paths,
-  ...mcpRules(mcpServerName),
-];
+        ...(policy.runtimeMode === "full-access"
+          ? [rule("*", "allow")]
+          : [
+              rule("shell", "ask"),
+              rule("edit", policy.runtimeMode === "auto-accept-edits" ? "allow" : "ask"),
+              rule("external_directory", "ask"),
+              // The thread's other folders count as workspace; `edit` still decides whether writes ask.
+              // A glob character in the path would allow sibling folders, so such a root keeps asking.
+              ...(policy.workspace?.extraRoots ?? [])
+                .filter((root) => !/[*?]/.test(root))
+                .map((root): Rule => ({
+                  action: "external_directory",
+                  resource: `${root.replace(/\/$/, "")}/*`,
+                  effect: "allow",
+                })),
+            ]),
+        ...grants,
+        ...paths,
+        ...mcpRules(mcpServerName),
+      ];
 
 const sameRules = (left: ReadonlyArray<Rule> | undefined, right: ReadonlyArray<Rule>) =>
   left?.length === right.length &&
@@ -529,6 +545,36 @@ const formQuestions = (
   return { questions };
 };
 
+const proposedPlanBlock = (answer: string) => {
+  const boundaries = /^ {0,3}(?:(`{3,}|~{3,})([^\r\n]*)|(<\/?proposed_plan>)[ \t]*)\r?$/gm;
+  let fence: string | undefined;
+  let opening: RegExpExecArray | undefined;
+  for (const line of answer.matchAll(boundaries)) {
+    const delimiter = line[1];
+    if (delimiter) {
+      if (!fence) fence = delimiter;
+      else if (delimiter.startsWith(fence) && !line[2]?.trim()) fence = undefined;
+    } else if (!fence) {
+      if (line[3] === "<proposed_plan>") opening = line;
+      else if (opening) {
+        const markdown = answer
+          .slice(opening.index + opening[0].length + 1, line.index)
+          .replace(/\r?\n$/, "");
+        if (markdown.trim()) {
+          return {
+            markdown,
+            commentary: (
+              answer.slice(0, opening.index) + answer.slice(line.index + line[0].length)
+            ).trim(),
+          };
+        }
+        opening = undefined;
+      }
+    }
+  }
+  return undefined;
+};
+
 const formAnswer = (form: NativeForm, answers: Readonly<Record<string, unknown>>) => {
   const answer: Record<string, string | ReadonlyArray<string>> = {};
   for (const field of form.fields) {
@@ -556,12 +602,13 @@ const formGone = {
   SessionNotFoundError: () => Effect.void,
 };
 
-const agentPaths = (rules: ReadonlyArray<Rule>) =>
+const agentPaths = (rules: ReadonlyArray<Rule>, agent: string) =>
   rules.filter(
     (entry) =>
-      entry.effect === "allow" &&
       entry.resource !== "*" &&
-      (entry.action === "edit" || entry.action === "external_directory"),
+      ((entry.effect === "allow" &&
+        (entry.action === "edit" || entry.action === "external_directory")) ||
+        (agent === "plan" && entry.action === "read")),
   );
 
 const ref = (nativeId: string, strength: "strong" | "weak" = "strong") => ({
@@ -945,7 +992,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       title: undefined,
       rules: undefined,
       policy: input.runtimePolicy,
-      grants: [],
+      grants: { default: [], plan: [] },
       calls: new Map(),
       subagent,
       wakes: [],
@@ -1411,6 +1458,46 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           planId: turn.todoPlanId,
           steps,
         },
+      });
+    });
+
+    // Re-emits the answer's own turn item as the plan card, so the plan is not shown twice.
+    const emitProposedPlan = Effect.fnUntraced(function* (state: ThreadState, turn: ActiveTurn) {
+      const answer = turn.closingText;
+      if (answer === undefined) return;
+      const nativeId = `${answer.block.assistantMessageID}:text:${answer.block.ordinal}`;
+      // Tools or other items after the last text mean that text was narration, not the plan.
+      if (turn.ordinals.get(nativeId) !== turn.nextOrdinal - 1) {
+        return;
+      }
+      const block = proposedPlanBlock(answer.text);
+      if (!block) return;
+      const { markdown, commentary } = block;
+      const planNativeId = commentary ? nativeId + ":plan" : nativeId;
+      if (commentary) yield* emitText(state, turn, answer.block, "text", () => commentary, true);
+      const now = yield* DateTime.now;
+      const base = itemBase(state, turn, planNativeId, "completed", answer.startedAt, now, now);
+      const plan = {
+        id: yield* idAllocator.allocate
+          .plan({
+            threadId: turn.input.threadId,
+            ...(turn.input.runId === null ? {} : { runId: turn.input.runId }),
+            driver,
+          })
+          .pipe(Effect.orDie),
+        threadId: turn.input.threadId,
+        runId: turn.input.runId,
+        nodeId: base.nodeId,
+        kind: "proposed_plan" as const,
+        status: "active" as const,
+        markdown,
+      };
+      yield* emitNode(state, turn, planNativeId, "plan", "completed", answer.startedAt, now);
+      yield* emit({ type: "plan.updated", driver, plan });
+      yield* emit({
+        type: "turn_item.updated",
+        driver,
+        turnItem: { ...base, type: "proposed_plan", planId: plan.id, markdown, streaming: false },
       });
     });
 
@@ -2354,6 +2441,13 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       for (const open of turn.texts.values()) {
         yield* emitText(state, turn, open.block, open.kind, (text) => text, true);
       }
+      if (
+        terminal.status === "completed" &&
+        state.subagent === undefined &&
+        turn.input.runtimePolicy.interactionMode === "plan"
+      ) {
+        yield* emitProposedPlan(state, turn);
+      }
       for (const id of turn.tools.keys()) {
         if ([...state.imageJobs.values()].some((job) => job.turn === turn && job.toolId === id))
           continue;
@@ -2771,7 +2865,16 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       if (state === undefined) return;
       const target = requestTurn(asking);
       if (target !== undefined && !target.turn.awaitingStart) {
-        if (asked.type === "permission") return yield* onPermissionAsked(asked.request);
+        if (asked.type === "permission") {
+          if (
+            target.turn.input.runtimePolicy.interactionMode === "plan" &&
+            !planReadActions.includes(asked.request.action) &&
+            asked.request.action !== "external_directory"
+          ) {
+            return yield* stopStaleRequest(asking, { type: "permission", id: asked.request.id });
+          }
+          return yield* onPermissionAsked(asked.request);
+        }
         return yield* onFormCreated(asked.form);
       }
       if (state.unsettled || state.active?.awaitingStart === true) {
@@ -4059,10 +4162,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     yield* readModels(session.cwd);
 
     const agentRules = new Map<string, ReadonlyMap<string, ReadonlyArray<Rule>>>();
-    const pathsFor = Effect.fnUntraced(function* (
-      directory: string,
-      agents: ReadonlyArray<string>,
-    ) {
+    const pathsFor = Effect.fnUntraced(function* (directory: string, agent: string) {
       let known = agentRules.get(directory);
       if (known === undefined) {
         // A fresh server lists no agents for its first moments, like its models.
@@ -4082,17 +4182,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         );
         if (listed._tag === "None") return [];
         known = new Map(
-          listed.value.data.map((agent) => [agent.id, agentPaths(agent.permissions)]),
+          listed.value.data.map((agent) => [agent.id, agentPaths(agent.permissions, agent.id)]),
         );
         agentRules.set(directory, known);
       }
-      const paths = new Map<string, Rule>();
-      for (const agent of agents) {
-        for (const entry of known.get(agent) ?? []) {
-          paths.set(`${entry.action}\u0000${entry.resource}`, entry);
-        }
-      }
-      return [...paths.values()];
+      return known.get(agent) ?? [];
     });
 
     const rulesFor = Effect.fnUntraced(function* (
@@ -4104,11 +4198,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const paths =
         policy.runtimeMode === "full-access" && !plan
           ? []
-          : yield* pathsFor(thread.directory, plan ? [thread.agent, "plan"] : [thread.agent]);
+          : yield* pathsFor(thread.directory, plan ? "plan" : thread.agent);
       return sessionRules(
         policy,
         paths,
-        policy.runtimeMode === "full-access" ? [] : thread.grants,
+        policy.runtimeMode === "full-access" && !plan ? [] : thread.grants[policy.interactionMode],
         appThreadId === null ? null : yield* mcpServerNameFor(appThreadId),
       );
     });
@@ -4433,6 +4527,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           harness: "OpenCode",
           model: turnInput.modelSelection.model,
           runtimePolicy: turnInput.runtimePolicy,
+          planSubmission: MARKDOWN_PLAN_SUBMISSION,
         }),
         t3OrchestrationSystemPrompt(mcpAvailable, mcpSession?.capabilities?.has("device") === true),
         mcpAvailable
@@ -4801,7 +4896,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           const directory = threadInput.runtimePolicy.cwd ?? host.paths.cwd;
           const policy = threadInput.runtimePolicy;
           const permissions = yield* rulesFor(
-            { directory, agent: "build", grants: [] },
+            { directory, agent: "build", grants: { default: [], plan: [] } },
             policy,
             threadInput.threadId,
           );
@@ -5320,13 +5415,14 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             (decision === "acceptForSession" || decision === "acceptAlways")
           ) {
             const state = asker;
+            const grants = state.grants[entry.turn.input.runtimePolicy.interactionMode];
             for (const resource of native.save) {
               if (
-                !state.grants.some(
+                !grants.some(
                   (grant) => grant.action === native.action && grant.resource === resource,
                 )
               ) {
-                state.grants.push({ action: native.action, resource, effect: "allow" });
+                grants.push({ action: native.action, resource, effect: "allow" });
               }
             }
             yield* writeRules(state, rootOf(state).policy).pipe(Effect.ignore({ log: true }));

@@ -67,21 +67,28 @@ const handlers = {
       };
     }),
   ),
-  html_render: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const scope = yield* McpInvocationContext.McpInvocationContext;
-      const { thread } = yield* McpInvocationContext.requireThreadScope(scope, "html_render");
-      const htmlRender = yield* HtmlRender.HtmlRender;
-      const source = yield* pageSource(input);
-      const reference = yield* htmlRender
-        .publish({ ...source, threadId: thread.threadId, title: input.title, height: input.height })
-        .pipe(Effect.mapError(toFailure));
-      return {
-        htmlRender: reference,
-        message:
-          "Shown to the reader above your reply. Don't mention or describe the page; reply with only what it doesn't already say.",
-      };
-    }),
+  html_render: McpToolAccess.actsAsCaller(
+    (input) =>
+      Effect.gen(function* () {
+        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const { thread } = yield* McpInvocationContext.requireThreadScope(scope, "html_render");
+        const htmlRender = yield* HtmlRender.HtmlRender;
+        const source = yield* pageSource(input);
+        const reference = yield* htmlRender
+          .publish({
+            ...source,
+            threadId: thread.threadId,
+            title: input.title,
+            height: input.height,
+          })
+          .pipe(Effect.mapError(toFailure));
+        return {
+          htmlRender: reference,
+          message:
+            "Shown to the reader above your reply. Don't mention or describe the page; reply with only what it doesn't already say.",
+        };
+      }),
+    { availableInPlan: true },
   ),
 } satisfies McpToolAccess.Handlers<typeof HtmlToolkit.tools>;
 

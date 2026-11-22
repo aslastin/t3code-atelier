@@ -998,18 +998,230 @@ it.effect("implements a proposed plan that the command projection leaves out", (
 
     yield* orchestrator.dispatch({
       type: "message.dispatch",
+      commandId: CommandId.make("queue-plan-feedback"),
+      threadId,
+      messageId: MessageId.make("queued-plan-feedback"),
+      text: "Review the first step.",
+      attachments: [],
+      dispatchMode: { type: "defer_start" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const [queued] = (yield* projections.getThreadRecords(threadId, ["runs"])).runs;
+    for (const status of ["running", "queued"] as const) {
+      yield* projections.apply({
+        id: EventId.make(`plan-feedback-${status}`),
+        type: "run.updated",
+        threadId,
+        runId: queued!.id,
+        occurredAt: now,
+        payload: { ...queued!, status, queueHeld: status === "queued" },
+      });
+      const change = yield* Effect.result(
+        orchestrator.dispatch({
+          type: "thread.interaction-mode.set",
+          threadId,
+          commandId: CommandId.make(`change-mode-${status}`),
+          interactionMode: "default",
+        }),
+      );
+      assert.equal(change._tag, "Failure");
+      const implement = yield* Effect.result(
+        orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`implement-with-${status}`),
+          threadId,
+          messageId: MessageId.make("busy-plan-input"),
+          text: "PLEASE IMPLEMENT THIS PLAN:\n# Plan\n\n1. Do the thing.",
+          attachments: [],
+          sourcePlanRef: { threadId, planId },
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        }),
+      );
+      assert.equal(implement._tag, "Failure");
+    }
+    yield* projections.apply({
+      id: EventId.make("feedback-finished"),
+      type: "run.updated",
+      threadId,
+      runId: queued!.id,
+      occurredAt: now,
+      payload: { ...queued!, status: "completed", startedAt: now, completedAt: now },
+    });
+    const stale = yield* Effect.result(
+      orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("stale-implement-plan"),
+        threadId,
+        messageId: MessageId.make("stale-plan-input"),
+        text: "PLEASE IMPLEMENT THIS PLAN:\n# Old version",
+        attachments: [],
+        sourcePlanRef: { threadId, planId },
+        dispatchMode: { type: "defer_start" },
+        createdBy: "user",
+        creationSource: "web",
+      }),
+    );
+    assert.equal(stale._tag, "Failure");
+    const implement = {
+      type: "message.dispatch",
       commandId: CommandId.make("implement-plan"),
       threadId,
       messageId: MessageId.make("implement-plan-input"),
-      text: "Implement the plan.",
+      text: "PLEASE IMPLEMENT THIS PLAN:\n# Plan\n\n1. Do the thing.",
       attachments: [],
       sourcePlanRef: { threadId, planId },
       dispatchMode: { type: "defer_start" },
       createdBy: "user",
       creationSource: "web",
+    } as const;
+    for (const expectedSource of [
+      { runtimeMode: "approval-required", branch: null, worktreePath: null },
+      { runtimeMode: "full-access", branch: "old", worktreePath: null },
+      { runtimeMode: "full-access", branch: null, worktreePath: "/old" },
+    ] as const) {
+      const result = yield* orchestrator
+        .dispatch({
+          ...implement,
+          commandId: CommandId.make("stale-context-" + JSON.stringify(expectedSource)),
+          sourcePlanRef: {
+            threadId,
+            planId,
+            expectedSource: {
+              projectId: ProjectId.make("project:implement-plan"),
+              ...expectedSource,
+            },
+          },
+        })
+        .pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      assert.equal((yield* projections.getLatestProposedPlan(threadId))?.status, "active");
+    }
+    yield* orchestrator.dispatch({
+      ...implement,
+      sourcePlanRef: {
+        threadId,
+        planId,
+        expectedSource: {
+          projectId: ProjectId.make("project:implement-plan"),
+          branch: null,
+          worktreePath: null,
+          runtimeMode: "full-access",
+        },
+        implementationRuntimeMode: "approval-required",
+      },
     });
+    assert.equal((yield* projections.getThread(threadId)).runtimeMode, "approval-required");
 
+    assert.equal((yield* projections.getThread(threadId)).interactionMode, "default");
+    const lateFeedback = yield* Effect.result(
+      orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("feedback-after-mode-change"),
+        threadId,
+        messageId: MessageId.make("late-feedback"),
+        text: "Refine the plan.",
+        attachments: [],
+        expectedInteractionMode: "plan",
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "user",
+        creationSource: "mobile",
+      }),
+    );
+    assert.equal(lateFeedback._tag, "Failure");
     assert.equal((yield* projections.getPlan(threadId, planId))?.status, "completed");
+    const implementation = (yield* projections.getThreadRecords(threadId, ["runs"])).runs.at(-1);
+    yield* projections.apply({
+      id: EventId.make("implement-plan-start-refused"),
+      type: "run.updated",
+      threadId,
+      runId: implementation!.id,
+      occurredAt: now,
+      payload: { ...implementation!, status: "failed", startedAt: now, completedAt: now },
+    });
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("retry-unsent-plan"),
+      threadId,
+      messageId: MessageId.make("resume-implementation"),
+      manualContinuationOfRunId: implementation!.id,
+      text: "",
+      attachments: [],
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const { runs } = yield* projections.getThreadRecords(threadId, ["runs"]);
+    assert.equal(runs.at(-1)?.manualContinuationOfRunId, implementation!.id);
+    for (const run of [implementation!, runs.at(-1)!]) {
+      yield* projections.apply({
+        id: EventId.make("revert-" + run.id),
+        type: "run.updated",
+        threadId,
+        runId: run.id,
+        occurredAt: now,
+        payload: {
+          ...run,
+          userMessageId: MessageId.make("later-steer"),
+          status: "rolled_back",
+          completedAt: now,
+        },
+      });
+    }
+    const completed = yield* projections.getPlan(threadId, planId);
+    assert.isTrue(completed?.kind === "proposed_plan");
+    if (completed?.kind !== "proposed_plan") return;
+    yield* projections.apply({
+      id: EventId.make("reopen-plan"),
+      type: "plan.updated",
+      threadId,
+      occurredAt: now,
+      payload: {
+        ...completed,
+        status: "active",
+        implementationThreadId: undefined,
+        lastRevertedImplementationRunId: implementation!.id,
+      },
+    });
+    const delayed = yield* Effect.result(
+      orchestrator.dispatch({
+        ...implement,
+        dispatchMode: { type: "start_immediately" },
+        sourcePlanRef: {
+          threadId,
+          planId,
+          implementationRuntimeMode: "approval-required",
+          expectedSource: {
+            projectId: ProjectId.make("project:implement-plan"),
+            runtimeMode: "approval-required",
+            branch: null,
+            worktreePath: null,
+          },
+        },
+        commandId: CommandId.make("delayed-implementation"),
+      }),
+    );
+    assert.equal(delayed._tag, "Failure");
+    const retry = {
+      ...implement,
+      commandId: CommandId.make("fresh-implementation"),
+      messageId: MessageId.make("fresh-plan-message"),
+    };
+    yield* orchestrator.dispatch(retry);
+    yield* orchestrator.dispatch(retry);
+    const retried = yield* projections.getThreadRecords(threadId, ["runs", "messages"]);
+    assert.equal(
+      retried.runs.filter(
+        (run) => run.sourcePlanRef?.planId === planId && run.status !== "rolled_back",
+      ).length,
+      1,
+    );
+    assert.equal(
+      retried.messages.find((message) => message.id === implement.messageId)?.runId,
+      implementation!.id,
+    );
   }).pipe(Effect.provide(layerTest)),
 );
 
@@ -2595,78 +2807,146 @@ it.effect("dispatch records the command outcome and its duration", () =>
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("a user message dispatched first stays run 1 when its lineage read is slow", () => {
-  const threadId = ThreadId.make("thread:dispatch-order");
-  // A file database serves projection reads from a reader worker, so the lineage read a user
-  // dispatch makes before taking the thread lock can yield. This gate holds it open instead.
-  const lineageReadEntered = Deferred.makeUnsafe<void>();
-  const lineageReadRelease = Deferred.makeUnsafe<void>();
-  let gateArmed = false;
-  const layerGatedLineageRead = ProviderReplayHarness.layerWithRegistry(
-    { name: "dispatch-order" },
-    ProviderAdapterRegistry.layerFromAdapters([adapter]),
-    {
-      runEffectWorker: false,
-      wrapProjectionStore: (store) => ({
-        ...store,
-        getThread: (id) => {
-          if (!gateArmed || id !== threadId) return store.getThread(id);
-          gateArmed = false;
-          return Deferred.succeed(lineageReadEntered, undefined).pipe(
-            Effect.andThen(Deferred.await(lineageReadRelease)),
-            Effect.andThen(store.getThread(id)),
-          );
-        },
-      }),
-    },
-  );
-  return Effect.gen(function* () {
-    const orchestrator = yield* Orchestrator.OrchestratorV2;
-    yield* orchestrator.dispatch({
-      type: "thread.create",
-      commandId: CommandId.make("create-dispatch-order"),
-      threadId,
-      projectId: ProjectId.make("project:dispatch-order"),
-      title: "Dispatch order",
-      modelSelection,
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: null,
-      createdBy: "user",
-      creationSource: "web",
-    });
-    const message = (id: string, createdBy: "user" | "agent") =>
-      orchestrator.dispatch({
-        type: "message.dispatch",
-        commandId: CommandId.make(id),
+it.effect.each(["agent", "implement", "new-thread"] as const)(
+  "a user message precedes a later %s dispatch during a slow lineage read",
+  (next) => {
+    const threadId = ThreadId.make("thread:dispatch-order");
+    // A file database serves projection reads from a reader worker, so the lineage read a user
+    // dispatch makes before taking the thread lock can yield. This gate holds it open instead.
+    const lineageReadEntered = Deferred.makeUnsafe<void>();
+    const lineageReadRelease = Deferred.makeUnsafe<void>();
+    let gateArmed = false;
+    const layerGatedLineageRead = ProviderReplayHarness.layerWithRegistry(
+      { name: "dispatch-order" },
+      ProviderAdapterRegistry.layerFromAdapters([adapter]),
+      {
+        databaseLayer: layerDatabase,
+        runEffectWorker: false,
+        wrapProjectionStore: (store) => ({
+          ...store,
+          getThread: (id) => {
+            if (!gateArmed || id !== threadId) return store.getThread(id);
+            gateArmed = false;
+            return Deferred.succeed(lineageReadEntered, undefined).pipe(
+              Effect.andThen(Deferred.await(lineageReadRelease)),
+              Effect.andThen(store.getThread(id)),
+            );
+          },
+        }),
+      },
+    );
+    return Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("create-dispatch-order"),
         threadId,
-        messageId: MessageId.make(id),
-        text: id,
-        attachments: [],
-        dispatchMode: { type: "defer_start" },
-        createdBy,
-        creationSource: createdBy === "user" ? "web" : "server",
+        projectId: ProjectId.make("project:dispatch-order"),
+        title: "Dispatch order",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
       });
+      const message = (id: string, createdBy: "user" | "agent") =>
+        orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(id),
+          threadId,
+          messageId: MessageId.make(id),
+          text: id,
+          attachments: [],
+          dispatchMode: { type: "defer_start" },
+          createdBy,
+          creationSource: createdBy === "user" ? "web" : "server",
+        });
 
-    gateArmed = true;
-    const user = yield* message("message:user-first", "user").pipe(Effect.forkChild);
-    yield* Deferred.await(lineageReadEntered);
-    // Agent messages skip the lineage read, so this one would take a free thread lock first.
-    const agent = yield* message("message:agent-second", "agent").pipe(
-      Effect.forkChild({ startImmediately: true }),
-    );
-    yield* Deferred.succeed(lineageReadRelease, undefined);
-    yield* Fiber.join(agent);
-    yield* Fiber.join(user);
+      const planId = PlanId.make("dispatch-order-plan");
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      yield* projections.apply({
+        type: "plan.updated",
+        id: EventId.make("dispatch-order-plan"),
+        threadId,
+        occurredAt: yield* DateTime.now,
+        payload: {
+          id: planId,
+          threadId,
+          runId: null,
+          nodeId: NodeId.make("order-plan-node"),
+          kind: "proposed_plan",
+          status: "active",
+          markdown: "# Latest",
+        },
+      });
+      gateArmed = true;
+      const user = yield* message("message:user-first", "user").pipe(Effect.forkChild);
+      yield* Deferred.await(lineageReadEntered);
+      // Agent messages skip the lineage read, so this one would take a free thread lock first.
+      const second =
+        next === "agent"
+          ? message("message:agent-second", "agent")
+          : next === "new-thread"
+            ? orchestrator.dispatch({
+                type: "thread.create",
+                commandId: CommandId.make("order-new"),
+                threadId: ThreadId.make("order-new"),
+                projectId: ProjectId.make("project:dispatch-order"),
+                title: "Implement",
+                modelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: null,
+                worktreePath: null,
+                createdBy: "user",
+                creationSource: "web",
+                initialMessage: {
+                  messageId: MessageId.make("order-new"),
+                  text: "PLEASE IMPLEMENT THIS PLAN:\n# Latest",
+                  attachments: [],
+                  sourcePlanRef: { threadId, planId },
+                },
+              })
+            : orchestrator.dispatch({
+                type: "message.dispatch",
+                commandId: CommandId.make("order-implement"),
+                threadId,
+                messageId: MessageId.make("order-implement"),
+                text: "PLEASE IMPLEMENT THIS PLAN:\n# Latest",
+                attachments: [],
+                sourcePlanRef: { threadId, planId },
+                dispatchMode: { type: "defer_start" },
+                createdBy: "user",
+                creationSource: "web",
+              });
+      const agent = yield* second.pipe(Effect.result, Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.succeed(lineageReadRelease, undefined);
+      const result = yield* Fiber.join(agent);
+      assert.equal(result._tag, next === "agent" ? "Success" : "Failure");
+      yield* Fiber.join(user);
 
-    const { runs } = yield* orchestrator.getThreadProjection(threadId);
-    assert.deepEqual(
-      runs.toSorted((left, right) => left.ordinal - right.ordinal).map((run) => run.userMessageId),
-      [MessageId.make("message:user-first"), MessageId.make("message:agent-second")],
+      const { runs } = yield* orchestrator.getThreadProjection(threadId);
+      assert.deepEqual(
+        runs
+          .toSorted((left, right) => left.ordinal - right.ordinal)
+          .map((run) => run.userMessageId),
+        [
+          MessageId.make("message:user-first"),
+          ...(next === "agent" ? [MessageId.make("message:agent-second")] : []),
+        ],
+      );
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          layerGatedLineageRead,
+          ProjectionStore.layer.pipe(Layer.provide(layerDatabase)),
+        ),
+      ),
     );
-  }).pipe(Effect.provide(layerGatedLineageRead));
-});
+  },
+);
 
 it.effect("queued-message commands read a long thread's history without walking all of it", () =>
   Effect.gen(function* () {

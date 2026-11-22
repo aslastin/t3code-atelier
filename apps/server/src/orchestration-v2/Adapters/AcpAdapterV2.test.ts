@@ -2554,6 +2554,12 @@ describe("AcpAdapterV2", () => {
   it.live.each([
     { modeIds: "plain", environment: {}, planModeId: "architect", buildModeId: "ask" },
     {
+      modeIds: "no Plan",
+      environment: { T3_ACP_NO_PLAN: "1" },
+      planModeId: null,
+      buildModeId: "ask",
+    },
+    {
       modeIds: "Copilot URL",
       environment: { T3_ACP_COPILOT_MODES: "1" },
       planModeId: "https://agentclientprotocol.com/protocol/session-modes#plan",
@@ -2691,13 +2697,33 @@ describe("AcpAdapterV2", () => {
         assert.equal(secondDefault.textBlockCount, 1);
 
         const planPolicy = policy("plan");
-        const firstPlan = yield* runTurn(4, planPolicy, "Plan this change.");
+        if (planModeId === null) {
+          const start = yield* Effect.result(
+            runtime.startTurn(
+              makeTurnInput({
+                threadId,
+                providerThread,
+                instanceId,
+                runtimePolicy: planPolicy,
+                now,
+                ordinal: 4,
+                messageText: "Review the project.",
+                modelSelection,
+              }),
+            ),
+          );
+          assert.equal(start._tag, "Failure");
+          return;
+        }
+        const firstPlan = yield* runTurn(
+          4,
+          planPolicy,
+          "Plan this change, then leave native Plan.",
+        );
         assert.include(firstPlan.prompt, "T3 Code interaction mode: Plan");
         assert.deepEqual(firstPlan.modeSets, [planModeId]);
-        assert.include(
-          (yield* runTurn(5, planPolicy, "Continue planning.")).prompt,
-          "Continue planning.",
-        );
+        const reentered = yield* runTurn(5, planPolicy, "Continue planning.");
+        assert.deepEqual(reentered.modeSets, [planModeId]);
         const restoredBuild = yield* runTurn(6, defaultPolicy, "Implement the change.");
         assert.include(restoredBuild.prompt, "T3 Code interaction mode: Default");
         assert.deepEqual(
@@ -3408,6 +3434,14 @@ describe("AcpAdapterV2", () => {
                     entries: [{ content: "Anonymous plan", priority: "medium", status: "pending" }],
                   });
                   yield* send({
+                    sessionUpdate: "plan_update",
+                    plan: {
+                      type: "markdown",
+                      planId: "proposal",
+                      content: ordinal === 1 ? "# Original" : "# Revised",
+                    },
+                  });
+                  yield* send({
                     sessionUpdate: "state_update",
                     state: "idle",
                     stopReason: "end_turn",
@@ -3449,7 +3483,7 @@ describe("AcpAdapterV2", () => {
           ).flatMap((event) => (event.type === "plan.updated" ? [event.plan] : []));
         });
       const first = yield* run(1);
-      assert.equal(first.length, 6);
+      assert.equal(first.length, 7);
       assert.equal(first[0]!.id, first[1]!.id);
       assert.equal(first[1]!.id, first[2]!.id);
       assert.equal(first[1]!.kind, "todo_list");
@@ -3458,8 +3492,15 @@ describe("AcpAdapterV2", () => {
       ]);
       assert.equal(first[2]!.status, "superseded");
       const second = yield* run(2);
-      assert.equal(second.length, 3);
+      assert.equal(second.length, 4);
       assert.notEqual(first[5]!.id, second[2]!.id);
+      assert.notEqual(
+        first[6]!.id,
+        second[3]!.id,
+        "a revised Markdown proposal owns its own implementation history",
+      );
+      assert.notEqual(first[6]!.runId, second[3]!.runId);
+      assert.notEqual(first[6]!.nodeId, second[3]!.nodeId);
       const removed = second.find((p) => p.id === first[3]!.id && p.status === "superseded");
       const replacement = second.find(
         (p) => p.kind === "todo_list" && p.steps.some((s) => s.text === "New contents"),
@@ -4682,6 +4723,8 @@ describe("AcpAdapterV2", () => {
         flavor: {
           driver: ACP_TEST_DRIVER,
           capabilities: AcpProviderCapabilitiesV2,
+          extractProposedPlanMarkdown: (call) =>
+            call.toolCallId === "structured-read" ? "# Captured" : undefined,
           makeRuntime: makeMockRuntime({
             childProcessSpawner,
             mockAgentPath,
@@ -4735,7 +4778,8 @@ describe("AcpAdapterV2", () => {
       const plans = events.flatMap((event) => (event.type === "plan.updated" ? [event.plan] : []));
       const planA = plans.filter((plan) => plan.kind === "proposed_plan");
       const planB = plans.find((plan) => plan.kind === "todo_list");
-      assert.equal(planA.length, 2);
+      assert.equal(planA.find((plan) => plan.markdown === "# Captured")?.status, "active");
+      assert.equal(planA.length, 3);
       assert.equal(planA[0]?.id, planA[1]?.id);
       assert.equal(planA[1]?.status, "superseded");
       assert.isDefined(planB);
@@ -5249,9 +5293,9 @@ describe("AcpAdapterV2", () => {
 
   // Adoption either reaches the adapter after openSession configured the
   // provisional setup, or before it, so openSession configures the adopted one.
-  it.live.each([false, true])(
-    "restores the native build mode after a Plan turn that followed a late session/load (adopted before configuration: %s)",
-    (adoptedBeforeConfiguration) =>
+  it.live.each(["before configuration", "before turn", "during turn", "from notification"])(
+    "restores the native build mode after a Plan turn that followed a late session/load (catalog adopted %s)",
+    (adoption) =>
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const path = yield* Path.Path;
@@ -5262,7 +5306,7 @@ describe("AcpAdapterV2", () => {
         const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
         const adopted = yield* Deferred.make<void>();
         const adoptionHandled = yield* Deferred.make<void>();
-        let holdFirstModeRead = adoptedBeforeConfiguration;
+        let holdFirstModeRead = adoption === "before configuration";
         let acpRuntime: AcpSessionRuntime.AcpSessionRuntime["Service"] | undefined;
         const instanceId = ProviderInstanceId.make("acp-test-late-session-load-plan");
         const threadId = ThreadId.make("thread-acp-late-session-load-plan");
@@ -5282,6 +5326,9 @@ describe("AcpAdapterV2", () => {
               environment: {
                 T3_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY: "1",
                 T3_ACP_LOAD_SESSION_DELAY_MS: "500",
+                ...(adoption === "from notification"
+                  ? { T3_ACP_NOTIFY_CATALOG_BEFORE_LOAD_REPLY: "1" }
+                  : {}),
               },
               sessionLoadReplayIdleGap: "100 millis",
               wrapRuntime: (runtime) => {
@@ -5326,8 +5373,10 @@ describe("AcpAdapterV2", () => {
           runtimePolicy: planPolicy,
           initialNativeThreadId: "mock-session-1",
         });
-        yield* Deferred.await(adopted).pipe(Effect.timeoutOption("5 seconds"));
-        yield* acpRuntime!.drainEvents;
+        if (adoption === "before configuration" || adoption === "before turn") {
+          yield* Deferred.await(adopted);
+          yield* acpRuntime!.drainEvents;
+        }
         const providerThread = yield* runtime.ensureThread({
           threadId,
           modelSelection,
@@ -5361,7 +5410,7 @@ describe("AcpAdapterV2", () => {
         // Configured against the adopted setup, openSession already switched to Plan.
         assert.deepEqual(
           yield* runTurn(0, planPolicy),
-          adoptedBeforeConfiguration ? [] : ["architect"],
+          adoption === "before configuration" ? [] : ["architect"],
         );
         assert.deepEqual(
           yield* runTurn(1, policy("default")),

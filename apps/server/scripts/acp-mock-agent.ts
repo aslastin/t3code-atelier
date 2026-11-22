@@ -75,6 +75,7 @@ const emitLoadReplay = process.env.T3_ACP_EMIT_LOAD_REPLAY === "1";
 const delayLoadSessionAfterReplay = process.env.T3_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY === "1";
 const loadSessionDelayMs = Number(process.env.T3_ACP_LOAD_SESSION_DELAY_MS ?? "5000");
 const modeNotifiedBeforeDelayedLoadReply = process.env.T3_ACP_NOTIFY_MODE_BEFORE_LOAD_REPLY;
+const notifyCatalogBeforeLoadReply = process.env.T3_ACP_NOTIFY_CATALOG_BEFORE_LOAD_REPLY === "1";
 const holdSetConfigOptionUntilLoadReply =
   process.env.T3_ACP_HOLD_SET_CONFIG_OPTION_UNTIL_LOAD_REPLY === "1";
 const loadReplyDelayMs = Number(process.env.T3_ACP_LOAD_REPLY_DELAY_MS ?? "0");
@@ -399,7 +400,7 @@ const availableModes: ReadonlyArray<AcpCompat.SessionMode> = antigravityProfile
           name: "Code",
           description: "Write and modify code with full tool access",
         },
-      ];
+      ].filter((mode) => process.env.T3_ACP_NO_PLAN !== "1" || mode.id !== "architect");
 
 function modeState(): AcpCompat.SessionModeState {
   return {
@@ -752,6 +753,13 @@ const program = Effect.gen(function* () {
         // Answer with the configuration as of the load, like an agent whose
         // response was built before later selections landed.
         const loadedConfigOptions = configOptions();
+        if (notifyCatalogBeforeLoadReply) {
+          yield* Effect.sleep(loadSessionDelayMs / 2);
+          yield* agent.client.sessionUpdate({
+            sessionId: requestedSessionId,
+            update: { sessionUpdate: "config_option_update", configOptions: loadedConfigOptions },
+          });
+        }
         if (modeNotifiedBeforeDelayedLoadReply !== undefined) {
           yield* Effect.sleep(loadSessionDelayMs / 2);
           currentModeId = modeNotifiedBeforeDelayedLoadReply;
@@ -936,6 +944,20 @@ const program = Effect.gen(function* () {
         });
       }
       beginAcpMockPrompt(cancelledSessions, requestedSessionId);
+      if (
+        request.prompt.some(
+          (block) =>
+            block.type === "text" &&
+            typeof block.text === "string" &&
+            block.text.includes("then leave native Plan."),
+        )
+      ) {
+        currentModeId = copilotModesProfile ? copilotModeId("agent") : "ask";
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: { sessionUpdate: "config_option_update", configOptions: configOptions() },
+        });
+      }
       promptCount += 1;
       if (idleError === "grok-background" && promptCount === 1) {
         // The structured completion lands before the prompt settles, so it is buffered.

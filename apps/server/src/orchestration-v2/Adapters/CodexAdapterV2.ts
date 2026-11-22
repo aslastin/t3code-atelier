@@ -165,7 +165,11 @@ import {
 } from "@t3tools/provider-core/server/subagentProjection";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
-import { buildWorkspaceInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
+import {
+  buildWorkspaceInstructions,
+  MARKDOWN_PLAN_SUBMISSION,
+  planModeInstructions,
+} from "@t3tools/provider-core/server/runtimeInstructions";
 
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 const CODEX_CAPACITY_MAX_RETRIES = 5;
@@ -829,13 +833,23 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
   }) {
     const runtimeModeDefaults = codexRuntimeModeTurnDefaults(input.runtimePolicy.runtimeMode);
     const approvalPolicy =
-      input.runtimePolicy.approvalPolicy === undefined
-        ? runtimeModeDefaults.approvalPolicy
-        : yield* decodeTurnApprovalPolicy(input.runtimePolicy.approvalPolicy);
-    const baseSandboxPolicy =
+      input.runtimePolicy.interactionMode === "plan"
+        ? "never"
+        : input.runtimePolicy.approvalPolicy === undefined
+          ? runtimeModeDefaults.approvalPolicy
+          : yield* decodeTurnApprovalPolicy(input.runtimePolicy.approvalPolicy);
+    const requestedSandbox =
       input.runtimePolicy.sandboxPolicy === undefined
         ? runtimeModeDefaults.sandboxPolicy
         : yield* decodeTurnSandboxPolicy(input.runtimePolicy.sandboxPolicy);
+    const baseSandboxPolicy =
+      input.runtimePolicy.interactionMode === "plan"
+        ? {
+            ...(requestedSandbox?.type === "readOnly" ? requestedSandbox : {}),
+            type: "readOnly" as const,
+            networkAccess: false,
+          }
+        : requestedSandbox;
     const extraRoots = input.runtimePolicy.workspace?.extraRoots ?? [];
     const sandboxPolicy =
       baseSandboxPolicy?.type === "workspaceWrite" && extraRoots.length > 0
@@ -886,23 +900,33 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
       workspaceInstructions === ""
         ? undefined
         : { t3_code_workspace: { kind: "application" as const, value: workspaceInstructions } };
-    const additionalContext =
-      t3Context === undefined &&
-      workspaceContext === undefined &&
-      Object.keys(appContext).length === 0
-        ? undefined
-        : { ...t3Context, ...workspaceContext, ...appContext };
+    const additionalContext = {
+      ...t3Context,
+      ...workspaceContext,
+      ...appContext,
+      ...(input.runtimePolicy.interactionMode === "plan"
+        ? {
+            t3_code_plan_mode: {
+              kind: "application" as const,
+              value: planModeInstructions(MARKDOWN_PLAN_SUBMISSION),
+            },
+          }
+        : {}),
+    };
     return yield* decodeCodexTurnStartParams({
       threadId: input.nativeThreadId,
       input: input.codexInput,
-      ...(additionalContext ? { additionalContext } : {}),
+      ...(Object.keys(additionalContext).length > 0 ? { additionalContext } : {}),
       cwd: input.runtimePolicy.cwd,
       model: input.modelSelection.model,
       // Catalogues can default summaries to "none", and turn/start overrides the user's config,
       // so pass theirs through or `auto`: some providers (Amazon Bedrock) reject `detailed`.
       summary: input.configuredReasoningSummary ?? "auto",
       // Omitting the reviewer on resume preserves the previous Auto reviewer.
-      approvalsReviewer: runtimeModeDefaults.approvalsReviewer,
+      approvalsReviewer:
+        input.runtimePolicy.interactionMode === "plan"
+          ? "user"
+          : runtimeModeDefaults.approvalsReviewer,
       ...(approvalPolicy === undefined ? {} : { approvalPolicy }),
       ...(sandboxPolicy === undefined ? {} : { sandboxPolicy }),
       ...(effort === undefined ? {} : { effort }),
@@ -1572,18 +1596,24 @@ function codexStdioMcpServerNames(mcpServers: unknown): ReadonlyArray<string> {
     .map(([name]) => name);
 }
 
-function codexThreadRuntimeParams(input: {
+export function codexThreadRuntimeParams(input: {
   readonly threadId: ThreadId | null;
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
-  readonly stdioMcpServers?: ReadonlyArray<string>;
+  readonly mcpConfig?: {
+    readonly stdio: ReadonlyArray<string>;
+    readonly configured: ReadonlyArray<string>;
+  };
   readonly modelSelection?: { readonly model: string };
   readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
 }): {
   readonly cwd?: string;
   readonly model?: string;
+  readonly sandbox?: "read-only";
+  readonly approvalPolicy?: "never";
   readonly config: Readonly<Record<string, Schema.Json>>;
 } {
   const { mcpSession } = input;
+  const planning = input.runtimePolicy?.interactionMode === "plan";
   const t3Server =
     mcpSession === undefined
       ? undefined
@@ -1593,10 +1623,41 @@ function codexThreadRuntimeParams(input: {
           http_headers: { Authorization: mcpSession.authorizationHeader },
         };
   return {
+    ...(planning ? { sandbox: "read-only" as const, approvalPolicy: "never" as const } : {}),
     ...(input.runtimePolicy?.cwd == null ? {} : { cwd: input.runtimePolicy.cwd }),
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
+      ...(planning
+        ? {
+            // MCP servers and native extensions execute outside the command sandbox.
+            ...Object.fromEntries(
+              [
+                "apps",
+                "plugins",
+                "remote_plugin",
+                "image_generation",
+                "workspace_dependencies",
+                "hooks",
+                "computer_use",
+                "browser_use",
+                "in_app_browser",
+                "goals",
+                "skill_mcp_dependency_install",
+                "multi_agent",
+                "multi_agent_v2",
+              ].map((name) => [`features.${name}`, false]),
+            ),
+            ...Object.fromEntries(
+              (input.mcpConfig?.configured ?? [])
+                .filter(
+                  (name) =>
+                    !t3Server || (name !== "t3-code" && name !== CODEX_T3_DIRECT_MCP_SERVER),
+                )
+                .map((name) => [`mcp_servers.${name}.enabled`, false]),
+            ),
+          }
+        : {}),
       // One app-server serves many threads, so the id goes in per-thread shell config, not its env.
       ...(input.threadId === null
         ? {}
@@ -1604,7 +1665,7 @@ function codexThreadRuntimeParams(input: {
             [`shell_environment_policy.set.${PortScanner.AGENT_THREAD_ENV}`]: input.threadId,
             // Codex starts the user's stdio MCP servers per thread, outside the shell policy.
             ...Object.fromEntries(
-              (input.stdioMcpServers ?? []).map((name) => [
+              (planning ? [] : (input.mcpConfig?.stdio ?? [])).map((name) => [
                 `mcp_servers.${name}.env.${PortScanner.AGENT_THREAD_ENV}`,
                 input.threadId,
               ]),
@@ -2141,7 +2202,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         // A failed open is discarded, so the next turn spawns the updated binary.
         if (adapterOptions.compatibility !== undefined) yield* ensureInitialized;
         // Read per thread: a workspace's project config can add its own servers.
-        const readStdioMcpServers = (cwd: string | null | undefined) =>
+        const readMcpConfig = (cwd: string | null | undefined, planning = false) =>
           ensureInitialized.pipe(
             Effect.andThen(
               client.request("config/read", {
@@ -2149,11 +2210,24 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 includeLayers: false,
               }),
             ),
-            Effect.map((response) => codexStdioMcpServerNames(response.config.mcp_servers)),
-            Effect.catch(() =>
-              Effect.logDebug("Codex config read failed.").pipe(
-                Effect.as<ReadonlyArray<string>>([]),
-              ),
+            Effect.flatMap((response) => {
+              const servers = response.config.mcp_servers;
+              const configured = servers && typeof servers === "object" ? Object.keys(servers) : [];
+              if (planning && configured.some((name) => name.includes("."))) {
+                return Effect.fail(
+                  toProtocolError(
+                    "Codex cannot disable an MCP server with a dotted name for Plan mode.",
+                  ),
+                );
+              }
+              return Effect.succeed({ configured, stdio: codexStdioMcpServerNames(servers) });
+            }),
+            Effect.catch((cause) =>
+              planning
+                ? Effect.fail(cause)
+                : Effect.logDebug("Codex config read failed.").pipe(
+                    Effect.as({ configured: [], stdio: [] }),
+                  ),
             ),
           );
         const now = yield* DateTime.now;
@@ -2185,6 +2259,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         );
         const activeTurns = yield* Ref.make(new Map<string, ActiveCodexTurnContext>());
         // Codex reports MCP startup on thread start, usually before the turn context exists.
+        const planningThreads = new Map<string, ProviderAdapter.ProviderAdapterV2RuntimePolicy>();
         const mcpStartupFailures = new Map<string, Map<string, CodexMcpStartupFailure>>();
         // By server name: the shared app-server signs a server in for every thread at once.
         const mcpSignIns = new Map<string, CodexMcpSignIn>();
@@ -2279,6 +2354,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           nativeThreadId: string,
           context: ActiveCodexTurnContext,
         ): Set<ProviderRequestKind> => {
+          // A Build session grant must not automatically approve a new escalation in Plan.
+          if (context.input.runtimePolicy.interactionMode === "plan") return new Set();
           const runtimeMode = context.input.runtimePolicy.runtimeMode;
           const allowed = sessionApprovals.get(nativeThreadId);
           if (allowed?.runtimeMode === runtimeMode) return allowed.kinds;
@@ -4646,7 +4723,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 context: resolved.context,
                 nativeItemId: update.itemId,
                 // A finished proposal stays active until Implement consumes it.
-                status: "active",
+                status: update.completed && !interrupted ? "active" : "draft",
                 markdown: update.text,
                 completed: update.completed && !interrupted,
               });
@@ -5987,6 +6064,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 payload,
               );
             }
+            if (context.input.runtimePolicy.interactionMode === "plan")
+              return { decision: "decline" } as const;
             const allowance = sessionAllowance(payload.threadId, context);
             if (allowance.has("command")) {
               return {
@@ -6058,6 +6137,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 payload,
               );
             }
+            if (context.input.runtimePolicy.interactionMode === "plan")
+              return { decision: "decline" } as const;
             const allowance = sessionAllowance(payload.threadId, context);
             if (allowance.has("file-change")) {
               return {
@@ -6131,6 +6212,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               );
             }
 
+            if (context.input.runtimePolicy.interactionMode === "plan")
+              return { permissions: {}, scope: "turn" } as const;
             const requestKind = providerRequestKindFromPermissions(payload.permissions);
             const artifacts = yield* buildApprovalRequestArtifacts({
               context,
@@ -6208,6 +6291,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               } satisfies CodexSchema.McpServerElicitationRequestResponse;
             }
 
+            if (context.input.runtimePolicy.interactionMode === "plan")
+              return { action: "decline" } as const;
             if (context.input.runtimePolicy.runtimeMode === "full-access") {
               return acceptance;
             }
@@ -6275,6 +6360,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 payload,
               );
             }
+            if (context.input.runtimePolicy.interactionMode === "plan")
+              return { decision: approvalDecisionToLegacyReviewDecision("decline") };
             const allowance = sessionAllowance(payload.conversationId, context);
             if (allowance.has("command")) {
               return {
@@ -6344,6 +6431,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 payload,
               );
             }
+            if (context.input.runtimePolicy.interactionMode === "plan")
+              return { decision: approvalDecisionToLegacyReviewDecision("decline") };
             const allowance = sessionAllowance(payload.conversationId, context);
             if (allowance.has("file-change")) {
               return {
@@ -7902,15 +7991,18 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             Effect.catchIf(isCodexThreadNotFoundError, () =>
               Effect.all([
                 readMcpSession(providerThread.appThreadId),
-                readStdioMcpServers(undefined),
+                readMcpConfig(planningThreads.get(threadId)?.cwd, planningThreads.has(threadId)),
               ]).pipe(
-                Effect.flatMap(([mcpSession, stdioMcpServers]) =>
+                Effect.flatMap(([mcpSession, mcpConfig]) =>
                   resumeNativeThread(threadId, {
                     excludeTurns: true,
                     ...codexThreadRuntimeParams({
                       threadId: providerThread.appThreadId,
+                      ...(planningThreads.has(threadId)
+                        ? { runtimePolicy: planningThreads.get(threadId)! }
+                        : {}),
                       mcpSession,
-                      stdioMcpServers,
+                      mcpConfig,
                     }),
                   }),
                 ),
@@ -8079,15 +8171,18 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               Effect.andThen(
                 Effect.all([
                   mcpSessions.read(threadInput.threadId),
-                  readStdioMcpServers(threadInput.runtimePolicy.cwd),
+                  readMcpConfig(
+                    threadInput.runtimePolicy.cwd,
+                    threadInput.runtimePolicy.interactionMode === "plan",
+                  ),
                 ]),
               ),
-              Effect.flatMap(([mcpSession, stdioMcpServers]) =>
+              Effect.flatMap(([mcpSession, mcpConfig]) =>
                 client.request("thread/start", {
                   ...codexThreadRuntimeParams({
                     threadId: threadInput.threadId,
                     mcpSession,
-                    stdioMcpServers,
+                    mcpConfig,
                     modelSelection: threadInput.modelSelection,
                     runtimePolicy: threadInput.runtimePolicy,
                   }),
@@ -8095,6 +8190,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   ...(IdAllocator.isDelegatedTaskThread(threadInput.threadId)
                     ? { threadSource: "subagent" }
                     : {}),
+                }),
+              ),
+              Effect.tap((response) =>
+                Effect.sync(() => {
+                  if (threadInput.runtimePolicy.interactionMode === "plan")
+                    planningThreads.set(response.thread.id, threadInput.runtimePolicy);
                 }),
               ),
               Effect.map((response): OrchestrationV2ProviderThread =>
@@ -8120,18 +8221,34 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             function* (threadInput) {
               const nativeThreadId = yield* getNativeThreadId(threadInput.providerThread);
               const appThreadId = threadInput.threadId ?? threadInput.providerThread.appThreadId;
+              const resumePolicy = threadInput.runtimePolicy ?? planningThreads.get(nativeThreadId);
+              const planning = resumePolicy?.interactionMode === "plan";
+              if (threadInput.runtimePolicy && planning !== planningThreads.has(nativeThreadId)) {
+                if (yield* runtime.hasPendingBackgroundWorkForThread!(threadInput.providerThread)) {
+                  return yield* toProtocolError(
+                    "Wait for Codex background work to finish before switching Plan mode.",
+                  );
+                }
+                const closing =
+                  threadClosings.get(nativeThreadId) ?? (yield* Deferred.make<void>());
+                threadClosings.set(nativeThreadId, closing);
+                const { status } = yield* client.request("thread/unsubscribe", {
+                  threadId: nativeThreadId,
+                });
+                if (status === "unsubscribed")
+                  yield* Deferred.await(closing).pipe(Effect.timeout("10 seconds"));
+                else threadClosings.delete(nativeThreadId);
+              }
               const resume = resumeNativeThread(nativeThreadId, {
                 excludeTurns: true,
                 ...codexThreadRuntimeParams({
                   threadId: appThreadId,
                   mcpSession: yield* readMcpSession(appThreadId),
-                  stdioMcpServers: yield* readStdioMcpServers(threadInput.runtimePolicy?.cwd),
+                  mcpConfig: yield* readMcpConfig(resumePolicy?.cwd, planning),
                   ...(threadInput.modelSelection === undefined
                     ? {}
                     : { modelSelection: threadInput.modelSelection }),
-                  ...(threadInput.runtimePolicy === undefined
-                    ? {}
-                    : { runtimePolicy: threadInput.runtimePolicy }),
+                  ...(resumePolicy === undefined ? {} : { runtimePolicy: resumePolicy }),
                 }),
               });
               // Codex resumes an active goal's turns right after the response; own them before it.
@@ -8164,6 +8281,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 nativeConversationHeadRef: threadInput.providerThread.nativeConversationHeadRef,
                 updatedAt: codexTimestamp(response.thread.updatedAt),
               } satisfies OrchestrationV2ProviderThread;
+              if (threadInput.runtimePolicy) {
+                if (planning) planningThreads.set(nativeThreadId, threadInput.runtimePolicy);
+                else planningThreads.delete(nativeThreadId);
+              }
               rootProviderThreads.set(nativeThreadId, resumed);
               yield* releaseGoalUpdates(nativeThreadId);
               return rootProviderThreads.get(nativeThreadId) ?? resumed;
@@ -8249,12 +8370,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const continuation =
               turnInput.restartContinuationOfRunId !== undefined || turnInput.resume === true;
             const goalCommand = !continuation ? parseGoalCommand(turnInput.message) : null;
-            if (goalCommand !== null) return runGoalCommand(turnInput, goalCommand);
+            if (goalCommand !== null && turnInput.runtimePolicy.interactionMode !== "plan")
+              return runGoalCommand(turnInput, goalCommand);
             const nativeThreadId = turnInput.providerThread.nativeThreadRef?.nativeId;
             return Effect.gen(function* () {
               if (
                 !continuation &&
                 nativeThreadId != null &&
+                turnInput.runtimePolicy.interactionMode !== "plan" &&
                 goalsPausedForWake.has(nativeThreadId) &&
                 goalsByNativeThread.get(nativeThreadId)?.status === "paused"
               ) {
@@ -9137,7 +9260,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   ...codexThreadRuntimeParams({
                     threadId: threadInput.providerThread.appThreadId,
                     mcpSession: yield* readMcpSession(threadInput.providerThread.appThreadId),
-                    stdioMcpServers: yield* readStdioMcpServers(undefined),
+                    ...(planningThreads.has(threadId)
+                      ? { runtimePolicy: planningThreads.get(threadId)! }
+                      : {}),
+                    mcpConfig: yield* readMcpConfig(
+                      planningThreads.get(threadId)?.cwd,
+                      planningThreads.has(threadId),
+                    ),
                   }),
                 });
               }
@@ -9186,7 +9315,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ...codexThreadRuntimeParams({
                   threadId: threadInput.targetThreadId,
                   mcpSession: yield* mcpSessions.read(threadInput.targetThreadId),
-                  stdioMcpServers: yield* readStdioMcpServers(threadInput.runtimePolicy?.cwd),
+                  mcpConfig: yield* readMcpConfig(
+                    threadInput.runtimePolicy?.cwd,
+                    threadInput.runtimePolicy?.interactionMode === "plan",
+                  ),
                   ...(threadInput.modelSelection === undefined
                     ? {}
                     : { modelSelection: threadInput.modelSelection }),
@@ -9217,6 +9349,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     }),
                 ),
               );
+              if (threadInput.runtimePolicy?.interactionMode === "plan")
+                planningThreads.set(response.thread.id, threadInput.runtimePolicy);
               let forkedThread = response.thread;
               if (boundary.rollbackTurnCount > 0) {
                 const { historyMode } = yield* ensureInitialized.pipe(

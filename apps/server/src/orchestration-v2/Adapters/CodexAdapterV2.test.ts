@@ -69,6 +69,10 @@ import packageJson from "../../../package.json" with { type: "json" };
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import {
+  MARKDOWN_PLAN_SUBMISSION,
+  planModeInstructions,
+} from "@t3tools/provider-core/server/runtimeInstructions";
 import * as EffectWorker from "../EffectWorker.ts";
 import * as Orchestrator from "../Orchestrator.ts";
 import * as ProviderReplayHarness from "../testkit/ProviderReplayHarness.ts";
@@ -176,6 +180,11 @@ describe("CodexAdapterV2 runtime policy", () => {
               ...(hasT3Mcp === undefined ? {} : { hasT3Mcp }),
             });
 
+            assert.equal(
+              params.sandboxPolicy?.type,
+              interactionMode === "plan" ? "readOnly" : "dangerFullAccess",
+            );
+            if (interactionMode === "plan") assert.equal(params.approvalPolicy, "never");
             assert.deepEqual(params.collaborationMode, {
               mode: interactionMode,
               settings: {
@@ -186,11 +195,37 @@ describe("CodexAdapterV2 runtime policy", () => {
             assert.equal(params.effort, reasoningEffort);
             // Some Responses providers reject `detailed`; `auto` is the most detailed a model supports.
             assert.equal(params.summary, "auto");
-            assert.equal(params.additionalContext !== undefined, hasT3Mcp === true);
+            const planContext = params.additionalContext?.t3_code_plan_mode;
+            if (interactionMode === "plan") {
+              assert.equal(planContext?.kind, "application");
+              assert.include(planContext?.value ?? "", "<proposed_plan>");
+            } else {
+              assert.isUndefined(planContext);
+              assert.equal(params.additionalContext !== undefined, hasT3Mcp === true);
+            }
           }
         }
       }),
   );
+
+  it("disables configured MCP servers outside the Plan sandbox for the native thread", () => {
+    const params = (interactionMode: "plan" | "default") =>
+      CodexAdapterV2.codexThreadRuntimeParams({
+        threadId: ThreadId.make("local-plan"),
+        runtimePolicy: { cwd: "/work", interactionMode, runtimeMode: "full-access" },
+        mcpSession: undefined,
+        mcpConfig: { configured: ["remote", "stdio", "t3-code"], stdio: ["stdio"] },
+      });
+    const plan = params("plan");
+    assert.equal(plan.sandbox, "read-only");
+    assert.equal(plan.approvalPolicy, "never");
+    for (const name of ["remote", "stdio", "t3-code"]) {
+      assert.equal(plan.config[`mcp_servers.${name}.enabled`], false);
+      assert.isUndefined(params("default").config[`mcp_servers.${name}.enabled`]);
+    }
+    assert.equal(plan.config["features.apps"], false);
+    assert.equal(plan.config["features.multi_agent_v2"], false);
+  });
 
   it.effect("derives concrete Codex turn policies from every T3 runtime mode", () =>
     Effect.gen(function* () {
@@ -696,6 +731,7 @@ function codexReplayPreamble(input: {
   readonly nativeThreadId: string;
   readonly nativeTurnId: string;
   readonly prompt: string;
+  readonly interactionMode?: "default" | "plan";
   readonly sentPrompt?: string;
   readonly effort?: string;
   readonly turnPolicy?: Pick<
@@ -800,10 +836,20 @@ function codexReplayPreamble(input: {
           approvalsReviewer: "user",
           sandboxPolicy: { type: "dangerFullAccess" },
           ...input.turnPolicy,
+          ...(input.interactionMode === "plan"
+            ? {
+                additionalContext: {
+                  t3_code_plan_mode: {
+                    kind: "application",
+                    value: planModeInstructions(MARKDOWN_PLAN_SUBMISSION),
+                  },
+                },
+              }
+            : {}),
           summary: "auto",
           ...(input.effort === undefined ? {} : { effort: input.effort }),
           collaborationMode: {
-            mode: "default",
+            mode: input.interactionMode ?? "default",
             settings: {
               model: "gpt-5.4",
               ...(input.effort === undefined ? {} : { reasoning_effort: input.effort }),
@@ -1707,12 +1753,75 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       };
     });
 
+  it.effect("does not publish an interrupted plan fragment as an actionable proposal", () =>
+    Effect.gen(function* () {
+      const nativeThreadId = "interrupted-plan-thread";
+      const nativeTurnId = "interrupted-plan-turn";
+      const prompt = "Revise the plan.";
+      const harness = yield* makeCodexReplayHarness(
+        makeCodexReplayTranscript({
+          scenario: "interrupted-plan",
+          entries: [
+            ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt }),
+            {
+              type: "emit_inbound",
+              frame: {
+                method: "item/plan/delta",
+                params: {
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  itemId: "partial",
+                  delta: "# Revised",
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "interrupted" }),
+                },
+              },
+            },
+          ],
+        }),
+      );
+      yield* harness.runtime.startTurn(
+        makeCodexTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("partial-plan"),
+          text: prompt,
+        }),
+      );
+      yield* harness.firstTerminal;
+      const plans = harness.events.flatMap((e) =>
+        e.type === "plan.updated" ? [e.plan.status] : [],
+      );
+      assert.deepEqual(plans, ["draft"]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      ),
+    ),
+  );
+
   it.effect.each([
-    { runtimeMode: "full-access", turnIdKind: "present" },
-    { runtimeMode: "auto-accept-edits", turnIdKind: "null" },
+    { runtimeMode: "full-access", interactionMode: "default", turnIdKind: "present" },
+    { runtimeMode: "full-access", interactionMode: "plan", turnIdKind: "present" },
+    { runtimeMode: "auto-accept-edits", interactionMode: "default", turnIdKind: "null" },
   ] as const)(
-    "handles MCP access approvals in $runtimeMode with a $turnIdKind turn id",
-    ({ runtimeMode, turnIdKind }) =>
+    "handles MCP access approvals in $runtimeMode/$interactionMode with a $turnIdKind turn id",
+    ({ runtimeMode, interactionMode, turnIdKind }) =>
       Effect.gen(function* () {
         const nativeThreadId = "mcp-approval-thread";
         const nativeTurnId = "mcp-approval-turn";
@@ -1726,14 +1835,22 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 nativeThreadId,
                 nativeTurnId,
                 prompt,
-                ...(runtimeMode === "full-access"
-                  ? {}
-                  : {
+                interactionMode,
+                ...(interactionMode === "plan"
+                  ? {
                       turnPolicy: {
-                        approvalPolicy: "on-request",
-                        sandboxPolicy: { type: "workspaceWrite" },
+                        approvalPolicy: "never",
+                        sandboxPolicy: { type: "readOnly", networkAccess: false },
                       },
-                    }),
+                    }
+                  : runtimeMode === "full-access"
+                    ? {}
+                    : {
+                        turnPolicy: {
+                          approvalPolicy: "on-request",
+                          sandboxPolicy: { type: "workspaceWrite" },
+                        },
+                      }),
               }),
               {
                 type: "emit_inbound",
@@ -1756,7 +1873,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               },
               {
                 type: "expect_outbound",
-                frame: { id: 0, result: { action: "accept", content: { approval: "once" } } },
+                frame: {
+                  id: 0,
+                  result:
+                    interactionMode === "plan"
+                      ? { action: "decline" }
+                      : { action: "accept", content: { approval: "once" } },
+                },
               },
               {
                 type: "emit_inbound",
@@ -1784,7 +1907,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         });
         yield* harness.runtime.startTurn({
           ...turnInput,
-          runtimePolicy: { ...turnInput.runtimePolicy, runtimeMode },
+          runtimePolicy: { ...turnInput.runtimePolicy, runtimeMode, interactionMode },
         });
         if (runtimeMode === "full-access") {
           const request = yield* Effect.raceFirst(

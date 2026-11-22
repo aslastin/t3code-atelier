@@ -5844,6 +5844,12 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             '$.text', 'Continue the child task', '$.attachments', json('[]'))
         WHERE turn_item_id = ${agentPromptId}
       `;
+      yield* sql`
+        UPDATE orchestration_v2_projection_runs
+        SET payload_json = json_set(payload_json, '$.sourcePlanRef',
+          json_object('threadId', 'planning-thread', 'planId', 'original-plan'))
+        WHERE thread_id = ${threadId} AND ordinal = 2
+      `;
       const agentWindow = yield* projectionStore.getThreadSnapshotWindow(threadId, {
         rowLimit: sqlPageLimit,
         userTurnLimit: THREAD_HISTORY_PAGE_POLICY.maxUserTurns,
@@ -5856,6 +5862,10 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       );
       assert.isTrue(
         agentWindow.projection.visibleTurnItems.some((row) => row.sourceItemId === agentPromptId),
+      );
+      assert.equal(
+        agentWindow.projection.runs.find((run) => run.ordinal === 2)?.sourcePlanRef?.threadId,
+        "planning-thread",
       );
     }),
   );

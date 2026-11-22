@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  PlanId,
   CheckpointId,
   CheckpointRef,
   CheckpointScopeId,
@@ -598,6 +599,45 @@ layer("ProviderEventIngestorV2", (it) => {
         ["provider-thread.updated"],
       );
       assert.equal(latestThreadSequence, 2);
+
+      const proposal = (id: string) => ({
+        id: PlanId.make(id),
+        threadId: threadEvent.threadId,
+        nodeId: NodeId.make(id),
+        kind: "proposed_plan" as const,
+        runId: null,
+        status: "active" as const,
+        markdown: id,
+      });
+      const first = proposal("original");
+      const revised = proposal("revised");
+      const capture = (plan: ReturnType<typeof proposal>) =>
+        ingestor.ingestNormalized({
+          providerSessionId,
+          providerInstanceId: modelSelection.instanceId,
+          threadId: threadEvent.threadId,
+          event: { type: "plan.updated", driver: CODEX_DRIVER, plan },
+        });
+      yield* capture(first);
+      yield* capture(revised);
+      assert.equal(
+        (yield* projectionStore.getPlan(first.threadId, first.id))?.status,
+        "superseded",
+      );
+      yield* projectionStore.apply({
+        ...threadEvent,
+        type: "plan.updated",
+        payload: { ...revised, status: "completed", implementationThreadId: revised.threadId },
+      });
+      yield* capture(revised);
+      assert.equal(
+        (yield* projectionStore.getPlan(revised.threadId, revised.id))?.status,
+        "completed",
+      );
+      const reopened = { ...revised, lastRevertedImplementationRunId: RunId.make("reverted") };
+      yield* projectionStore.apply({ ...threadEvent, type: "plan.updated", payload: reopened });
+      yield* capture(revised);
+      assert.deepEqual(yield* projectionStore.getPlan(revised.threadId, revised.id), reopened);
     }),
   );
 

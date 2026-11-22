@@ -3,6 +3,8 @@ import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environ
 import {
   EnvironmentId,
   IssueTrackerKind,
+  PlanId,
+  NodeId,
   ORCHESTRATION_V2_WS_METHODS,
   RunId,
   ThreadId,
@@ -46,6 +48,7 @@ import {
   emitThreadEvent,
   hasPendingAssetUrl,
   installFakeEnvironment,
+  isThreadSubscribed,
   rejectPendingCommand,
   threadWithHistory,
   threadWithQuestion,
@@ -560,6 +563,105 @@ it("a stashed prompt ending in a file chip restores with the chip", async () => 
   expect(editor.element().textContent).not.toContain("[package.json](package.json)");
   await expect.element(chip).toBeVisible();
 });
+
+it.each([true, false])(
+  "restores actions after Revert with plan support %s and an interrupted attachment",
+  async (planImplementations) => {
+    const thread = threadWithHistory("plan-with-attachment", 1);
+    const ref = scopeThreadRef(ENVIRONMENT_ID, thread.id);
+    const plan = {
+      id: PlanId.make("plan"),
+      threadId: thread.id,
+      runId: thread.runs[0]!.id,
+      nodeId: NodeId.make("plan-node"),
+      kind: "proposed_plan",
+      markdown: "# Latest",
+    } as const;
+    using _environment = installFakeEnvironment(
+      [
+        {
+          ...thread,
+          interactionMode: "plan",
+          plans: [{ ...plan, status: "completed", implementationThreadId: thread.id }],
+        },
+      ],
+      { acceptCommands: true, planImplementations },
+    );
+    __setClientSettingsForTests({
+      ...DEFAULT_CLIENT_SETTINGS,
+      onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+    });
+    useComposerDraftStore.getState().addFiles(ref, [
+      {
+        type: "file",
+        id: "file-1",
+        name: "notes.txt",
+        mimeType: "text/plain",
+        sizeBytes: 4,
+        file: null,
+      },
+    ]);
+    const router = getRouter(
+      createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+    );
+    await router.load();
+    await using _app = await render(<AppRoot router={router} />, {
+      // AppRoot brings its own router.
+      router: false,
+    });
+    await expect.element(page.getByTestId("composer-editor")).toBeVisible();
+    await vi.waitFor(() => expect(isThreadSubscribed(thread.id)).toBe(true));
+    const implement = page.getByRole("button", { name: "Implement", exact: true });
+    await expect.element(implement).not.toBeInTheDocument();
+    await act(() =>
+      emitThreadEvent(thread.id, {
+        type: "plan.updated",
+        payload: {
+          ...plan,
+          status: "active",
+          lastRevertedImplementationRunId: RunId.make("rolled-back"),
+        },
+      }),
+    );
+    if (!planImplementations) {
+      await expect
+        .element(page.getByRole("button", { name: "Plan mode", exact: true }))
+        .toBeVisible();
+      await expect.element(implement).not.toBeInTheDocument();
+      await expect
+        .element(page.getByRole("button", { name: "Implement in a new thread" }))
+        .not.toBeInTheDocument();
+      return;
+    }
+    await expect.element(page.getByRole("button", { name: "Refine", exact: true })).toBeVisible();
+    await expect.element(implement).toBeEnabled();
+    await expect
+      .element(page.getByRole("button", { name: "Implement in a new thread" }))
+      .toBeEnabled();
+    expect(useComposerDraftStore.getState().getComposerDraft(ref)?.files[0]?.id).toBe("file-1");
+    await userEvent.click(implement);
+    await vi.waitFor(() =>
+      expect(dispatchedCommands()).toContainEqual(
+        expect.objectContaining({
+          type: "message.dispatch",
+          messageId: "reimplement-rolled-back",
+          threadId: thread.id,
+          text: "PLEASE IMPLEMENT THIS PLAN:\n# Latest",
+          sourcePlanRef: expect.objectContaining({
+            threadId: thread.id,
+            planId: plan.id,
+            expectedSource: expect.objectContaining({
+              projectId: PROJECT_ID,
+              branch: "main",
+              worktreePath: null,
+              runtimeMode: "full-access",
+            }),
+          }),
+        }),
+      ),
+    );
+  },
+);
 
 it("a rejected send leaves the timeline when a new draft was typed meanwhile", async () => {
   const thread = threadWithHistory("rejected-send", 1);

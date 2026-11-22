@@ -35,6 +35,8 @@ import {
 export function SettingsLabsRouteScreen() {
   const gt = useGT();
   const insets = useSafeAreaInsets();
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const save = useAtomCommand(saveMobilePreferences);
 
   return (
     <SettingsScreen title={gt("Labs")}>
@@ -45,6 +47,13 @@ export function SettingsLabsRouteScreen() {
         contentContainerClassName="gap-6 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
+        <SettingsSection title={gt("Composer")}>
+          <SettingsSwitchRow
+            label={gt("Plan mode")}
+            value={AsyncResult.isSuccess(preferences) && preferences.value.planModeEnabled === true}
+            onValueChange={(planModeEnabled) => void save({ planModeEnabled })}
+          />
+        </SettingsSection>
         <MachineBetaSection
           title={gt("Linked environments")}
           icon="link"

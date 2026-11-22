@@ -6,6 +6,35 @@ Link each PR you create, take over, or push to: link_pull_request, or link_pull_
 If available, call link_issue for each issue you take on or file, even via CLI; skip issues you only read.
 </pull_request_linking>`;
 
+export const MARKDOWN_PLAN_SUBMISSION =
+  "Put the full proposal between <proposed_plan> and </proposed_plan> on their own lines.";
+export const CLAUDE_PLAN_SUBMISSION = "Use ExitPlanMode to present the complete plan for approval.";
+
+export function planRequestText(text: string, driver: string): string {
+  const submission =
+    driver === "codex" || driver === "opencode"
+      ? MARKDOWN_PLAN_SUBMISSION
+      : driver === "claudeAgent"
+        ? CLAUDE_PLAN_SUBMISSION
+        : "Submit the plan for approval using the native plan mechanism.";
+  return [
+    text,
+    `[Plan mode selected] Please plan this request for my review. Leave its execution, including any delegation, until I choose Implement. If you need a decision from me, ask the question and wait. Otherwise give me the actual plan now. ${submission} If I am discussing an existing proposal, answer my question or submit the full revision I requested.`,
+  ].join("\n\n");
+}
+
+export function planModeInstructions(
+  submission = "Submit the proposal through your native plan mechanism.",
+): string {
+  return [
+    "While Plan mode is active, treat a request to do work as a request to plan that work, even for a one-step task.",
+    "If a missing user decision changes the approach, ask a focused clarifying question and wait. Otherwise present an actionable plan now, in the user's language.",
+    submission,
+    "Include any requested commands or delegated work as future steps for Build. A command example or an explanation alone does not submit a plan.",
+    "For revisions, submit the complete updated plan. For a question about an existing plan, answer it without replacing the proposal.",
+  ].join(" ");
+}
+
 /** Omit model and effort when the harness manages them dynamically. */
 export function buildRuntimeInstructions(runtime: {
   readonly harness: string;
@@ -15,7 +44,11 @@ export function buildRuntimeInstructions(runtime: {
   /** False when the session's system prompt already carries the linking instructions. */
   readonly pullRequestLinking?: boolean;
   /** Adds the folder list of a multi-folder thread. */
-  readonly runtimePolicy?: Pick<ProviderAdapterV2RuntimePolicy, "cwd" | "workspace"> | undefined;
+  readonly runtimePolicy?:
+    | (Pick<ProviderAdapterV2RuntimePolicy, "cwd" | "workspace"> &
+        Partial<Pick<ProviderAdapterV2RuntimePolicy, "interactionMode">>)
+    | undefined;
+  readonly planSubmission?: string;
 }): string {
   const harness = toSingleLine(runtime.harness);
   const model = toSingleLine(runtime.model ?? "");
@@ -32,6 +65,9 @@ export function buildRuntimeInstructions(runtime: {
     runtimeInfo,
     ...(runtime.pullRequestLinking === false ? [] : [PULL_REQUEST_LINKING_INSTRUCTIONS]),
     ...(workspace === "" ? [] : [workspace]),
+    ...(runtime.runtimePolicy?.interactionMode === "plan"
+      ? [planModeInstructions(runtime.planSubmission)]
+      : []),
   ].join("\n\n");
 }
 

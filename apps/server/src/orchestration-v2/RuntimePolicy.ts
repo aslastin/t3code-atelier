@@ -1,5 +1,6 @@
 import {
   isRuntimeModeAbove,
+  supportsPlanMode,
   managedRuntimeModeCeilingMessage,
   ModelSelection,
   OrchestrationV2AppThread,
@@ -54,7 +55,17 @@ export class RuntimePolicyAboveCeilingError extends Schema.TaggedError<RuntimePo
 
 export const isRuntimePolicyAboveCeilingError = Schema.is(RuntimePolicyAboveCeilingError);
 
+export class RuntimePolicyPlanUnavailableError extends Schema.TaggedError<RuntimePolicyPlanUnavailableError>()(
+  "RuntimePolicyPlanUnavailableError",
+  { providerInstanceId: ProviderInstanceId },
+) {
+  override get message(): string {
+    return "The selected provider does not support Plan mode. Select Build or choose a different provider.";
+  }
+}
+
 export const RuntimePolicyV2Error = Schema.Union([
+  RuntimePolicyPlanUnavailableError,
   RuntimePolicyResolveError,
   RuntimePolicyAboveCeilingError,
 ]);
@@ -158,10 +169,13 @@ export const layerFromProjectStore: Layer.Layer<
       resolve: Effect.fn("RuntimePolicyV2.resolve")(function* (input) {
         yield* refuseAboveCeiling(managedPolicy, input.thread);
         const instance = yield* providerInstances.getInstance(input.modelSelection.instanceId);
-        const supportedRuntimeModes =
-          instance === undefined
-            ? undefined
-            : (yield* instance.snapshot.getSnapshot).supportedRuntimeModes;
+        const provider = instance === undefined ? undefined : yield* instance.snapshot.getSnapshot;
+        if (input.thread.interactionMode === "plan" && !supportsPlanMode(provider, true)) {
+          return yield* new RuntimePolicyPlanUnavailableError({
+            providerInstanceId: input.modelSelection.instanceId,
+          });
+        }
+        const supportedRuntimeModes = provider?.supportedRuntimeModes;
         const cwd =
           input.thread.worktreePath ??
           (yield* projects.get(input.thread.projectId).pipe(

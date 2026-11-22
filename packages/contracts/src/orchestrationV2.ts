@@ -703,6 +703,14 @@ export const OrchestrationV2RunStatus = Schema.Literals([
 ]);
 export type OrchestrationV2RunStatus = typeof OrchestrationV2RunStatus.Type;
 
+export const pendingInteractionModeRunStatuses: ReadonlyArray<OrchestrationV2RunStatus> = [
+  "preparing",
+  "starting",
+  "running",
+  "waiting",
+  "queued",
+];
+
 export const OrchestrationV2DelegatedCompletionTaskDeliveryState = Schema.Literals([
   "pending",
   "claimed",
@@ -790,6 +798,33 @@ export const OrchestrationV2RunOutput = Schema.Struct({
 });
 export type OrchestrationV2RunOutput = typeof OrchestrationV2RunOutput.Type;
 
+const PlanImplementationContext = Schema.Struct({
+  projectId: ProjectId,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  runtimeMode: RuntimeMode,
+});
+
+export function matchesPlanImplementationContext(
+  current: typeof PlanImplementationContext.Type,
+  expected: typeof PlanImplementationContext.Type,
+) {
+  return (
+    current.projectId === expected.projectId &&
+    current.branch === expected.branch &&
+    current.worktreePath === expected.worktreePath &&
+    current.runtimeMode === expected.runtimeMode
+  );
+}
+
+export const OrchestrationV2SourcePlanRef = Schema.Struct({
+  threadId: ThreadId,
+  planId: PlanId,
+  expectedSource: Schema.optional(PlanImplementationContext),
+  implementationRuntimeMode: Schema.optional(RuntimeMode),
+});
+export type OrchestrationV2SourcePlanRef = typeof OrchestrationV2SourcePlanRef.Type;
+
 export const OrchestrationV2Run = Schema.Struct({
   id: RunId,
   threadId: ThreadId,
@@ -817,12 +852,7 @@ export const OrchestrationV2Run = Schema.Struct({
   restartCancelledBackgroundWork: Schema.optional(
     Schema.Array(OrchestrationV2RestartCancelledBackgroundWork),
   ),
-  sourcePlanRef: Schema.optional(
-    Schema.Struct({
-      threadId: ThreadId,
-      planId: PlanId,
-    }),
-  ),
+  sourcePlanRef: Schema.optional(OrchestrationV2SourcePlanRef),
   delegatedCompletion: Schema.optional(OrchestrationV2DelegatedCompletionCohort),
   workspacePreparation: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
   /** Starts a new provider conversation; earlier runs stay visible but never reach the provider. */
@@ -1553,6 +1583,8 @@ export const OrchestrationV2PlanArtifact = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2PlanArtifactBaseFields,
     kind: Schema.Literal("proposed_plan"),
+    implementationThreadId: Schema.optional(ThreadId),
+    lastRevertedImplementationRunId: Schema.optional(RunId),
     markdown: Schema.String,
   }),
   Schema.Struct({
@@ -3274,6 +3306,7 @@ export const OrchestrationV2Command = Schema.Union([
         attachments: Schema.Array(ChatAttachment),
         context: Schema.optional(OrchestrationMessageContext),
         titleSeed: Schema.optional(TrimmedNonEmptyString),
+        sourcePlanRef: Schema.optional(OrchestrationV2SourcePlanRef),
         scheduledTaskId: Schema.optional(ScheduledTaskId),
         senderThreadId: Schema.optional(ThreadId),
         outputSchema: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
@@ -3522,6 +3555,7 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("message.dispatch"),
+    expectedInteractionMode: Schema.optional(ProviderInteractionMode),
     notification: Schema.optional(OrchestrationV2Notification),
     /** Sends this pending guest message; the server uses the guest's text, not `text`. */
     guestMessageId: Schema.optional(GuestMessageId),
@@ -3542,7 +3576,7 @@ export const OrchestrationV2Command = Schema.Union([
     attachments: Schema.Array(ChatAttachment),
     titleSeed: Schema.optional(TrimmedNonEmptyString),
     modelSelection: Schema.optional(ModelSelection),
-    sourcePlanRef: Schema.optional(Schema.Struct({ threadId: ThreadId, planId: PlanId })),
+    sourcePlanRef: Schema.optional(OrchestrationV2SourcePlanRef),
     restartContinuationOfRunId: Schema.optional(RunId),
     usageLimitContinuationOfRunId: Schema.optional(RunId),
     manualContinuationOfRunId: Schema.optional(RunId),
@@ -4088,6 +4122,7 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   initialMessage: Schema.optional(
     Schema.Struct({
       messageId: Schema.optional(MessageId),
+      sourcePlanRef: Schema.optional(OrchestrationV2SourcePlanRef),
       text: Schema.String,
       context: Schema.optional(OrchestrationMessageContext),
       attachments: Schema.Array(ChatAttachment),
@@ -4573,15 +4608,22 @@ export class OrchestrationWorkflowFileError extends Schema.TaggedError<Orchestra
   }
 }
 
+export function userMessageTurnItemId(messageId: MessageId): TurnItemId {
+  return TurnItemId.make(`turn-item:message:${encodeURIComponent(messageId)}`);
+}
+
 export const OrchestrationV2GetTurnItemInput = Schema.Struct({
   threadId: ThreadId,
   itemId: TurnItemId,
+  /** An accepted queued message may not have a timeline item yet. */
+  messageId: Schema.optional(MessageId),
   revision: Schema.optional(Schema.String),
 });
 export type OrchestrationV2GetTurnItemInput = typeof OrchestrationV2GetTurnItemInput.Type;
 
 export const OrchestrationV2GetTurnItemResult = Schema.Struct({
   item: Schema.NullOr(OrchestrationV2TurnItem),
+  messageRecorded: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationV2GetTurnItemResult = typeof OrchestrationV2GetTurnItemResult.Type;
 

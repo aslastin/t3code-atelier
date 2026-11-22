@@ -1,3 +1,9 @@
+export const PLAN_IMPLEMENTATION_PROMPT_PREFIX = "PLEASE IMPLEMENT THIS PLAN:\n";
+
+export function buildPlanImplementationPrompt(markdown: string): string {
+  return PLAN_IMPLEMENTATION_PROMPT_PREFIX + markdown;
+}
+
 export function proposedPlanTitle(planMarkdown: string): string | null {
   const heading = planMarkdown.match(/^\s{0,3}#{1,6}\s+(.+)$/m)?.[1]?.trim();
   return heading && heading.length > 0 ? heading : null;

@@ -1,3 +1,5 @@
+import { mobilePreferencesAtom } from "../../state/preferences";
+import type { ProposedPlan } from "@t3tools/client-runtime/operations";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
@@ -10,6 +12,7 @@ import { clampFileAttachmentUploadBytes } from "@t3tools/client-runtime/state/at
 import { pastedTextDisposition, replaceTextSelection } from "@t3tools/client-runtime/text-paste";
 import {
   AuthOrchestrationOperateScope,
+  supportsPlanMode,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ChatAttachment,
@@ -157,6 +160,7 @@ export interface ThreadComposerProps {
   readonly serverConfig: T3ServerConfig | null;
   readonly queueCount: number;
   readonly activeThreadBusy: boolean;
+  readonly pendingTurn?: boolean | undefined;
   /** Sending declines a pending approval and redirects the agent, so `/side` is plain text. */
   readonly redirectsApproval: boolean;
   readonly canStopThread: boolean;
@@ -174,6 +178,9 @@ export interface ThreadComposerProps {
   readonly canSteerActiveTurn: boolean;
   readonly hidden: boolean;
   readonly editorRef?: RefObject<ComposerEditorHandle | null>;
+  readonly proposedPlan?: ProposedPlan | undefined;
+  readonly onChangeInteractionMode?: ((mode: "default" | "plan") => void) | undefined;
+  readonly onImplementPlan?: ((newThread: boolean) => void) | undefined;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onPickDraftMedia: () => Promise<void>;
   readonly onPickDraftFiles: () => Promise<void>;
@@ -353,6 +360,19 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       ) ?? null
     );
   })();
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const mode = props.selectedThread.interactionMode;
+  const modeLocked = props.activeThreadBusy || props.pendingTurn === true || props.queueCount > 0;
+  const supportsPlanImplementations =
+    props.serverConfig?.environment.capabilities.planImplementations === true;
+  const changeMode =
+    mode === "plan" ||
+    (supportsPlanImplementations &&
+      supportsPlanMode(selectedProviderStatus) &&
+      AsyncResult.isSuccess(preferences) &&
+      preferences.value.planModeEnabled)
+      ? props.onChangeInteractionMode
+      : undefined;
   const openDraftDocument = (attachment: ComposerDocumentAttachment) => {
     Keyboard.dismiss();
     navigation.navigate("ThreadAttachment", {
@@ -400,6 +420,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       currentModelSelection.instanceId,
       props.serverConfig?.providers ?? [],
       props.serverConfig?.usageLimitSources ?? [],
+      // oxlint-disable-next-line react/purity -- the usage command reads the clock when the user opens the panel
       Date.now(),
       currentModelSelection.model,
     );
@@ -436,6 +457,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     pullRequestRepository: project?.repositoryIdentity?.displayName ?? null,
     threadPullRequests: props.selectedThread.pullRequests,
     selectedProviderStatus,
+    onChangeInteractionMode: modeLocked ? undefined : changeMode,
     hasThread: !props.isDraft,
     hasCompactableConversation: props.hasCompactableConversation,
     onChangeDraftMessage: props.onChangeDraftMessage,
@@ -490,11 +512,20 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     messages,
   );
   const contextImports = useAtomValue(composerContextImportsAtom);
-  const sendBlockedReason =
+  const buildBlockedReason =
     (queuedEdit?.saving === true ? gt("Saving…") : null) ??
     props.sendBlockedReason ??
     (pendingPastedTextAttachmentCount > 0 ? gt("Attaching pasted text") : null) ??
     attachmentBlockReason;
+  const planUnavailable =
+    mode === "plan" &&
+    (!supportsPlanImplementations ||
+      (selectedProviderStatus && !supportsPlanMode(selectedProviderStatus, !props.isDraft)));
+  const sendBlockedReason =
+    buildBlockedReason ??
+    (planUnavailable && draftMessage.trim() !== "/default"
+      ? gt("Choose a provider that supports Plan or switch to Build.")
+      : null);
   const canSend =
     (props.canOperateThread || props.connectionState !== "connected") &&
     hasContent &&
@@ -549,6 +580,13 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   };
   const handleSend = async (followUp?: ActiveTurnComposerAction) => {
     if (isSubmissionLocked || sendBlockedReason !== null) return;
+    const command = draftMessage.trim();
+    if (changeMode && (command === "/plan" || command === "/default")) {
+      if (modeLocked) return;
+      changeMode(command === "/plan" ? "plan" : "default");
+      onChangeDraftMessage("");
+      return;
+    }
     // Sending now would leave a still-converting pasted image out of the turn, so wait for it.
     if (nativeImageSubmit.deferSend(followUp)) return;
     if (pendingPastedTextAttachmentCountRef.current > 0) return;
@@ -749,6 +787,57 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
         style={{ maxWidth: props.contentMaxWidth }}
       >
         {props.draftControls}
+        {changeMode || props.proposedPlan ? (
+          <View className="flex-row flex-wrap items-center gap-2">
+            {changeMode ? (
+              <Button
+                tone="secondary"
+                label={mode === "plan" ? gt("Plan") : gt("Build")}
+                disabled={isSubmissionLocked || !props.canOperateThread || modeLocked}
+                onPress={() => changeMode(mode === "plan" ? "default" : "plan")}
+              />
+            ) : null}
+            {props.proposedPlan?.status === "active" && props.onImplementPlan ? (
+              <>
+                {mode === "plan" ? (
+                  <Button
+                    tone="secondary"
+                    label={gt("Refine")}
+                    disabled={
+                      isSubmissionLocked || !draftMessage.trim() || sendBlockedReason !== null
+                    }
+                    onPress={() => void handleSend()}
+                  />
+                ) : null}
+                <Button
+                  label={gt("Implement")}
+                  disabled={
+                    isSubmissionLocked ||
+                    !props.canOperateThread ||
+                    props.sendBlockedReason != null ||
+                    modelUnavailable ||
+                    props.connectionState !== "connected" ||
+                    modeLocked
+                  }
+                  onPress={() => props.onImplementPlan?.(false)}
+                />
+                <Button
+                  tone="secondary"
+                  label={gt("Implement in a new thread")}
+                  disabled={
+                    isSubmissionLocked ||
+                    !props.canOperateThread ||
+                    props.sendBlockedReason != null ||
+                    modelUnavailable ||
+                    props.connectionState !== "connected" ||
+                    props.activeThreadBusy
+                  }
+                  onPress={() => props.onImplementPlan?.(true)}
+                />
+              </>
+            ) : null}
+          </View>
+        ) : null}
         {!isSubmissionLocked &&
         composerMenu.trigger &&
         (composerMenu.items.length > 0 || composerMenu.trigger.kind === "pull-request") ? (

@@ -349,7 +349,7 @@ describe("thread outbox", () => {
     });
   });
 
-  it("normalizes queued plan mode against the queued provider, not the current thread", () => {
+  it("preserves planning when a queued message changes providers", () => {
     const codex = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" };
     const antigravity = {
       instanceId: ProviderInstanceId.make("google-personal"),
@@ -366,6 +366,24 @@ describe("thread outbox", () => {
       modelSelection: antigravity,
       interactionMode: "plan",
     } satisfies QueuedThreadMessage;
+    expect(
+      resolveQueuedThreadSettings(
+        { ...message, interactionMode: "default" },
+        { modelSelection: antigravity, runtimeMode: "approval-required", interactionMode: "plan" },
+        providers,
+      ).interactionMode,
+    ).toBe("plan");
+    expect(
+      resolveQueuedThreadSettings(
+        message,
+        {
+          modelSelection: antigravity,
+          runtimeMode: "approval-required",
+          interactionMode: "plan",
+        },
+        providers,
+      ).interactionMode,
+    ).toBe("plan");
 
     expect(
       resolveQueuedThreadSettings(
@@ -376,7 +394,7 @@ describe("thread outbox", () => {
     ).toEqual({
       modelSelection: antigravity,
       runtimeMode: "approval-required",
-      interactionMode: "default",
+      interactionMode: "plan",
     });
     expect(
       resolveQueuedThreadSettings(

@@ -43,7 +43,7 @@ function Card({
   inline,
   fixture,
   rows = 1,
-  automationRows = 0,
+  tallSection,
   serverOverflowRows = 0,
 }: {
   threadRef: ScopedThreadRef;
@@ -51,8 +51,7 @@ function Card({
   fixture: ReturnType<typeof setup>;
   /** Rows of 100px shown at full density. Compact always takes 50px. */
   rows?: number;
-  /** Rows of 100px in an automations list shown at full density. */
-  automationRows?: number;
+  tallSection?: "automations" | "implementations";
   /** Rows of 100px that expanded server lists add, which density ignores. */
   serverOverflowRows?: number;
 }) {
@@ -83,8 +82,11 @@ function Card({
               <p style={{ height: density === "full" ? rows * 100 : 50 }}>
                 Details for {threadRef.threadId}
               </p>
-              {density === "full" && automationRows > 0 ? (
-                <section data-thread-automations-panel style={{ height: automationRows * 100 }} />
+              {density === "full" && tallSection === "automations" ? (
+                <section data-thread-automations-panel style={{ height: 600 }} />
+              ) : null}
+              {density === "full" && tallSection === "implementations" ? (
+                <section data-thread-plan-implementations-panel style={{ height: 600 }} />
               ) : null}
               {density === "full" && serverOverflowRows > 0 ? (
                 <div
@@ -176,16 +178,19 @@ it("returns to full density when hidden items make the content fit", async () =>
   await expect.element(card).toHaveAttribute("data-density", "full");
 });
 
-it("keeps full density when many automations make the content tall", async () => {
-  using fixture = setup();
-  await using _screen = await render(
-    <Card threadRef={threadB} inline fixture={fixture} rows={2} automationRows={6} />,
-  );
-  await expect.element(page.getByText("Details for thread-b")).toBeVisible();
-  await expect
-    .element(page.getByRole("region", { name: "Thread details" }))
-    .toHaveAttribute("data-density", "full");
-});
+it.each(["automations", "implementations"] as const)(
+  "keeps full density when many %s make the content tall",
+  async (section) => {
+    using fixture = setup();
+    await using _screen = await render(
+      <Card threadRef={threadB} inline fixture={fixture} rows={2} tallSection={section} />,
+    );
+    await expect.element(page.getByText("Details for thread-b")).toBeVisible();
+    await expect
+      .element(page.getByRole("region", { name: "Thread details" }))
+      .toHaveAttribute("data-density", "full");
+  },
+);
 
 it("stays full while expanded server rows overflow", async () => {
   using fixture = setup();

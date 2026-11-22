@@ -44,6 +44,16 @@ describe("acpPermissionDisposition", () => {
     },
   };
 
+  it.each(["auto", "auto-accept-edits", "full-access"] as const)(
+    "denies writes while allowing reads in Plan with %s",
+    (runtimeMode) => {
+      const plan = { runtimeMode, cwd, interactionMode: "plan" as const };
+      assert.equal(acpPermissionDisposition(plan, permissionRequest("read")), "allow");
+      assert.equal(acpPermissionDisposition(plan, permissionRequest("edit")), "deny");
+      assert.equal(acpClientExecuteDisposition(plan), "deny");
+    },
+  );
+
   it("auto-allows mutations only when every location is in cwd or an additional writable root", () => {
     assert.equal(
       acpPermissionDisposition(policy, permissionRequest("edit", [{ path: "src/index.ts" }])),
@@ -247,6 +257,10 @@ describe("acpMcpToolApprovalElicitationDisposition", () => {
       _meta: { codex_approval_kind: "mcp_tool_call" },
     } satisfies EffectAcpSchema.CreateElicitationRequest;
 
+    assert.equal(
+      acpMcpToolApprovalElicitationDisposition({ ...fullAccess, interactionMode: "plan" }, tagged),
+      "deny",
+    );
     assert.equal(acpMcpToolApprovalElicitationDisposition(fullAccess, tagged), "allow");
     assert.equal(acpMcpToolApprovalElicitationDisposition(approvalRequired, tagged), "ask");
     assert.equal(

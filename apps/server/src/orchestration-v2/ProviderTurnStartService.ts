@@ -6,6 +6,7 @@ import {
   CommandId,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   latestProviderTurnForAttempt,
+  matchesPlanImplementationContext,
   withMessageSenderNote,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ContextHandoff,
@@ -62,6 +63,7 @@ import {
 } from "@t3tools/provider-core/server/handoffBudget";
 import { deliverContextHandoffs, withInlineContext } from "./ContextHandoffDelivery.ts";
 import { isProviderCommand, outputInstructions } from "./runOutput.ts";
+import { planRequestText } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -287,6 +289,7 @@ export const layer: Layer.Layer<
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
+    const git = yield* GitWorkflowService.GitWorkflowService;
     const restoreMissingWorktree = yield* makeRestoreMissingWorktree;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
 
@@ -681,6 +684,34 @@ export const layer: Layer.Layer<
           });
         },
       );
+      const planRef = run.sourcePlanRef;
+      const sourceContext = planRef?.expectedSource ?? projection.thread;
+      const expectedPlanContext =
+        attempt.reason === "initial" && planRef
+          ? {
+              projectId: sourceContext.projectId,
+              branch: sourceContext.branch,
+              worktreePath: sourceContext.worktreePath,
+              runtimeMode: planRef.implementationRuntimeMode ?? sourceContext.runtimeMode,
+            }
+          : undefined;
+      const failChangedPlanContext = () => {
+        const message =
+          "The implementation checkout or access mode changed before the turn started.";
+        return settleStartFailure({
+          signal: "plan-implementation-context-changed",
+          title: "Plan implementation could not start",
+          error: new Error(message),
+          message,
+        });
+      };
+      if (
+        expectedPlanContext &&
+        !matchesPlanImplementationContext(projection.thread, expectedPlanContext)
+      ) {
+        yield* failChangedPlanContext();
+        return;
+      }
       if (
         expandAssistantCitationsForProvider(providerMessage.text).length >
         PROVIDER_SEND_TURN_MAX_INPUT_CHARS
@@ -861,6 +892,15 @@ export const layer: Layer.Layer<
         .pipe(Effect.result);
       if (resolvedPolicy._tag === "Failure") {
         const error = resolvedPolicy.failure;
+        if (error._tag === "RuntimePolicyPlanUnavailableError") {
+          yield* settleStartFailure({
+            signal: "plan-mode-unavailable",
+            title: "Plan mode unavailable",
+            error,
+            message: error.message,
+          });
+          return;
+        }
         if (error._tag !== "RuntimePolicyAboveCeilingError") return yield* error;
         yield* settleStartFailure({
           signal: "runtime-mode-above-ceiling",
@@ -1004,10 +1044,21 @@ export const layer: Layer.Layer<
         session.providerSession.capabilities.turns.supportsNativeGoals === true;
       const goalCommand = goalDriver && parseGoalCommand(providerMessage) !== null;
       // Part of the user text, so every way a turn starts carries it, after the user's own words.
-      const userText =
-        run.outputSchema === undefined || goalCommand || isProviderCommand(providerMessage)
-          ? messageText
-          : `${messageText}\n\n${outputInstructions(run.outputSchema)}`;
+      let userText = messageText;
+      if (!goalCommand && !isProviderCommand(providerMessage)) {
+        if (run.outputSchema !== undefined) {
+          userText = `${messageText}\n\n${outputInstructions(run.outputSchema)}`;
+        } else if (
+          resolvedRuntimePolicy.interactionMode === "plan" &&
+          providerMessage.createdBy === "user" &&
+          providerMessage.notification === undefined &&
+          projection.thread.lineage.sideChat !== true &&
+          (!manualResume || unsentResumeMessage !== undefined) &&
+          !/^\s*\/[\w:-]+(?:\s|$)/u.test(providerMessage.text)
+        ) {
+          userText = planRequestText(messageText, session.driver);
+        }
+      }
       // The provider turn marks cancellation work delivered; restart continuations use their own text or resume natively.
       const noteContinuation = isRestartNoteContinuation(
         run,
@@ -1989,7 +2040,18 @@ export const layer: Layer.Layer<
           payload: runningRootNode,
         },
       ];
+      if (expectedPlanContext?.branch != null) {
+        const cwd = expectedPlanContext.worktreePath ?? resolvedRuntimePolicy.cwd;
+        const branch = cwd
+          ? yield* git.currentBranch(cwd).pipe(Effect.orElseSucceed(() => null))
+          : null;
+        if (branch !== expectedPlanContext.branch) {
+          yield* failChangedPlanContext();
+          return;
+        }
+      }
       const runningWrite = yield* eventSink.writeIfRunCurrent({
+        ...(expectedPlanContext ? { expectedPlanContext } : {}),
         threadId: projection.thread.id,
         runId: run.id,
         activeAttemptId: attempt.id,
@@ -1997,6 +2059,7 @@ export const layer: Layer.Layer<
         events,
       });
       if (!runningWrite.committed) {
+        if (runningWrite.planContextChanged) yield* failChangedPlanContext();
         return;
       }
       // Delegated (app_owned) children run their own runs; routing them here ingests their items twice.

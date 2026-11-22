@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 import {
   WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
   type EnvironmentId,
   type OrchestrationV2ShellSnapshot,
 } from "@t3tools/contracts";
@@ -349,6 +350,10 @@ export function createThreadEnvironmentAtoms<R, E>(
       execute: setThreadInteractionMode,
       scheduler,
       concurrency,
+    }),
+    readTurnItem: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:orchestration:read-turn-item",
+      tag: ORCHESTRATION_V2_WS_METHODS.getTurnItem,
     }),
     startTurn: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:start-turn",

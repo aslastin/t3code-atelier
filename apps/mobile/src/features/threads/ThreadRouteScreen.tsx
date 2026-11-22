@@ -1,3 +1,9 @@
+import { pendingInteractionModeRunStatuses } from "@t3tools/contracts";
+import {
+  latestActiveProposedPlan,
+  planImplementationTurn,
+} from "@t3tools/client-runtime/operations";
+import { useOpenLinkedThread } from "./useOpenLinkedThread";
 import * as Dialog from "../../components/ui/Dialog";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { useRememberThreadProject } from "./useRememberThreadProject";
@@ -56,7 +62,7 @@ import { scopedThreadKey } from "../../lib/scopedEntities";
 import { useDelayedStatus } from "../../lib/useDelayedStatus";
 import { connectionRetryLabel } from "./floating-working-status";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { useThreadShell } from "../../state/entities";
+import { usePlanImplementationLinks, useThreadShell } from "../../state/entities";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { connectionTone } from "../connection/connectionTone";
 import { runtimeConnectionErrorText } from "../connection/environmentStatusText";
@@ -95,7 +101,11 @@ import { useSelectedThreadGitState } from "../../state/use-selected-thread-git-s
 import { useSelectedThreadRequests } from "../../state/use-selected-thread-requests";
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
 import { useThreadComposerState } from "../../state/use-thread-composer-state";
-import { resolveMergeBackTargetThreadId } from "@t3tools/client-runtime/state/thread-relationships";
+import {
+  planDiscussionThreadIds,
+  planImplementationThreadIds,
+  resolveMergeBackTargetThreadId,
+} from "@t3tools/client-runtime/state/thread-relationships";
 import { resolveLatestMergeBackRun } from "@t3tools/client-runtime/state/thread-workflows";
 import { threadEnvironment } from "../../state/threads";
 import {
@@ -704,6 +714,58 @@ function ThreadRouteContent(
     });
   };
 
+  const openImplementation = useOpenLinkedThread();
+  const implementingPlan = useRef(false);
+  const changingInteractionMode = useRef(false);
+  const serverConfig = routeEnvironmentRuntime?.serverConfig ?? null;
+  const proposedPlan =
+    serverConfig?.environment.capabilities.planImplementations === true
+      ? latestActiveProposedPlan(selectedThreadDetail)
+      : undefined;
+  const implementations = usePlanImplementationLinks(
+    selectedThread?.environmentId,
+    planImplementationThreadIds(selectedThreadDetail),
+  );
+  const discussions = usePlanImplementationLinks(
+    selectedThread?.environmentId,
+    planDiscussionThreadIds(selectedThreadDetail),
+  );
+  const handleImplementPlan = async (newThread: boolean) => {
+    if (
+      !selectedThread ||
+      !selectedThreadWithDraftSettings ||
+      !proposedPlan ||
+      implementingPlan.current ||
+      changingInteractionMode.current
+    )
+      return;
+    const { runtimeMode, modelSelection } = selectedThreadWithDraftSettings;
+    const input = planImplementationTurn({
+      source: selectedThread,
+      plan: proposedPlan,
+      runtimeMode,
+      modelSelection,
+      newThread,
+      creationSource: "mobile",
+    });
+    const environmentId = selectedThread.environmentId;
+    implementingPlan.current = true;
+    const launch = async () => {
+      const result = await continueThreadRun({ environmentId, input });
+      if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+      if (newThread) openImplementation({ environmentId, threadId: input.threadId });
+    };
+    await launch()
+      .catch((error: unknown) => {
+        Dialog.alert(
+          gt("Could not implement plan."),
+          errorDisplayMessage(error, m) ?? String(error),
+        );
+      })
+      .finally(() => {
+        implementingPlan.current = false;
+      });
+  };
   const handleResumeQueue = async () => {
     if (!selectedThread) return;
     const result = await resumeThread({
@@ -1028,7 +1090,6 @@ function ThreadRouteContent(
     );
   }
 
-  const serverConfig = routeEnvironmentRuntime?.serverConfig ?? null;
   const renderThreadRouteBody = () => (
     <>
       <GitActionProgressOverlay
@@ -1044,6 +1105,30 @@ function ThreadRouteContent(
               <ThreadHeader
                 title={selectedThread.title}
                 subtitle={threadStatusLabel ?? headerSubtitle}
+                planMenu={
+                  discussions.length > 0 || implementations.length > 0
+                    ? {
+                        title:
+                          implementations.length > 0
+                            ? gt("Plan implementations")
+                            : gt("Plan discussion"),
+                        icon: "doc.text",
+                        items: [
+                          ...discussions.map(({ ref, title }) => ({
+                            id: `discussion:${ref.threadId}`,
+                            title,
+                            subtitle: gt("Plan discussion"),
+                            onPress: () => openImplementation(ref),
+                          })),
+                          ...implementations.map(({ ref, title }) => ({
+                            id: ref.threadId,
+                            title,
+                            onPress: () => openImplementation(ref),
+                          })),
+                        ],
+                      }
+                    : undefined
+                }
                 gitControls={threadGitControlProps}
                 hasThreadCwd={selectedThreadCwd !== null}
                 inspectorMode={inspectorMode}
@@ -1100,6 +1185,9 @@ function ThreadRouteContent(
           connectionStateLabel={routeConnectionState}
           historyControls={historyControls}
           activeThreadBusy={composer.activeThreadBusy}
+          pendingTurn={selectedThreadDetail?.runs.some((run) =>
+            pendingInteractionModeRunStatuses.includes(run.status),
+          )}
           canStopThread={awaitingBootstrapTurn || composer.interruptibleRunId !== null}
           queuedRunEdit={composer.queuedRunEdit}
           composerDraftKey={composer.composerDraftKey}
@@ -1121,6 +1209,23 @@ function ThreadRouteContent(
           layoutVariant={layout.variant}
           usesAutomaticContentInsets={usesNativeHeaderGlass}
           onOpenConnectionEditor={handleOpenConnectionEditor}
+          proposedPlan={proposedPlan}
+          onImplementPlan={composer.interruptibleRunId === null ? handleImplementPlan : undefined}
+          onChangeInteractionMode={async (interactionMode) => {
+            if (changingInteractionMode.current || implementingPlan.current) return;
+            changingInteractionMode.current = true;
+            const result = await setThreadInteractionMode({
+              environmentId: selectedThread.environmentId,
+              input: { threadId: selectedThread.id, interactionMode },
+            }).finally(() => {
+              changingInteractionMode.current = false;
+            });
+            if (result._tag === "Failure")
+              Dialog.alert(
+                gt("Could not change mode."),
+                errorDisplayMessage(squashAtomCommandFailure(result), m) ?? gt("Try again."),
+              );
+          }}
           onChangeDraftMessage={composer.onChangeDraftMessage}
           onPickDraftMedia={composer.onPickDraftMedia}
           onPickDraftFiles={composer.onPickDraftFiles}
@@ -1130,7 +1235,10 @@ function ThreadRouteContent(
           serverConfig={serverConfig}
           onStopThread={awaitingBootstrapTurn ? handleCancelWorktreeSetup : handleStopThread}
           onResumeQueue={composer.canResume ? handleResumeQueue : null}
-          onSendMessage={composer.onSendMessage}
+          onSendMessage={async (...args) => {
+            if (changingInteractionMode.current) return null;
+            return composer.onSendMessage(...args);
+          }}
           offersSideChat={composer.sideChatUnavailableReason === null}
           onSendCommand={composer.onSendCommand}
           onReconnectEnvironment={handleReconnectEnvironment}

@@ -15,7 +15,7 @@ import {
   type NodeId,
   type OrchestrationV2Command,
   type OrchestrationV2CreationSource,
-  type PlanId,
+  type OrchestrationV2SourcePlanRef,
   type ProjectId,
   type ProjectIconOverride,
   type ProjectScript,
@@ -45,6 +45,9 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import {
   EnvironmentRpcUnavailableError,
   getInitialServerConfig,
+  currentSession,
+  requestInSession,
+  type EnvironmentRpcInput,
   isRpcClientError,
   request,
 } from "../rpc/client.ts";
@@ -176,7 +179,7 @@ interface StartThreadBootstrap {
     readonly interactionMode: ProviderInteractionMode;
     readonly branch: string | null;
     readonly worktreePath: string | null;
-    readonly createdAt: string;
+    readonly createdAt?: string;
   };
   readonly prepareWorktree?: {
     readonly requireWorktree?: boolean;
@@ -205,7 +208,7 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
   readonly bootstrap?: StartThreadBootstrap;
-  readonly sourceProposedPlan?: { readonly threadId: ThreadId; readonly planId: PlanId };
+  readonly sourceProposedPlan?: OrchestrationV2SourcePlanRef;
   readonly dispatchMode?: "auto" | "queue" | "steer" | "restart" | "start";
   /** Start a new provider session; needs the server's `freshContext` capability. */
   readonly freshContext?: boolean;
@@ -302,8 +305,28 @@ const allocateCommandId = Effect.fn("EnvironmentCommands.allocateCommandId")(fun
   return CommandId.make(yield* random.uuidV4());
 });
 
+const requestPlanImplementation = Effect.fn("EnvironmentCommands.requestPlanImplementation")(
+  function* <
+    Tag extends
+      | typeof ORCHESTRATION_V2_WS_METHODS.dispatchCommand
+      | typeof ORCHESTRATION_V2_WS_METHODS.launchThread,
+  >(tag: Tag, input: EnvironmentRpcInput<Tag>) {
+    const session = yield* currentSession();
+    if ((yield* session.initialConfig).environment.capabilities.planImplementations !== true) {
+      const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+      return yield* new EnvironmentRpcUnavailableError({
+        environmentId: supervisor.target.environmentId,
+        ...translatableMessage(msg("Update this environment's T3 Code server to implement plans.")),
+      });
+    }
+    return yield* requestInSession(session, tag, input);
+  },
+);
+
 const dispatch = (command: OrchestrationV2Command) =>
-  request(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, command);
+  command.type === "message.dispatch" && command.sourcePlanRef
+    ? requestPlanImplementation(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, command)
+    : request(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, command);
 
 // The socket can close after the server accepted the frame but before it answered.
 // The server replays an accepted commandId from its receipt, so the same command
@@ -815,7 +838,8 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
                 ? {}
                 : { branch: bootstrap.branch }),
             };
-    return yield* request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
+    const launch = input.sourceProposedPlan ? requestPlanImplementation : request;
+    return yield* launch(ORCHESTRATION_V2_WS_METHODS.launchThread, {
       commandId,
       creationSource: input.creationSource ?? "web",
       threadId: input.threadId,
@@ -828,6 +852,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       interactionMode: input.interactionMode,
       workspaceStrategy,
       initialMessage: {
+        ...(input.sourceProposedPlan ? { sourcePlanRef: input.sourceProposedPlan } : {}),
         messageId: input.message.messageId,
         text: input.message.text,
         ...(context ? { context } : {}),
@@ -837,11 +862,16 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
   }
 
   const requestedMode = input.dispatchMode ?? "auto";
+  const expectedMode =
+    input.sourceProposedPlan === undefined
+      ? { expectedInteractionMode: input.interactionMode }
+      : {};
   const resendAfterSocketLoss = input.resendAfterSocketLoss ?? true;
   if (requestedMode === "start") {
     return yield* dispatchMessage(
       {
         type: "message.dispatch",
+        ...expectedMode,
         commandId,
         createdBy: "user",
         creationSource: input.creationSource ?? "web",
@@ -879,6 +909,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
   return yield* dispatchMessage(
     {
       type: "message.dispatch",
+      ...expectedMode,
       commandId,
       createdBy: "user",
       creationSource: input.creationSource ?? "web",

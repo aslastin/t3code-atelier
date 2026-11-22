@@ -20,6 +20,7 @@ export function ThreadHeader(props: {
   readonly gitControls: ThreadGitControlsProps;
   readonly onReturnToThread?: () => void;
   readonly draft?: boolean;
+  readonly planMenu?: AppBarMenu | undefined;
   readonly hasThreadCwd: boolean;
   readonly inspectorMode: ThreadInspectorMode | null;
   readonly onOpenFilesInspector: () => void;
@@ -44,7 +45,9 @@ export function ThreadHeader(props: {
         },
       ]
     : [];
-  const menus = [gitMenu, terminalMenu].filter((menu): menu is AppBarMenu => menu !== null);
+  const menus = [gitMenu, terminalMenu, props.planMenu ?? null].filter(
+    (menu): menu is AppBarMenu => menu !== null,
+  );
 
   return (
     <AppBar

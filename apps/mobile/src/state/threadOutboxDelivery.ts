@@ -20,6 +20,7 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   MessageId,
+  userMessageTurnItemId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type EnvironmentId,
 } from "@t3tools/contracts";
@@ -536,7 +537,7 @@ export const restoreRejectedQueuedMessage = Effect.fn("ThreadOutbox.restoreRejec
       updateComposerDraftSettings(draftKey, {
         ...(queuedMessage.modelSelection ? { modelSelection: queuedMessage.modelSelection } : {}),
         ...(queuedMessage.runtimeMode ? { runtimeMode: queuedMessage.runtimeMode } : {}),
-        ...(queuedMessage.interactionMode
+        ...(queuedMessage.creation && queuedMessage.interactionMode
           ? { interactionMode: queuedMessage.interactionMode }
           : {}),
         ...(queuedMessage.freshContext ? { freshContext: true } : {}),
@@ -863,6 +864,17 @@ export function createThreadOutboxDelivery(): {
     blockedRecoveries.set(queuedMessage.messageId, { message: queuedMessage, unsubscribe });
   });
 
+  const finishExistingDelivery = Effect.fn("ThreadOutbox.finishExistingDelivery")(function* (
+    message: QueuedThreadMessage,
+    revision: number,
+    sequence?: number,
+  ) {
+    acknowledgedExistingThreadMessageIds.add(message.messageId);
+    const outcome = yield* completeQueuedMessageDelivery(message, revision, sequence);
+    if (outcome !== "removed") return yield* retryDelivery;
+    acknowledgedExistingThreadMessageIds.delete(message.messageId);
+  });
+
   const sendQueuedMessage = Effect.fn("ThreadOutbox.sendQueuedMessage")(function* (
     queuedMessage: QueuedThreadMessage,
     thread: EnvironmentThreadShell,
@@ -874,6 +886,33 @@ export function createThreadOutboxDelivery(): {
       serverEnvironment.configValueAtom(queuedMessage.environmentId),
     );
     if (!serverConfig) return yield* retryDelivery;
+    if (
+      queuedMessage.interactionMode !== undefined &&
+      queuedMessage.interactionMode !== thread.interactionMode
+    ) {
+      const revision = threadOutboxRevision(queuedMessage.messageId);
+      const receipt = yield* deliveryCommand(threadEnvironment.readTurnItem, {
+        environmentId: queuedMessage.environmentId,
+        input: {
+          threadId: queuedMessage.threadId,
+          itemId: userMessageTurnItemId(queuedMessage.messageId),
+          messageId: queuedMessage.messageId,
+        },
+      });
+      if (!AsyncResult.isSuccess(receipt)) return yield* retryDelivery;
+      if (
+        !isQueuedMessagePayloadCurrent(queuedMessage, revision) ||
+        isEditingQueuedMessage(queuedMessage.messageId)
+      )
+        return;
+      if (receipt.value.item !== null || receipt.value.messageRecorded) {
+        return yield* finishExistingDelivery(queuedMessage, revision);
+      }
+      return yield* restoreQueuedMessage(
+        queuedMessage,
+        m(msg("The thread mode changed. Review the mode before sending this message.")),
+      );
+    }
     const settings = resolveQueuedThreadSettings(queuedMessage, thread, serverConfig.providers);
     if (isModelSelectionUnavailable(serverConfig, settings.modelSelection, thread.projectId)) {
       const { title, detail } = describeUnavailableModelSelection(
@@ -906,23 +945,6 @@ export function createThreadOutboxDelivery(): {
       });
       if (AsyncResult.isFailure(runtimeResult)) {
         reportCommandFailure(queuedMessage, runtimeResult, "settings-sync");
-        return yield* retryDelivery;
-      }
-    }
-
-    if (settings.interactionMode !== thread.interactionMode) {
-      if (!hasAccess()) return;
-      const interactionResult = yield* deliveryCommand(threadEnvironment.setInteractionMode, {
-        environmentId: queuedMessage.environmentId,
-        input: {
-          commandId: settingsCommandId(queuedMessage, "interaction-mode"),
-          threadId: queuedMessage.threadId,
-          interactionMode: settings.interactionMode,
-          createdAt: queuedMessage.createdAt,
-        },
-      });
-      if (AsyncResult.isFailure(interactionResult)) {
-        reportCommandFailure(queuedMessage, interactionResult, "settings-sync");
         return yield* retryDelivery;
       }
     }
@@ -1044,14 +1066,11 @@ export function createThreadOutboxDelivery(): {
     if (failure?.action === "restore") {
       return yield* restoreQueuedMessage(persistedMessage, failure.message);
     }
-    acknowledgedExistingThreadMessageIds.add(persistedMessage.messageId);
-    const outcome = yield* completeQueuedMessageDelivery(
+    return yield* finishExistingDelivery(
       persistedMessage,
       deliveryRevision,
       deliveredSequence(deliveryResult),
     );
-    if (outcome !== "removed") return yield* retryDelivery;
-    acknowledgedExistingThreadMessageIds.delete(persistedMessage.messageId);
   });
 
   const sendQueuedCreation = Effect.fn("ThreadOutbox.sendQueuedCreation")(function* (

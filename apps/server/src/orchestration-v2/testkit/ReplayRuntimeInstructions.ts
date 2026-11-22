@@ -4,7 +4,7 @@ import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeI
 
 export function materializeReplayTranscriptRuntimeInstructions(
   transcript: ProviderReplayTranscript,
-  runtime: { readonly driver: ProviderDriverKind; readonly model: string },
+  runtime: { readonly driver: ProviderDriverKind; readonly model: string; readonly plan?: boolean },
 ): ProviderReplayTranscript {
   const harness =
     runtime.driver === "cursor"
@@ -19,12 +19,18 @@ export function materializeReplayTranscriptRuntimeInstructions(
               ? "fx"
               : undefined;
   if (harness === undefined) return transcript;
-  const instructions = buildRuntimeInstructions({ harness, model: runtime.model });
+  const instructionsFor = (model: string) =>
+    buildRuntimeInstructions({
+      harness,
+      model,
+      ...(runtime.plan ? { runtimePolicy: { cwd: null, interactionMode: "plan" } } : {}),
+    });
+  const instructions = instructionsFor(runtime.model);
   // The notes name the model, so each prompt expects the ones for its session's current model.
   const sessionModels = new Map<unknown, string>();
   const notesFor = (sessionId: unknown) => {
     const model = sessionModels.get(sessionId) ?? runtime.model;
-    return model === runtime.model ? instructions : buildRuntimeInstructions({ harness, model });
+    return model === runtime.model ? instructions : instructionsFor(model);
   };
   // Grok's flavor sets `supportsCompaction`; Kiro compacts through its own request instead.
   const compactsThroughPrompt = runtime.driver === "grok";
@@ -216,8 +222,7 @@ export function materializeReplayTranscriptRuntimeInstructions(
               isRecord(options?.model) && typeof options.model.id === "string"
                 ? options.model.id
                 : runtime.model;
-            const expected =
-              model === runtime.model ? instructions : buildRuntimeInstructions({ harness, model });
+            const expected = model === runtime.model ? instructions : instructionsFor(model);
             const recorded = frame.message.endsWith(expected);
             const resend = !recorded && deliveredNotes.get(cursorSessionKey) !== expected;
             interruptedCursorNotes = undefined;

@@ -482,6 +482,121 @@ const nativeGoal = (status: "active" | "paused" | "complete") => ({
 });
 
 it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
+  it.effect("publishes proposed and refined plans while leaving explanations in chat", () =>
+    Effect.gen(function* () {
+      const text = (message: string, ordinal: number, value: string) =>
+        event("session.text.ended", {
+          sessionID: SESSION,
+          assistantMessageID: message,
+          ordinal,
+          text: value,
+        });
+      const { runtime, thread } = yield* resumed([
+        out("session.switchAgent", { sessionID: SESSION, agent: "plan" }),
+        reply("session.switchAgent", null),
+        out("agent.list", "<any>"),
+        reply("agent.list", agentList),
+        out("session.update", { sessionID: SESSION, permissions: "<any>" }),
+        reply("session.update", null),
+        out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+        promptAccepted,
+        text("msg_plan", 0, "Reading the project first."),
+        text(
+          "msg_plan",
+          1,
+          "<proposed_plan>\n## Plan\n\n1. Add the store\n2. Add the list\n</proposed_plan>",
+        ),
+        event("session.execution.succeeded", { sessionID: SESSION }),
+        out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+        replyData("session.prompt", {
+          id: "msg_refine",
+          sessionID: SESSION,
+          time: { created: 1790656601411 },
+          type: "user",
+          payload: { text: "refine" },
+          delivery: "steer",
+        }),
+        text(
+          "msg_explanation",
+          0,
+          "The provider uses this syntax:\n\n~~~xml\n<proposed_plan>\nExample only\n</proposed_plan>\n~~~",
+        ),
+        event("session.execution.succeeded", { sessionID: SESSION }),
+        out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+        replyData("session.prompt", {
+          id: "msg_revision",
+          sessionID: SESSION,
+          time: { created: 1790656601412 },
+          type: "user",
+          payload: { text: "revise" },
+          delivery: "steer",
+        }),
+        text(
+          "msg_revised",
+          0,
+          "I incorporated your feedback.\n\n<proposed_plan>\n## Revised plan\n\n1. Reuse the store\n2. Add the list\n</proposed_plan>",
+        ),
+        event("session.execution.succeeded", { sessionID: SESSION }),
+      ]);
+      const firstEnded = yield* Deferred.make<void>();
+      const secondEnded = yield* Deferred.make<void>();
+      let terminals = 0;
+      const collected = yield* runtime.events.pipe(
+        Stream.tap((event) =>
+          event.type === "turn.terminal"
+            ? Deferred.succeed(++terminals === 1 ? firstEnded : secondEnded, undefined)
+            : Effect.void,
+        ),
+        Stream.takeUntil(() => terminals === 3),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      const input = turnInput(thread);
+      const plan = { ...input.runtimePolicy, interactionMode: "plan" as const };
+      yield* runtime.startTurn({ ...input, runtimePolicy: plan });
+      for (const [ordinal, previousEnded] of [
+        [2, firstEnded],
+        [3, secondEnded],
+      ] as const) {
+        yield* Deferred.await(previousEnded);
+        yield* runtime.startTurn({
+          ...input,
+          runId: RunId.make(`run:opencode2-adapter:${ordinal}`),
+          runOrdinal: ordinal,
+          providerTurnOrdinal: ordinal,
+          attemptId: RunAttemptId.make(`attempt:opencode2-adapter:${ordinal}`),
+          runtimePolicy: plan,
+        });
+      }
+      const seen = yield* Fiber.join(collected);
+      const plans = seen.flatMap((event) =>
+        event.type === "plan.updated" && event.plan.kind === "proposed_plan" ? [event.plan] : [],
+      );
+      const [first] = plans;
+      assert.deepEqual(
+        plans.map((each) => [each.status, each.kind === "proposed_plan" && each.markdown]),
+        [
+          ["active", "## Plan\n\n1. Add the store\n2. Add the list"],
+          ["active", "## Revised plan\n\n1. Reuse the store\n2. Add the list"],
+        ],
+      );
+      const items = seen.flatMap((event) =>
+        event.type === "turn_item.updated" ? [event.turnItem] : [],
+      );
+      const answer = items.find(
+        (item) => item.type === "assistant_message" && item.text.includes("Add the store"),
+      );
+      const card = items.find((item) => item.type === "proposed_plan" && item.planId === first?.id);
+      // The answer becomes the card in place, so the plan is not shown twice.
+      assert.equal(card?.id, answer?.id);
+      assert.isTrue(
+        items.some(
+          (item) => item.type === "assistant_message" && item.text === "Reading the project first.",
+        ),
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("switches the session's model and variant before a turn that changed them", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed([
@@ -3299,42 +3414,77 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     }),
   );
 
-  it.effect("keeps 'allow this session' in the session's rules, not OpenCode's saved grants", () =>
-    Effect.gen(function* () {
-      const { runtime, thread } = yield* resumed(
-        [
-          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
-          promptAccepted,
-          shellAskEvent,
-          out("session.update", {
-            sessionID: SESSION,
-            permissions: [
-              ...supervisedRules.slice(0, 3),
-              { action: "shell", resource: "echo *", effect: "allow" },
-              ...supervisedRules.slice(3),
-            ],
-          }),
-          reply("session.update", null),
-          out("permission.reply", {
-            sessionID: SESSION,
-            requestID: shellAsk.data.id,
-            decision: "once",
-          }),
-          reply("permission.reply", null),
-          event("session.execution.succeeded", { sessionID: SESSION }),
-        ],
-        { supervised: true },
-      );
-      const requested = yield* requestOf(runtime).pipe(Effect.forkScoped);
-      const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
-      yield* runtime.startTurn(turnInput(thread, bigPickle, "approval-required"));
-      const request = yield* Fiber.join(requested);
-      yield* runtime.respondToRuntimeRequest({
-        requestId: request!.id,
-        decision: "acceptForSession",
-      });
-      assert.equal((yield* Fiber.join(terminal))?.status, "completed");
-    }),
+  it.effect.each(["default", "plan"] as const)(
+    "keeps a session approval in its interaction mode (%s)",
+    (mode) =>
+      Effect.gen(function* () {
+        const plan = mode === "plan";
+        const grant = { action: "shell", resource: "echo *", effect: "allow" };
+        const planRules = [
+          { action: "*", resource: "*", effect: "deny" },
+          ...["read", "glob", "grep", "list", "todowrite", "question"].map((action) => ({
+            action,
+            resource: "*",
+            effect: "allow",
+          })),
+        ];
+        const { runtime, thread } = yield* resumed(
+          [
+            ...(plan
+              ? [
+                  out("session.switchAgent", { sessionID: SESSION, agent: "plan" }),
+                  reply("session.switchAgent", null),
+                  out("agent.list", "<any>"),
+                  reply("agent.list", agentList),
+                  out("session.update", {
+                    sessionID: SESSION,
+                    permissions: [...planRules, ...mcpRules],
+                  }),
+                  reply("session.update", null),
+                ]
+              : []),
+            out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+            promptAccepted,
+            shellAskEvent,
+            ...(plan
+              ? []
+              : [
+                  out("session.update", {
+                    sessionID: SESSION,
+                    permissions: [
+                      ...supervisedRules.slice(0, 3),
+                      grant,
+                      ...supervisedRules.slice(3),
+                    ],
+                  }),
+                  reply("session.update", null),
+                ]),
+            out("permission.reply", {
+              sessionID: SESSION,
+              requestID: shellAsk.data.id,
+              decision: plan ? "reject" : "once",
+            }),
+            reply("permission.reply", null),
+            event("session.execution.succeeded", { sessionID: SESSION }),
+          ],
+          { supervised: !plan },
+        );
+        const requested = plan ? undefined : yield* requestOf(runtime).pipe(Effect.forkScoped);
+        const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+        const input = turnInput(thread, bigPickle, plan ? "full-access" : "approval-required");
+        yield* runtime.startTurn({
+          ...input,
+          runtimePolicy: { ...input.runtimePolicy, interactionMode: mode },
+        });
+        if (requested !== undefined) {
+          const request = yield* Fiber.join(requested);
+          yield* runtime.respondToRuntimeRequest({
+            requestId: request!.id,
+            decision: "acceptForSession",
+          });
+        }
+        assert.equal((yield* Fiber.join(terminal))?.status, "completed");
+      }),
   );
 
   it.effect("reads the agents again while a fresh server still lists none", () =>
@@ -3362,6 +3512,43 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         .pipe(Effect.forkScoped);
       yield* TestClock.adjust("250 millis");
       assert.equal((yield* Fiber.join(created)).nativeThreadRef?.nativeId, SESSION);
+    }),
+  );
+  it.effect("opens a Plan session without native agent write exceptions", () =>
+    Effect.gen(function* () {
+      const planPath = { action: "edit", resource: ".opencode/plans/*", effect: "allow" };
+      const protectedRead = { action: "read", resource: "*.env", effect: "ask" };
+      const permissions = [
+        { action: "*", resource: "*", effect: "deny" },
+        ...["read", "glob", "grep", "list", "todowrite", "question"].map((action) => ({
+          action,
+          resource: "*",
+          effect: "allow",
+        })),
+        protectedRead,
+        ...mcpRules,
+      ];
+      const agents = agentList.data.flatMap((build) => [
+        { ...build, permissions: [{ action: "edit", resource: "src/*", effect: "allow" }] },
+        { ...build, id: "plan", name: "Plan", permissions: [planPath, protectedRead] },
+      ]);
+      const runtime = yield* openCode2ReplayRuntime([
+        ...opening,
+        out("agent.list", "<any>"),
+        reply("agent.list", { ...agentList, data: agents }),
+        out("session.create", {
+          location: { directory: WORK },
+          model: { providerID: "opencode", id: "big-pickle" },
+          permissions,
+        }),
+        replyData("session.create", sessionInfo({ permissions })),
+      ]);
+      const created = yield* runtime.ensureThread({
+        threadId,
+        modelSelection: bigPickle,
+        runtimePolicy: { ...policy("full-access"), interactionMode: "plan" },
+      });
+      assert.equal(created.nativeThreadRef?.nativeId, SESSION);
     }),
   );
   it.effect("allows a thread's other folders, except ones whose path would match siblings", () =>

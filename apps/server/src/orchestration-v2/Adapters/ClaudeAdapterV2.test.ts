@@ -5693,6 +5693,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         appThread: { ...input.appThread, runtimeMode, interactionMode: "plan" },
       });
       assert.equal(harness.getOpenedOptions()?.permissionMode, "plan");
+      const systemPrompt = harness.getOpenedOptions()?.systemPrompt;
+      assert.include(
+        typeof systemPrompt === "object" && "append" in systemPrompt
+          ? (systemPrompt.append ?? "")
+          : "",
+        "ExitPlanMode",
+      );
       const canUseTool = harness.getOpenedOptions()?.canUseTool;
       assert.isDefined(canUseTool);
       return { ...harness, canUseTool: canUseTool! };
@@ -5723,43 +5730,79 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
     it.effect.each([
       {
-        runtimeMode: "auto",
-        toolName: "Edit",
-        toolInput: {
-          file_path: "/workspace/target.txt",
-          old_string: "before",
-          new_string: "after",
-        },
-        kind: "file-change",
-        decision: "accept",
-        behavior: "allow",
+        mode: "auto",
+        tool: "Edit",
+        input: { file_path: "/workspace/target.ts", old_string: "a", new_string: "b" },
       },
-      {
-        runtimeMode: "full-access",
-        toolName: "Bash",
-        toolInput: { command: "echo after > target.txt" },
-        kind: "command",
-        decision: "cancel",
-        behavior: "deny",
-      },
+      { mode: "full-access", tool: "Bash", input: { command: "git commit -am update" } },
+      { mode: "full-access", tool: "mcp__external__write", input: {} },
     ] as const)(
-      "asks before $toolName in $runtimeMode Plan, then respects $decision",
-      ({ runtimeMode, toolName, toolInput, kind, decision, behavior }) =>
+      "denies $mode Plan mutation $tool before it can be approved",
+      ({ mode, tool, input }) =>
         Effect.gen(function* () {
-          const turn = yield* openPlanTurn(runtimeMode);
-          const permission = yield* requestWrite(turn, toolName, toolInput);
-          assert.equal(permission.first.type, "request", "the planned write bypassed approval");
-          if (permission.first.type !== "request") return;
-          const request = permission.first.event.runtimeRequest;
-          assert.equal(request.status, "pending");
-          assert.equal(request.kind, kind);
-          yield* turn.runtime.respondToRuntimeRequest({ requestId: request.id, decision });
-          const result = yield* Fiber.join(permission.decision);
-          assert.equal(result?.behavior, behavior);
-          if (result?.behavior === "allow") {
-            assert.deepEqual(result.updatedInput, toolInput);
-            assert.equal(result.toolUseID, "tool-plan-write");
-          }
+          const turn = yield* openPlanTurn(mode);
+          const hook = turn.getOpenedOptions()?.hooks?.PreToolUse?.[0]?.hooks[0];
+          assert.isDefined(hook);
+          const result = yield* Effect.promise(() =>
+            hook!(
+              {
+                hook_event_name: "PreToolUse",
+                cwd: "/workspace",
+                session_id: "plan",
+                transcript_path: "/tmp/transcript",
+                agent_id: "child",
+                tool_use_id: "child-write",
+                tool_name: tool,
+                tool_input: input,
+              },
+              "child-write",
+              { signal: new AbortController().signal },
+            ),
+          );
+          assert.nestedPropertyVal(result, "hookSpecificOutput.permissionDecision", "deny");
+          const permission = yield* requestWrite(turn, tool, input, {
+            toolUseID: "child-write",
+            agentID: "child",
+          });
+          assert.equal(permission.first.type, "decision");
+          if (permission.first.type === "decision")
+            assert.equal(permission.first.result?.behavior, "deny");
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(
+            Layer.mergeAll(
+              IdAllocator.layer,
+              McpProviderSessions.layer,
+              NodeServices.layer,
+              NodeCrypto.layer,
+            ),
+          ),
+        ),
+    );
+
+    it.effect.each(["task_cancel", "t3_thread_read", "request_secret"])(
+      "lets the MCP server check %s in Plan",
+      (name) =>
+        Effect.gen(function* () {
+          const turn = yield* openPlanTurn("auto");
+          const hook = turn.getOpenedOptions()?.hooks?.PreToolUse?.[0]?.hooks[0];
+          assert.isDefined(hook);
+          const result = yield* Effect.promise(() =>
+            hook!(
+              {
+                hook_event_name: "PreToolUse",
+                cwd: "/workspace",
+                session_id: "plan",
+                transcript_path: "/tmp/transcript",
+                tool_use_id: "stop-research",
+                tool_name: `mcp__t3-code__${name}`,
+                tool_input: { taskId: "research-task" },
+              },
+              "stop-research",
+              { signal: new AbortController().signal },
+            ),
+          );
+          assert.notNestedPropertyVal(result, "hookSpecificOutput.permissionDecision", "deny");
         }).pipe(
           Effect.scoped,
           Effect.provide(
@@ -5802,16 +5845,16 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           const turn = yield* openPlanTurn("full-access");
           const parentPermission = yield* requestWrite(
             turn,
-            "Bash",
-            { command: "git status" },
+            "Read",
+            { file_path: "/tmp/one" },
             { toolUseID: "parent-command" },
           );
           assert.equal(parentPermission.first.type, "request");
           if (parentPermission.first.type !== "request") return;
           const permission = yield* requestWrite(
             turn,
-            "Bash",
-            { command: "rm -f $W/*/*.obj" },
+            "Read",
+            { file_path: "/tmp/two" },
             { toolUseID: "child-command", agentID: "child-worker" },
           );
           assert.equal(permission.first.type, "request");

@@ -84,7 +84,7 @@ export type AcpSessionRuntimeEvent =
       readonly result: AcpSessionRuntimeStartResult;
     };
 
-const defaultSessionLoadTimeout = Duration.seconds(90);
+export const defaultSessionLoadTimeout = Duration.seconds(90);
 const defaultSessionLoadReplayIdleGap = Duration.seconds(2);
 const defaultCancelTimeout = Duration.seconds(15);
 const maxStartupMetadataUpdates = 32;
@@ -1100,6 +1100,18 @@ export interface AcpSessionRuntimeStartResult {
   readonly modelConfigId: string | undefined;
 }
 
+export function isProvisionalSessionSetup(
+  setup: AcpSessionRuntimeStartResult["sessionSetupResult"],
+) {
+  const meta = setup._meta;
+  return (
+    meta !== null &&
+    typeof meta === "object" &&
+    !Array.isArray(meta) &&
+    (meta as { readonly t3SessionLoadReady?: unknown }).t3SessionLoadReady === "replay_idle"
+  );
+}
+
 export interface AcpSessionActivationOptions {
   readonly mcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly acpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
@@ -1967,12 +1979,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       | EffectAcpSchema.ResumeSessionResponse,
   ): Effect.fn.Return<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError> {
     const current = yield* getStartedState;
-    const meta = sessionSetupResult._meta;
-    const syntheticReplayIdle =
-      meta !== null &&
-      typeof meta === "object" &&
-      !Array.isArray(meta) &&
-      (meta as { readonly t3SessionLoadReady?: unknown }).t3SessionLoadReady === "replay_idle";
+    const syntheticReplayIdle = isProvisionalSessionSetup(sessionSetupResult);
     const extractedModelConfigId = extractModelConfigId(sessionSetupResult);
     const nextModelConfigId =
       extractedModelConfigId ?? (syntheticReplayIdle ? current.modelConfigId : undefined);

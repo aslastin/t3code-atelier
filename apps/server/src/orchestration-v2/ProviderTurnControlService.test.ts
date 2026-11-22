@@ -158,6 +158,8 @@ function layerProjectionStore(
       getTurnStartHistory: () => Effect.die("unused"),
       getRuntimeRecoveryProjection: () => Effect.die("unused getRuntimeRecoveryProjection"),
       getPlan: () => Effect.die("unused"),
+      getPlanIngestState: () => Effect.die("unused"),
+      getLatestProposedPlan: () => Effect.die("unused"),
       hasUnpairedRunInterruptRequest: () => Effect.die("unused interrupt read"),
       hasRunInterruptRequest: () => Effect.die("unused stop read"),
       getRunProviderRecords: () => Effect.die("unused run provider read"),

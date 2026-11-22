@@ -17,6 +17,7 @@ import {
   RunId,
   RuntimeRequestId,
   ServerConfig,
+  type ServerConfigStreamEvent,
   ThreadId,
   TurnItemId,
   WS_METHODS,
@@ -67,7 +68,12 @@ const descriptor = {
   // A matching version, since a mismatch adds an update banner a typical user never sees.
   serverVersion: APP_VERSION,
   orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
-  capabilities: { repositoryIdentity: true, sideChats: true, freshContext: true },
+  capabilities: {
+    repositoryIdentity: true,
+    sideChats: true,
+    freshContext: true,
+    planImplementations: true,
+  },
 };
 const auth = {
   policy: "loopback-browser",
@@ -106,11 +112,12 @@ const decodeServerConfig = Schema.decodeUnknownSync(ServerConfig);
 const makeServerConfig = (
   providers: ReadonlyArray<unknown>,
   supportsIssues = false,
+  planImplementations = true,
 ): ServerConfig => ({
   ...decodeServerConfig({
     environment: {
       ...descriptor,
-      capabilities: { ...descriptor.capabilities, issues: supportsIssues },
+      capabilities: { ...descriptor.capabilities, issues: supportsIssues, planImplementations },
     },
     auth,
     cwd: "/workspace/render",
@@ -241,6 +248,8 @@ export interface FakeThread {
   readonly runs: ReadonlyArray<OrchestrationV2Run>;
   readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
   readonly runtimeRequests?: OrchestrationV2ThreadProjection["runtimeRequests"];
+  readonly plans?: OrchestrationV2ThreadProjection["plans"];
+  readonly interactionMode?: OrchestrationV2ThreadShell["interactionMode"];
 }
 
 /** A thread of `turns` user prompts, each answered in markdown with a list and inline code. */
@@ -323,7 +332,7 @@ function shellOf(thread: FakeThread): OrchestrationV2ThreadShell {
     providerInstanceId: modelSelection.instanceId,
     modelSelection,
     runtimeMode: "full-access",
-    interactionMode: "default",
+    interactionMode: thread.interactionMode ?? "default",
     branch: "main",
     worktreePath: null,
     activeProviderThreadId: thread.providerThreads?.[0]?.id ?? null,
@@ -401,7 +410,7 @@ function projectionOf(thread: FakeThread): OrchestrationV2ThreadProjection {
     providerTurns: [],
     runtimeRequests: [...(thread.runtimeRequests ?? [])],
     messages: [],
-    plans: [],
+    plans: thread.plans ?? [],
     turnItems: [...thread.items],
     checkpointScopes: [],
     checkpoints: [],
@@ -444,6 +453,21 @@ const subscribe = <A>(first: ReadonlyArray<A>, register?: (queue: Queue.Queue<A>
       return Stream.fromQueue(queue);
     }),
   );
+
+const configSubscribers = new Set<Queue.Queue<ServerConfigStreamEvent>>();
+const configSnapshot = (): ServerConfigStreamEvent => ({
+  version: 1,
+  type: "snapshot",
+  config: serverConfig(),
+});
+const subscribeServerConfig = () =>
+  subscribe([configSnapshot()], (queue) => {
+    configSubscribers.add(queue);
+    return () => configSubscribers.delete(queue);
+  });
+const publishConfig = () => {
+  for (const queue of configSubscribers) Queue.offerUnsafe(queue, configSnapshot());
+};
 
 const handlers: Record<string, (input: never) => unknown> = {
   // Recorded, and accepted only when the scenario asks, since a pending command holds every
@@ -545,8 +569,7 @@ const handlers: Record<string, (input: never) => unknown> = {
         if (vcsStatusSubscriber === queue) vcsStatusSubscriber = null;
       };
     }),
-  [WS_METHODS.subscribeServerConfig]: () =>
-    subscribe([{ version: 1 as const, type: "snapshot" as const, config: serverConfig() }]),
+  [WS_METHODS.subscribeServerConfig]: subscribeServerConfig,
 };
 
 // Unanswered calls stay pending, like a server that has not replied yet.
@@ -562,8 +585,7 @@ const client = new Proxy(handlers, {
 const session: EnvironmentConnectionLease["session"] = {
   client: client as unknown as WsRpcProtocolClient,
   initialConfig: Effect.sync(serverConfig),
-  subscribeServerConfig: () =>
-    subscribe([{ version: 1 as const, type: "snapshot" as const, config: serverConfig() }]),
+  subscribeServerConfig,
   ready: Effect.void,
   probe: Effect.void,
   inboundFrames: Effect.succeed(0),
@@ -602,6 +624,7 @@ export function installFakeEnvironment(
   fixtures: ReadonlyArray<FakeThread>,
   options?: {
     readonly acceptCommands?: boolean;
+    readonly planImplementations?: boolean;
     readonly keybindings?: ResolvedKeybindingsConfig;
     readonly extraProjects?: ReadonlyArray<Pick<OrchestrationProjectShell, "id" | "title">>;
     /** Commands left unanswered even when accepting, until `rejectPendingCommand`. */
@@ -614,9 +637,11 @@ export function installFakeEnvironment(
     ...makeServerConfig(
       options?.providers ?? [CODEX_PROVIDER],
       fixtures.some((thread) => (thread.issues?.length ?? 0) > 0),
+      options?.planImplementations,
     ),
     keybindings: options?.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS,
   };
+  publishConfig();
   dispatched = [];
   acceptCommands = options?.acceptCommands === true;
   projects = [
@@ -650,6 +675,7 @@ export function installFakeEnvironment(
       globalThis.fetch = realFetch;
       threads = [];
       baseServerConfig = makeServerConfig([CODEX_PROVIDER]);
+      publishConfig();
       dispatched = [];
       acceptCommands = false;
       projects = [project];

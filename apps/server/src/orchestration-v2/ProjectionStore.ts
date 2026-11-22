@@ -317,6 +317,7 @@ export interface ProjectionCheckpointRollbackContext {
   readonly providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
   readonly rolledBackAttemptIds: ReadonlyArray<RunAttemptId>;
   readonly runsToRollback: ReadonlyArray<OrchestrationV2Run>;
+  readonly planChanges?: ReadonlyArray<OrchestrationV2PlanArtifact>;
   readonly rootNodes: ReadonlyArray<OrchestrationV2ExecutionNode>;
   /** Ready checkpoints of the target scope and of repository scopes that the rollback discards. */
   readonly staleCheckpoints: ReadonlyArray<OrchestrationV2Checkpoint>;
@@ -371,6 +372,7 @@ export interface ProjectionRuntimeResponseContext {
 const PROMPT_NARROWING_BLOCKING_FILTERS = [
   "runIds",
   "runStatuses",
+  "planImplementationRunsOnly",
   "latestRunLimit",
   "turnItemRunId",
   "turnItemRunIds",
@@ -394,6 +396,7 @@ export interface ProjectionRecordFilter {
   readonly turnItemRunIds?: ReadonlyArray<RunId | null>;
   readonly turnItemNodeIds?: ReadonlyArray<NodeId>;
   readonly runIds?: ReadonlyArray<RunId>;
+  readonly planImplementationRunsOnly?: true;
   /** Without `includeLatestRun`, reads through a status index and sorts the matches, so keep it to statuses few runs hold. */
   readonly runStatuses?: ReadonlyArray<OrchestrationV2Run["status"]>;
   /** Keeps the thread's highest-ordinal run even when `runStatuses` excludes it. */
@@ -746,6 +749,19 @@ export interface ProjectionStoreV2Shape {
   readonly getPlan: (
     threadId: ThreadId,
     planId: PlanId,
+  ) => Effect.Effect<OrchestrationV2PlanArtifact | undefined, ProjectionStoreV2Error>;
+  readonly getPlanIngestState: (
+    threadId: ThreadId,
+    planId: PlanId,
+  ) => Effect.Effect<
+    | { readonly status: OrchestrationV2PlanArtifact["status"]; readonly reopened: number }
+    | undefined,
+    ProjectionStoreV2Error
+  >;
+  readonly getLatestProposedPlan: (
+    threadId: ThreadId,
+    except?: PlanId,
+    throughRunOrdinal?: number,
   ) => Effect.Effect<OrchestrationV2PlanArtifact | undefined, ProjectionStoreV2Error>;
   readonly hasUnpairedRunInterruptRequest: (
     threadId: ThreadId,
@@ -2383,6 +2399,19 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         WHERE todo_run.run_id = ${row}.run_id
           AND todo_run.status IN ('queued','preparing','starting','running','waiting')
       ))`;
+
+    const latestProposedPlanId = (
+      threadId: ThreadId,
+      except?: PlanId,
+      throughRunOrdinal?: number,
+    ) => sql`
+      SELECT plan.plan_id FROM orchestration_v2_projection_plans AS plan
+      LEFT JOIN orchestration_v2_projection_runs AS run ON run.thread_id = plan.thread_id AND run.run_id = plan.run_id
+      WHERE plan.thread_id = ${threadId} AND plan.kind = 'proposed_plan' AND plan.plan_id IS NOT ${except ?? null}
+        AND run.status IS NOT 'rolled_back'
+        AND ${throughRunOrdinal === undefined ? sql`plan.status IN ('active','completed')` : sql`plan.status IN ('active','completed','superseded') AND (run.ordinal IS NULL OR run.ordinal <= ${throughRunOrdinal})`}
+      ORDER BY plan.rowid DESC LIMIT 1
+    `;
 
     // Start from the few owned provider threads; a thread can have a large settled node history.
     const nodesOwningProviderThreads = (threadId: ThreadId) => sql`
@@ -4152,6 +4181,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 ? filter?.runIds
                 : [],
             )} = ${threadId}
+              ${filter?.planImplementationRunsOnly ? sql`AND json_valid(payload_json) AND json_extract(payload_json, '$.sourcePlanRef') IS NOT NULL` : sql``}
               ${filter?.runIds === undefined ? sql`` : sql`AND run_id IN (SELECT value FROM json_each(${encodeIdList(filter.runIds)}))`}
               ${
                 filter?.latestRunLimit !== undefined
@@ -4216,6 +4246,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             WHERE thread_id = ${threadId}
               AND (status IN ('queued','preparing','starting','running','waiting')
                 OR run_id IN (SELECT value FROM json_each(${cohortRunIds}))
+                OR ordinal IN (
+                  SELECT min(ordinal) FROM orchestration_v2_projection_runs
+                  WHERE thread_id = ${threadId} AND json_extract(payload_json, '$.sourcePlanRef.threadId') <> thread_id
+                  GROUP BY json_extract(payload_json, '$.sourcePlanRef.threadId')
+                )
                 OR run_id = ${window.requiredRunId ?? null}
                 ${
                   // Keep the shell's latest run even when its items are outside the newest window.
@@ -4532,11 +4567,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 WHERE thread_id = ${threadId} ORDER BY plan_id ASC
               `
               : sql<PayloadRow>`
-                SELECT payload_json FROM orchestration_v2_projection_plans AS plan
+                SELECT CASE WHEN plan.kind = 'proposed_plan' AND plan.status = 'completed'
+                    AND plan.plan_id NOT IN (SELECT value FROM json_each(${cohortPlanIds}))
+                  THEN json_set(plan.payload_json, '$.markdown', '', '$.detailInTurnItem', json('true'))
+                  ELSE plan.payload_json END AS payload_json
+                FROM orchestration_v2_projection_plans AS plan
                 WHERE plan.thread_id = ${threadId}
                   AND (
                     (plan.status = 'active' AND NOT ${todoListOfSettledRun(sql`plan`)})
                     OR plan.plan_id = ${latestTodoList?.plan_id ?? null}
+                    OR (plan.kind = 'proposed_plan' AND plan.status = 'completed'
+                      AND json_extract(plan.payload_json, '$.implementationThreadId') <> ${threadId})
                     OR plan.plan_id IN (
                       SELECT value FROM json_each(${cohortPlanIds})
                     )
@@ -6060,6 +6101,34 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError(controlReadError(threadId)));
 
+    // Streaming providers repeat full Markdown snapshots; status checks must not decode the previous body.
+    const getPlanIngestState: ProjectionStoreV2Shape["getPlanIngestState"] = Effect.fnUntraced(
+      function* (threadId, planId) {
+        const [row] = yield* sql<{
+          status: OrchestrationV2PlanArtifact["status"];
+          reopened: number;
+        }>`
+        SELECT status, CASE WHEN status = 'active' THEN json_extract(payload_json, '$.lastRevertedImplementationRunId') IS NOT NULL ELSE 0 END AS reopened
+        FROM orchestration_v2_projection_plans WHERE thread_id = ${threadId} AND plan_id = ${planId}
+      `;
+        return row;
+      },
+      (effect, threadId) => effect.pipe(Effect.mapError(controlReadError(threadId))),
+    );
+
+    const getLatestProposedPlan: ProjectionStoreV2Shape["getLatestProposedPlan"] = Effect.fn(
+      "ProjectionStore.getLatestProposedPlan",
+    )(
+      function* (threadId, except, throughRunOrdinal) {
+        const [row] = yield* sql<PayloadRow>`
+          SELECT payload_json FROM orchestration_v2_projection_plans
+          WHERE plan_id = (${latestProposedPlanId(threadId, except, throughRunOrdinal)})
+        `;
+        return row === undefined ? undefined : yield* decodePlanJson(row.payload_json);
+      },
+      (effect, threadId) => effect.pipe(Effect.mapError(controlReadError(threadId))),
+    );
+
     const hasUnpairedRunInterruptRequest: ProjectionStoreV2Shape["hasUnpairedRunInterruptRequest"] =
       Effect.fn("ProjectionStore.hasUnpairedRunInterruptRequest")(
         function* (threadId, requestId, resultId) {
@@ -6531,6 +6600,45 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               ]);
             const targetAttempt = (yield* decodeRollbackTargetAttempts(attemptRows))[0];
             const runsToRollback = yield* decodeRows(decodeRunPayload, threadId)(runRows);
+            const planChanges: OrchestrationV2PlanArtifact[] = [];
+            const latest = runsToRollback.length
+              ? yield* getLatestProposedPlan(threadId)
+              : undefined;
+            if (latest) {
+              const proposalReverted = runsToRollback.some((run) => run.id === latest.runId);
+              const surviving = proposalReverted
+                ? yield* getLatestProposedPlan(threadId, undefined, targetOrdinal)
+                : latest;
+              if (proposalReverted && latest.status === "active")
+                planChanges.push({ ...latest, status: "superseded" });
+              if (surviving?.status === "superseded") {
+                planChanges.push({ ...surviving, status: "active" });
+              } else if (
+                surviving?.kind === "proposed_plan" &&
+                surviving.status === "completed" &&
+                surviving.implementationThreadId === threadId
+              ) {
+                const implementation = runsToRollback.findLast(
+                  (run) =>
+                    run.sourcePlanRef?.threadId === threadId &&
+                    run.sourcePlanRef.planId === surviving.id,
+                );
+                if (implementation) {
+                  const [retained] = yield* sql`SELECT 1 FROM orchestration_v2_projection_runs
+                    WHERE thread_id = ${threadId} AND ordinal <= ${targetOrdinal} AND status <> 'rolled_back'
+                      AND json_valid(payload_json) AND json_extract(payload_json, '$.sourcePlanRef') IS NOT NULL
+                      AND json_extract(payload_json,'$.sourcePlanRef.threadId') = ${threadId}
+                      AND json_extract(payload_json,'$.sourcePlanRef.planId') = ${surviving.id} LIMIT 1`;
+                  if (!retained)
+                    planChanges.push({
+                      ...surviving,
+                      status: "active",
+                      implementationThreadId: undefined,
+                      lastRevertedImplementationRunId: implementation.id,
+                    });
+                }
+              }
+            }
             const [nodeRows, turnRows] = yield* Effect.all([
               sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_nodes
             WHERE thread_id = ${threadId} AND ${sql.in(
@@ -6549,6 +6657,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               ...context,
               targetAttempt,
               runsToRollback,
+              planChanges,
               providerSession:
                 sessionRows[0] === undefined
                   ? undefined
@@ -9876,6 +9985,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         getThreadRecords(threadId, fields, filter).pipe(NodeSqliteClient.readOnly),
       getRuntimeRequest: readOnReader(getRuntimeRequest),
       getPlan: readOnReader(getPlan),
+      getLatestProposedPlan: readOnReader(getLatestProposedPlan),
+      getPlanIngestState: readOnReader(getPlanIngestState),
       getProviderControlContext: readOnReader(getProviderControlContext),
       getLimitRecoveryCandidates: readOnReader(getLimitRecoveryCandidates),
       getLimitRecoveryWakeAt: readOnReader(getLimitRecoveryWakeAt),

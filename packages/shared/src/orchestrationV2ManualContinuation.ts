@@ -1,5 +1,16 @@
 import type { OrchestrationV2Run, OrchestrationV2ThreadProjection } from "@t3tools/contracts";
 
+export function failedUnsentPlan(
+  run: OrchestrationV2Run | undefined,
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "attempts" | "providerTurns">,
+) {
+  if (run?.status !== "failed" || (!run.sourcePlanRef && !run.manualContinuationOfRunId)) {
+    return undefined;
+  }
+  return unsentManualContinuationSource({ manualContinuationOfRunId: run.id }, projection)
+    ?.sourcePlanRef;
+}
+
 export function unsentManualContinuationSource(
   run: Pick<OrchestrationV2Run, "manualContinuationOfRunId"> | undefined,
   projection: Pick<OrchestrationV2ThreadProjection, "runs" | "attempts" | "providerTurns">,

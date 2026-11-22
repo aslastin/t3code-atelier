@@ -24,6 +24,8 @@ import {
   type OrchestrationV2Actor,
   type OrchestrationV2Command,
   type OrchestrationV2GetTurnItemResult,
+  type OrchestrationV2GetTurnItemInput,
+  userMessageTurnItemId,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2CreationSource,
@@ -41,7 +43,6 @@ import {
   RunId,
   type ScheduledTaskId,
   ThreadId,
-  type TurnItemId,
 } from "@t3tools/contracts";
 import { delegatedTaskProgress } from "@t3tools/provider-core/server/subagentProjection";
 import { threadTranscriptHeader } from "@t3tools/shared/threadTranscript";
@@ -432,10 +433,9 @@ export interface ThreadManagementServiceShape {
   readonly getMessageCount: Orchestrator.OrchestratorV2["Service"]["getMessageCount"];
   readonly getRunCount: Orchestrator.OrchestratorV2["Service"]["getRunCount"];
   readonly getMessagesById: Orchestrator.OrchestratorV2["Service"]["getMessagesById"];
-  readonly getTurnItem: (input: {
-    readonly threadId: ThreadId;
-    readonly itemId: TurnItemId;
-  }) => Effect.Effect<OrchestrationV2GetTurnItemResult, Orchestrator.OrchestratorV2Error>;
+  readonly getTurnItem: (
+    input: OrchestrationV2GetTurnItemInput,
+  ) => Effect.Effect<OrchestrationV2GetTurnItemResult, Orchestrator.OrchestratorV2Error>;
   readonly getThreadRecords: Orchestrator.OrchestratorV2["Service"]["getThreadRecords"];
   readonly getThreadProjection: (
     threadId: ThreadId,
@@ -1707,6 +1707,7 @@ const make = Effect.gen(function* () {
     "ThreadManagementService.stopDelegatedTasks",
   )(function* (input) {
     const { subagents } = yield* orchestrator.getThreadRecords(input.threadId, ["subagents"]);
+    const modeLimit = yield* DispatchModeLimit;
     const failures: Array<
       Orchestrator.OrchestratorV2Error | ThreadManagementProviderInstanceDisabledError
     > = [];
@@ -1716,7 +1717,7 @@ const make = Effect.gen(function* () {
       if (task.childThreadId === null) {
         // A task in a linked environment ends here; its follower then stops it there.
         // One with its result keeps it, but its thread there may run follow-up work.
-        if (task.remoteChild === undefined) continue;
+        if (task.remoteChild === undefined || modeLimit?.interactionMode === "plan") continue;
         const commandId = CommandId.make(`${input.commandId}:stop:${task.id}`);
         yield* (input.remoteDispatch ?? dispatch)(
           task.result === null
@@ -1827,11 +1828,18 @@ const make = Effect.gen(function* () {
         );
       },
     ),
-    getTurnItem: Effect.fn("ThreadManagementService.getTurnItem")(function (input) {
-      return ensureProjectionTranscript(input.threadId).pipe(
-        Effect.andThen(orchestrator.getTurnItem(input)),
-        Effect.map((item) => ({ item: item === null ? null : projectTurnItemForDetail(item) })),
-      );
+    getTurnItem: Effect.fn("ThreadManagementService.getTurnItem")(function* (input) {
+      yield* ensureProjectionTranscript(input.threadId);
+      const item = yield* orchestrator.getTurnItem(input);
+      if (
+        item === null &&
+        input.messageId &&
+        userMessageTurnItemId(input.messageId) === input.itemId
+      ) {
+        const messages = yield* orchestrator.getMessagesById(input.threadId, [input.messageId]);
+        return { item: null, messageRecorded: messages.has(input.messageId) };
+      }
+      return { item: item === null ? null : projectTurnItemForDetail(item) };
     }),
     getThreadRecords: Effect.fn("ThreadManagementService.getThreadRecords")(
       function (threadId, fields, filter) {

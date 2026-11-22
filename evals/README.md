@@ -6,6 +6,7 @@ Write or run an eval when a change affects what a model sees or does: agent inst
 
 | Eval                            | Measures                                                                                             |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| [plan-mode](plan-mode/)         | Whether a task in Plan produces an actionable proposal or a necessary clarification in T3.           |
 | [mcp-tool-use](mcp-tool-use/)   | Whether agents use T3's MCP tools correctly, including device routing and recovery, in fake threads. |
 | [thread-titles](thread-titles/) | Whether generated thread titles name the right subject.                                              |
 | [pr-content](pr-content/)       | Whether PR generation describes the diff when project instructions try to redirect it.               |

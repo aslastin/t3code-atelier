@@ -20,6 +20,7 @@ export function LabsSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection id="beta" title={gt("Beta")}>
+        <PlanModeRow />
         <BoringSidebarRow />
         {/* Clerk is only mounted when this build has T3 Connect. */}
         {hasCloudPublicConfig() ? <GuestLinksRowWithSignIn /> : <GuestLinksRow />}
@@ -29,6 +30,26 @@ export function LabsSettingsPanel() {
         <FastWorktreeCheckoutRow />
       </SettingsSection>
     </SettingsPageContainer>
+  );
+}
+
+function PlanModeRow() {
+  const searchableSetting = useSearchableSetting();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const gt = useGT();
+  return (
+    <SettingsRow
+      {...searchableSetting("plan-mode")}
+      description={gt("Discuss and refine a plan before implementing it.")}
+      control={
+        <Switch
+          checked={settings.planModeEnabled}
+          onCheckedChange={(planModeEnabled) => updateSettings({ planModeEnabled })}
+          aria-label={gt("Plan mode")}
+        />
+      }
+    />
   );
 }
 
