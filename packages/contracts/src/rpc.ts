@@ -447,6 +447,12 @@ import {
   ProjectCloneSubscribeInput,
 } from "./projectClone.ts";
 import {
+  ThreadTopicError,
+  ThreadTopicMutation,
+  ThreadTopicsSnapshot,
+  ThreadTopicsSubscribeInput,
+} from "./threadTopics.ts";
+import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
   SourceControlDiscoveryResult,
@@ -695,6 +701,10 @@ export const WS_METHODS = {
   projectCloneCancel: "projectClone.cancel",
   projectCloneRetry: "projectClone.retry",
   subscribeProjectClones: "subscribeProjectClones",
+
+  // Atelier fork: thread topics.
+  threadTopicsMutate: "threadTopics.mutate",
+  subscribeThreadTopics: "subscribeThreadTopics",
 
   subscribeVcsStatus: "subscribeVcsStatus",
   subscribeVcsBranch: "subscribeVcsBranch",
@@ -1584,6 +1594,19 @@ const WsSubscribeProjectClonesRpc = Rpc.make(WS_METHODS.subscribeProjectClones, 
   payload: ProjectCloneSubscribeInput,
   success: ProjectCloneListEvent,
   error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsThreadTopicsMutateRpc = Rpc.make(WS_METHODS.threadTopicsMutate, {
+  payload: ThreadTopicMutation,
+  error: Schema.Union([ThreadTopicError, EnvironmentAuthorizationError]),
+});
+
+// A full snapshot on subscribe and after every change; topics are small.
+const WsSubscribeThreadTopicsRpc = Rpc.make(WS_METHODS.subscribeThreadTopics, {
+  payload: ThreadTopicsSubscribeInput,
+  success: ThreadTopicsSnapshot,
+  error: Schema.Union([ThreadTopicError, EnvironmentAuthorizationError]),
   stream: true,
 });
 
@@ -2512,6 +2535,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectCloneCancelRpc,
   WsProjectCloneRetryRpc,
   WsSubscribeProjectClonesRpc,
+  WsThreadTopicsMutateRpc,
+  WsSubscribeThreadTopicsRpc,
   WsProjectsListEntriesRpc,
   WsProjectsListIgnoredFilesRpc,
   WsProjectsReadFileRpc,

@@ -585,7 +585,7 @@ it.each([true, false])(
           plans: [{ ...plan, status: "completed", implementationThreadId: thread.id }],
         },
       ],
-      { acceptCommands: true, planImplementations },
+      { acceptCommands: true, capabilities: { planImplementations } },
     );
     __setClientSettingsForTests({
       ...DEFAULT_CLIENT_SETTINGS,

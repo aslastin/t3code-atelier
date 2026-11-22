@@ -159,8 +159,23 @@ project's folder comes last and shows only while it has active threads. Click a 
 close it. A closed folder shows how many threads it holds, and a dot when one of them
 needs you. Use the pen button on a folder, or right-click it, to start a thread in that project.
 Pinned threads stay above the folders, and Snoozed and Settled stay below them. In this mode you
-can drag a thread onto the composer to mention it, but not within the sidebar, and the Working
-section is off. Each device keeps its own choice.
+can drag a thread onto the composer to mention it, or onto a topic as described below, but you
+cannot reorder threads, and the Working section is off. Each device keeps its own choice.
+
+#### Topics
+
+Topics group related threads inside a project's folder. Right-click a thread, or several selected
+threads from one project, and choose **Move to topic → New topic…** to start one. Topics come
+first in the folder, in the order you drag their headers into, followed by threads without a
+topic. Drag a thread onto a topic to add it, or onto the folder's header or its threads without a
+topic to take it out. **Move to topic** also lists every topic in the project and offers
+**Remove from topic**.
+
+Right-click a topic to rename it, start a thread in it, settle all its active threads at once, or
+disband it. Disbanding keeps the threads in the folder. Both Settle topic and Disband topic can be
+undone. A topic with no active threads is hidden; its pinned, snoozed, and settled threads stay in
+it and bring it back when they return. Agents can also start threads in a topic or move them into
+one. Topics need a server that supports them, and the ungrouped sidebar does not show them.
 
 ## Settle finished work
 

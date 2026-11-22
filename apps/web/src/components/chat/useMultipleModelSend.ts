@@ -103,6 +103,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     buildOutgoingMessageContext,
     isCurrentSend,
     draftChangedDuringPreparation,
+    onThreadStarted,
   }: {
     readonly threadId: ThreadId;
     readonly project: EnvironmentProject;
@@ -120,6 +121,8 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     /** False once a newer send from this composer started. */
     readonly isCurrentSend: () => boolean;
     readonly draftChangedDuringPreparation: () => boolean;
+    /** Atelier fork: each thread the send created, as for filing it under the draft's topic. */
+    readonly onThreadStarted?: (threadId: ThreadId) => void;
   }) => {
     const { attachments: attachmentsSnapshot, messageText } = sendSnapshot;
     const failedSelections: ModelSelection[] = [];
@@ -169,8 +172,8 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
             ]),
             model: target.selection.model,
             uncertainSubmissions: uncertainSubmissionsRef.current,
-            start: (targetThreadId) => {
-              return startThreadTurn({
+            start: async (targetThreadId) => {
+              const result = await startThreadTurn({
                 environmentId,
                 input: {
                   threadId: targetThreadId,
@@ -210,6 +213,8 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
                   createdAt: createdAt,
                 },
               });
+              if (result._tag === "Success") onThreadStarted?.(targetThreadId);
+              return result;
             },
             openThread: (threadId) =>
               void navigate({

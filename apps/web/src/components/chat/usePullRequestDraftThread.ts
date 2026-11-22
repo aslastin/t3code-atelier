@@ -20,6 +20,7 @@ import {
   DraftId,
 } from "../../composerDraftStore";
 import { openPullRequestThreadDialog } from "./ChatOverlayHosts";
+import { isDraftSlotOf } from "../../lib/draftSlots";
 interface PullRequestDraftThreadInput {
   readonly routeKind: "server" | "draft";
   readonly draftId: DraftId | null;
@@ -75,10 +76,17 @@ export function usePullRequestDraftThread(input: PullRequestDraftThreadInput) {
       throw new Error(m(msg("No active project is available for this pull request.")));
     }
     const activeProjectRef = scopeProjectRef(activeProject.environmentId, activeProject.id);
-    const logicalProjectKey = deriveLogicalProjectKeyFromSettings(
+    const projectDraftKey = deriveLogicalProjectKeyFromSettings(
       activeProject,
       projectGroupingSettings,
     );
+    // Atelier fork: a draft in one of the project's slots, such as a topic's, stays in it.
+    const routeDraftKey =
+      routeKind === "draft" && draftId ? getDraftSession(draftId)?.logicalProjectKey : undefined;
+    const logicalProjectKey =
+      routeDraftKey !== undefined && isDraftSlotOf(routeDraftKey, projectDraftKey)
+        ? routeDraftKey
+        : projectDraftKey;
     const storedDraftSession = getDraftSessionByLogicalProjectKey(logicalProjectKey);
     if (storedDraftSession) {
       setDraftThreadContext(storedDraftSession.draftId, input);
