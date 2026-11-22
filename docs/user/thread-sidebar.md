@@ -179,6 +179,8 @@ undone. A topic with no active threads is hidden; its pinned, snoozed, and settl
 it and bring it back when they return. Agents can also start threads in a topic or move them into
 one. Topics need a server that supports them. The ungrouped sidebar has no topic headers; its
 thread cards name the topic after the project instead, and hovering a card shows the full name.
+The chat header shows the open thread's topic between its project and title; click it to start
+another thread in that topic.
 
 To show only some topics, pick a project in the thread filter: its topics with active threads
 appear under it, with **No topic** for its other threads. Pick topics there, or search the filter
