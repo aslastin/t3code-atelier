@@ -25,7 +25,11 @@ import { draftTopicId, sharedTopicProject } from "../components/Sidebar.topics.l
 import { showThreadUndoNotice } from "../hooks/showThreadUndoNotice";
 import { m } from "../i18n/messages";
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { readThreadTopicIndexes, threadTopicEnvironment } from "../state/threadTopics";
+import {
+  readThreadTopicIndexes,
+  threadTopicEnvironment,
+  trackDraftTopicAssignment,
+} from "../state/threadTopics";
 
 // Atelier fork: topic changes from the sidebar and the composer.
 
@@ -154,9 +158,14 @@ export function assignDraftTopic(
     const topic = index.topicById.get(topicId);
     if (topic === undefined || topic.projectId !== draft.projectId) return;
   }
-  void mutateTopics(
+  void trackDraftTopicAssignment(
     threadRef.environmentId,
-    { type: "topic.assign", threadIds: [threadRef.threadId], topicId },
-    m(msg("Could not add the thread to its topic")),
+    threadRef.threadId,
+    topicId,
+    mutateTopics(
+      threadRef.environmentId,
+      { type: "topic.assign", threadIds: [threadRef.threadId], topicId },
+      m(msg("Could not add the thread to its topic")),
+    ),
   );
 }

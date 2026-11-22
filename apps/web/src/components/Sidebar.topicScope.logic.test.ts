@@ -9,6 +9,7 @@ import {
   pickSidebarScopeItem,
   resolveSidebarTopicScope,
   type SidebarScopeSelection,
+  sidebarTopicScopePending,
   toggleSidebarScopeItem,
   topicScopeKey,
 } from "./Sidebar.topicScope.logic";
@@ -283,5 +284,38 @@ describe("buildSidebarScopeMenuItems", () => {
   it("finds topics by name in every project while searching", () => {
     expect(build({ projectKeys: [], topicKeys: [] }, "sty")).toEqual(["  styles"]);
     expect(build({ projectKeys: [], topicKeys: [] }, "a")).toEqual(["app", "  payments", "legacy"]);
+  });
+});
+
+describe("sidebarTopicScopePending", () => {
+  const removedEnv = EnvironmentId.make("env-removed");
+  const pending = (
+    keys: readonly string[],
+    state: { connected?: EnvironmentId[]; configured?: EnvironmentId[]; loaded?: EnvironmentId[] },
+  ) => {
+    const configured = state.configured ?? [env, plainEnv];
+    return sidebarTopicScopePending({
+      unresolvedTopicKeys: keys,
+      groups,
+      connected: new Set(state.connected ?? [env, plainEnv]),
+      configured: new Set(configured),
+      served: new Set([env].filter((id) => configured.includes(id))),
+      answered: new Set(state.loaded ?? []),
+    });
+  };
+  const unknownTopic = topicScopeKey(env, ThreadTopicId.make("not-yet"));
+
+  it("waits for a connected key environment's config and first snapshot, not for others", () => {
+    expect(pending([unknownTopic], { configured: [plainEnv] })).toBe(true);
+    expect(pending([unknownTopic], {})).toBe(true);
+    expect(pending([unknownTopic], { loaded: [env] })).toBe(false);
+    expect(pending([noTopicScopeKey("app")], {})).toBe(true);
+    expect(pending([noTopicScopeKey("app")], { loaded: [env] })).toBe(false);
+  });
+
+  it("treats keys of disconnected or removed environments, or without topics, as stale", () => {
+    expect(pending([unknownTopic], { connected: [plainEnv] })).toBe(false);
+    expect(pending([topicScopeKey(removedEnv, ThreadTopicId.make("t"))], {})).toBe(false);
+    expect(pending([noTopicScopeKey("legacy")], { loaded: [env] })).toBe(false);
   });
 });

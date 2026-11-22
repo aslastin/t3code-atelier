@@ -398,3 +398,33 @@ export function describeSidebarScope(input: {
     );
   });
 }
+
+/**
+ * Whether a stored key that matches no topic may still be loading: its environment is connected
+ * but its config or first topic snapshot has not arrived. Keys of disconnected or removed
+ * environments, and of environments without topics, are simply stale.
+ */
+export function sidebarTopicScopePending(input: {
+  readonly unresolvedTopicKeys: readonly string[];
+  readonly groups: readonly ScopeGroup[];
+  readonly connected: ReadonlySet<EnvironmentId>;
+  readonly configured: ReadonlySet<EnvironmentId>;
+  /** Environments that serve topics, configured ones only. */
+  readonly served: ReadonlySet<EnvironmentId>;
+  /** Served environments whose topic subscription has answered. */
+  readonly answered: ReadonlySet<EnvironmentId>;
+}): boolean {
+  const loading = (environmentId: EnvironmentId) =>
+    input.connected.has(environmentId) &&
+    (!input.configured.has(environmentId) ||
+      (input.served.has(environmentId) && !input.answered.has(environmentId)));
+  return input.unresolvedTopicKeys.some((key) => {
+    if (key.startsWith("no-topic:")) {
+      const group = input.groups.find((candidate) => noTopicScopeKey(candidate.projectKey) === key);
+      return group?.memberProjectRefs.some((ref) => loading(ref.environmentId)) ?? false;
+    }
+    return [...input.connected].some(
+      (environmentId) => key.startsWith(`topic:${environmentId}:`) && loading(environmentId),
+    );
+  });
+}

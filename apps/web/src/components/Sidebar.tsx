@@ -959,6 +959,8 @@ function checkThreadOperations(
   return false;
 }
 
+const hideAllThreads = () => false;
+
 const SIDEBAR_DRAG_DISTANCE = 6;
 
 // dnd-kit's 20% edge zone at full speed runs the list away while the pointer rests near the bottom.
@@ -1477,7 +1479,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   } = useSidebarThreads({
     projectScopeKey,
     scopedProjectKeys,
-    matchesTopicScope: topicMatcher?.matchesThread ?? null,
+    // A stored topic still loading lists nothing yet, so a route reveal waits for the real scope.
+    matchesTopicScope: topicScopePending ? hideAllThreads : (topicMatcher?.matchesThread ?? null),
     topicNarrowedProjectKeys: topicMatcher?.narrowedRefKeys ?? null,
     serverConfigs,
     connectedEnvironmentIds,
