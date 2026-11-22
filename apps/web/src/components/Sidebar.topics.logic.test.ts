@@ -8,7 +8,14 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { arrangeFolderTopics, sharedTopicProject, sidebarTopicKey } from "./Sidebar.topics.logic";
+import {
+  arrangeFolderTopics,
+  planTopicReorder,
+  planTopicThreadDrop,
+  sharedTopicProject,
+  sidebarTopicKey,
+  sidebarTopicRowId,
+} from "./Sidebar.topics.logic";
 
 const env = EnvironmentId.make("env-1");
 const otherEnv = EnvironmentId.make("env-2");
@@ -102,5 +109,77 @@ describe("sharedTopicProject", () => {
     expect(sharedTopicProject([thread("a"), thread("b", otherProject)])).toBeNull();
     expect(sharedTopicProject([thread("a"), thread("b", project, otherEnv)])).toBeNull();
     expect(sharedTopicProject([])).toBeNull();
+  });
+});
+
+describe("planTopicThreadDrop", () => {
+  const indexes = new Map([[env, indexThreadTopics(snapshot)]]);
+  const folderRow = "folder:repo";
+  const folderProjects = (rowId: string) =>
+    rowId === folderRow ? [{ environmentId: env, projectId: project }] : null;
+  const laterRow = sidebarTopicRowId(sidebarTopicKey(env, "later"));
+  const plan = (threads: readonly Thread[], row: { rowId: string; parentId?: string } | null) =>
+    planTopicThreadDrop({
+      threads,
+      row: row && { rowId: row.rowId, parentId: row.parentId },
+      indexes,
+      folderProjects,
+    });
+
+  it("joins the topic under a header or a row inside the topic", () => {
+    expect(plan([thread("t2")], { rowId: laterRow, parentId: folderRow })).toEqual({
+      environmentId: env,
+      threadIds: ["t2"],
+      topicId: "later",
+      targetRowId: laterRow,
+    });
+    expect(plan([thread("t2"), thread("t4")], { rowId: "env-1:t1", parentId: laterRow })).toEqual(
+      expect.objectContaining({ topicId: "later", threadIds: ["t2", "t4"] }),
+    );
+    // Already there: nothing to do.
+    expect(plan([thread("t1")], { rowId: laterRow, parentId: folderRow })).toBeNull();
+  });
+
+  it("leaves the topic on the folder header or a row without a topic", () => {
+    expect(plan([thread("t1")], { rowId: folderRow })).toEqual(
+      expect.objectContaining({ topicId: null, targetRowId: folderRow }),
+    );
+    expect(plan([thread("t1")], { rowId: "env-1:t2", parentId: folderRow })).toEqual(
+      expect.objectContaining({ topicId: null }),
+    );
+    expect(plan([thread("t2")], { rowId: folderRow })).toBeNull();
+  });
+
+  it("never crosses projects or environments", () => {
+    expect(plan([thread("x", otherProject)], { rowId: laterRow })).toBeNull();
+    expect(plan([thread("x", project, otherEnv)], { rowId: laterRow })).toBeNull();
+    expect(plan([thread("t2"), thread("x", otherProject)], { rowId: laterRow })).toBeNull();
+    expect(plan([thread("t1", project)], { rowId: "folder:other" })).toBeNull();
+    expect(plan([thread("t1")], null)).toBeNull();
+  });
+});
+
+describe("planTopicReorder", () => {
+  const order = ["a", "b", "c", "d"].map((id) => ThreadTopicId.make(id));
+  const plan = (movedId: string, targetId: string, placeAfter: boolean) =>
+    planTopicReorder({
+      order,
+      movedId: ThreadTopicId.make(movedId),
+      targetId: ThreadTopicId.make(targetId),
+      placeAfter,
+    });
+
+  it("places the topic before or after its drop target", () => {
+    expect(plan("d", "a", false)).toEqual({ afterTopicId: null });
+    expect(plan("a", "c", true)).toEqual({ afterTopicId: "c" });
+    expect(plan("a", "c", false)).toEqual({ afterTopicId: "b" });
+    expect(plan("d", "b", true)).toEqual({ afterTopicId: "b" });
+  });
+
+  it("ignores drops that keep the order", () => {
+    expect(plan("b", "b", true)).toBeNull();
+    expect(plan("b", "a", true)).toBeNull();
+    expect(plan("b", "c", false)).toBeNull();
+    expect(plan("z", "a", false)).toBeNull();
   });
 });

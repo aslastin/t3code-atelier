@@ -278,6 +278,7 @@ import {
   sidebarFolderRowId,
 } from "./sidebar/SidebarProjectFolderHeader";
 import { SidebarTopicHeader } from "./sidebar/SidebarTopicHeader";
+import { useSidebarTopicDrag } from "./sidebar/useSidebarTopicDrag";
 import { clearDraftTopic } from "../lib/threadTopicActions";
 import {
   isTopicMenuId,
@@ -1773,6 +1774,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     };
   };
 
+  // Atelier fork: folder rows also drop onto topics, which move them in or out.
+  const topicDrag = useSidebarTopicDrag({
+    folders:
+      projectFolders === null || topicLayout.arrange === null
+        ? null
+        : projectFolders.map((folder) => ({
+            rowId: sidebarFolderRowId(folder.group.projectKey),
+            projectRefs: folder.group.memberProjectRefs,
+          })),
+  });
   // Folder rows only drag out to the composer; folders own their order, so nothing drops in the list.
   const isContextDrag =
     projectFolders !== null ||
@@ -1780,6 +1791,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     dragState?.activeSection === "working";
   const dragTargetSection = isContextDrag ? null : (dragState?.targetSection ?? null);
   const finishThreadDrag = (started: boolean) => {
+    topicDrag.clear();
     dragSensorRef.current = null;
     contextDragKeyRef.current = null;
     dragScrollRef.current = null;
@@ -1825,8 +1837,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     );
     if (!contextDrag) {
       endThreadContextDrag();
+      topicDrag.move(point, contextDragThreads());
       return false;
     }
+    topicDrag.clear();
     restoreDragScroll();
     const threads = contextDragThreads();
     const threadRef = parseScopedThreadKey(contextDragKeyRef.current ?? "");
@@ -1835,7 +1849,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     return true;
   };
   const dropThreadContextDrag = (point: { x: number; y: number }) => {
-    if (!pointerOutsideThreadList(point)) return false;
+    if (!pointerOutsideThreadList(point)) return topicDrag.drop(point, contextDragThreads());
     restoreDragScroll();
     dropThreadContext(point, contextDragThreads());
     return true;
@@ -3656,6 +3670,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                   onToggle={topicLayout.toggleTopic}
                                   onNewThread={topicActions.startThreadInTopic}
                                   onRename={topicActions.renameTopic}
+                                  onReorder={topicActions.reorderTopics}
                                   onContextMenu={topicActions.showTopicContextMenu}
                                 />,
                               );

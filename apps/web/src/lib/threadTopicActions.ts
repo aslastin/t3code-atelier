@@ -79,6 +79,18 @@ export function assignThreadsToTopic(
   );
 }
 
+export function reorderTopic(
+  environmentId: EnvironmentId,
+  topicId: ThreadTopicId,
+  afterTopicId: ThreadTopicId | null,
+) {
+  void mutateTopics(
+    environmentId,
+    { type: "topic.reorder", topicId, afterTopicId },
+    m(msg("Could not move topic")),
+  );
+}
+
 export async function disbandTopic(block: {
   readonly key: string;
   readonly environmentId: EnvironmentId;

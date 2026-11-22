@@ -23,6 +23,7 @@ import {
   assignThreadsToTopic,
   disbandTopic,
   mutateTopics,
+  reorderTopic,
   setDraftTopic,
 } from "../../lib/threadTopicActions";
 import { randomUUID } from "../../lib/utils";
@@ -33,6 +34,7 @@ import { resolveProjectExpanded, useUiStateStore } from "../../uiStateStore";
 import {
   type ArrangedFolderTopics,
   arrangeFolderTopics,
+  planTopicReorder,
   sharedTopicProject,
   sidebarTopicExpansionKey,
 } from "../Sidebar.topics.logic";
@@ -263,7 +265,22 @@ export function useSidebarTopicActions(input: {
     }
   };
 
+  const reorderTopics = useStableCallback(
+    (moved: SidebarTopicHeaderBlock, target: SidebarTopicHeaderBlock, placeAfter: boolean) => {
+      const topics = indexes.get(moved.environmentId)?.topicsByProjectId.get(moved.topic.projectId);
+      if (topics === undefined) return;
+      const planned = planTopicReorder({
+        order: topics.map((topic) => topic.id),
+        movedId: moved.topic.id,
+        targetId: target.topic.id,
+        placeAfter,
+      });
+      if (planned !== null) reorderTopic(moved.environmentId, moved.topic.id, planned.afterTopicId);
+    },
+  );
+
   return {
+    reorderTopics,
     startThreadInTopic,
     renameTopic,
     showTopicContextMenu,
