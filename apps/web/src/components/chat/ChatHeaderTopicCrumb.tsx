@@ -62,7 +62,7 @@ export function ChatHeaderTopicCrumb(props: {
             <HashIcon aria-hidden className="size-3.5 shrink-0" />
             <WorkspaceBreadcrumbText>{topic.title}</WorkspaceBreadcrumbText>
           </TooltipTrigger>
-          <TooltipPopup side="top">{label}</TooltipPopup>
+          <TooltipPopup side="top">{topic.title}</TooltipPopup>
         </Tooltip>
       </WorkspaceBreadcrumbItem>
       <WorkspaceBreadcrumbSeparator>
