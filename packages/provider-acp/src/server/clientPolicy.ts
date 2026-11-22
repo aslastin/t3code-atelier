@@ -1,11 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import type { RuntimeMode } from "@t3tools/contracts";
+import type { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 export interface AcpRuntimePolicy {
   readonly runtimeMode: RuntimeMode;
+  readonly interactionMode?: ProviderInteractionMode;
   readonly cwd: string | null;
   readonly approvalPolicy?: unknown;
   readonly sandboxPolicy?: unknown;
@@ -150,6 +151,7 @@ function acpOperationDisposition(
   if (isAcpReadKind(toolKind)) {
     return acpReadDisposition(runtimePolicy);
   }
+  if (runtimePolicy.interactionMode === "plan") return "deny";
   if (acpPolicyRequiresApproval(runtimePolicy)) {
     return "ask";
   }
@@ -205,7 +207,7 @@ export function acpMcpToolApprovalElicitationDisposition(
   runtimePolicy: AcpRuntimePolicy,
   request: EffectAcpSchema.CreateElicitationRequest,
   nativeRequestId?: string,
-): "ask" | "allow" | undefined {
+): AcpPermissionDisposition | undefined {
   if (
     request.mode !== "form" ||
     (unknownRecord(request._meta)?.codex_approval_kind !== "mcp_tool_call" &&
@@ -213,6 +215,7 @@ export function acpMcpToolApprovalElicitationDisposition(
   ) {
     return undefined;
   }
+  if (runtimePolicy.interactionMode === "plan") return "deny";
   // T3's authenticated MCP endpoint enforces scope; only explicit approval mode needs a user prompt.
   return acpPolicyRequiresApproval(runtimePolicy) ? "ask" : "allow";
 }

@@ -313,11 +313,14 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 />
               ) : null}
 
-              {density === "full" && !props.draftId && (visible.lineage || visible.sideChats) ? (
+              {density === "full" &&
+              !props.draftId &&
+              (visible.lineage || visible.planImplementations || visible.sideChats) ? (
                 <ThreadRelationshipsPanel
                   environmentId={props.environmentId}
                   threadId={props.threadId}
                   showLineage={visible.lineage}
+                  showImplementations={visible.planImplementations}
                   showSideChats={visible.sideChats}
                 />
               ) : null}

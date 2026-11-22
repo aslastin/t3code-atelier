@@ -2133,12 +2133,25 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           scopeId: CheckpointScopeId.make("scope:foundation-current-capture"),
         },
       };
+      const revoked = yield* eventSink.writeIfRunCurrent({
+        threadId,
+        runId,
+        activeAttemptId: attemptId,
+        expectedStatus: "starting",
+        expectedPlanContext: { ...thread, runtimeMode: "approval-required" },
+        events: [],
+        effects: [captureEffect],
+      });
+      assert.isFalse(revoked.committed);
+      assert.isTrue(revoked.planContextChanged);
+      assert.isTrue(Option.isNone(yield* outbox.get(captureEffect.id)));
       assert.isTrue(
         (yield* eventSink.writeIfRunCurrent({
           threadId,
           runId,
           activeAttemptId: attemptId,
           expectedStatus: "starting",
+          expectedPlanContext: thread,
           events: [],
           effects: [captureEffect],
         })).committed,

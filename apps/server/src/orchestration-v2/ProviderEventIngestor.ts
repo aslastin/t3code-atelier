@@ -602,6 +602,22 @@ export const layer: Layer.Layer<
                 plan.kind === "todo_list"
                   ? yield* projections.getPlan(plan.threadId, plan.id)
                   : undefined;
+              const stored =
+                plan.kind === "proposed_plan"
+                  ? yield* projections.getPlanIngestState(plan.threadId, plan.id)
+                  : undefined;
+              if (
+                stored?.status === "completed" ||
+                stored?.status === "superseded" ||
+                stored?.reopened
+              )
+                return [];
+              const replaced =
+                plan.kind === "proposed_plan" &&
+                plan.status === "active" &&
+                stored?.status !== "active"
+                  ? yield* projections.getLatestProposedPlan(plan.threadId, plan.id)
+                  : undefined;
               const payload =
                 plan.kind === "todo_list"
                   ? withPlanStepDurations(
@@ -611,6 +627,18 @@ export const layer: Layer.Layer<
                     )
                   : plan;
               return [
+                ...(replaced?.kind === "proposed_plan" && replaced.status === "active"
+                  ? [
+                      yield* makeDomainEvent(input, {
+                        type: "plan.updated",
+                        threadId: replaced.threadId,
+                        runId: replaced.runId,
+                        nodeId: replaced.nodeId,
+                        payload: { ...replaced, status: "superseded" },
+                        occurredAt,
+                      }),
+                    ]
+                  : []),
                 yield* makeDomainEvent(input, {
                   type: "plan.updated",
                   threadId: plan.threadId,

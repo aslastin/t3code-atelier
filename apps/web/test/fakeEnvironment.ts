@@ -17,6 +17,7 @@ import {
   RunId,
   RuntimeRequestId,
   ServerConfig,
+  type ServerConfigStreamEvent,
   type ThreadTopicMutation,
   type ThreadTopicsSnapshot,
   ThreadId,
@@ -69,7 +70,12 @@ const descriptor = {
   // A matching version, since a mismatch adds an update banner a typical user never sees.
   serverVersion: APP_VERSION,
   orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
-  capabilities: { repositoryIdentity: true, sideChats: true, freshContext: true },
+  capabilities: {
+    repositoryIdentity: true,
+    sideChats: true,
+    freshContext: true,
+    planImplementations: true,
+  },
 };
 const auth = {
   policy: "loopback-browser",
@@ -243,6 +249,8 @@ export interface FakeThread {
   readonly runs: ReadonlyArray<OrchestrationV2Run>;
   readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
   readonly runtimeRequests?: OrchestrationV2ThreadProjection["runtimeRequests"];
+  readonly plans?: OrchestrationV2ThreadProjection["plans"];
+  readonly interactionMode?: OrchestrationV2ThreadShell["interactionMode"];
 }
 
 /** A thread of `turns` user prompts, each answered in markdown with a list and inline code. */
@@ -325,7 +333,7 @@ function shellOf(thread: FakeThread): OrchestrationV2ThreadShell {
     providerInstanceId: modelSelection.instanceId,
     modelSelection,
     runtimeMode: "full-access",
-    interactionMode: "default",
+    interactionMode: thread.interactionMode ?? "default",
     branch: "main",
     worktreePath: null,
     activeProviderThreadId: thread.providerThreads?.[0]?.id ?? null,
@@ -403,7 +411,7 @@ function projectionOf(thread: FakeThread): OrchestrationV2ThreadProjection {
     providerTurns: [],
     runtimeRequests: [...(thread.runtimeRequests ?? [])],
     messages: [],
-    plans: [],
+    plans: thread.plans ?? [],
     turnItems: [...thread.items],
     checkpointScopes: [],
     checkpoints: [],
@@ -446,6 +454,21 @@ const subscribe = <A>(first: ReadonlyArray<A>, register?: (queue: Queue.Queue<A>
       return Stream.fromQueue(queue);
     }),
   );
+
+const configSubscribers = new Set<Queue.Queue<ServerConfigStreamEvent>>();
+const configSnapshot = (): ServerConfigStreamEvent => ({
+  version: 1,
+  type: "snapshot",
+  config: serverConfig(),
+});
+const subscribeServerConfig = () =>
+  subscribe([configSnapshot()], (queue) => {
+    configSubscribers.add(queue);
+    return () => configSubscribers.delete(queue);
+  });
+const publishConfig = () => {
+  for (const queue of configSubscribers) Queue.offerUnsafe(queue, configSnapshot());
+};
 
 const handlers: Record<string, (input: never) => unknown> = {
   // Recorded, and accepted only when the scenario asks, since a pending command holds every
@@ -547,8 +570,7 @@ const handlers: Record<string, (input: never) => unknown> = {
         if (vcsStatusSubscriber === queue) vcsStatusSubscriber = null;
       };
     }),
-  [WS_METHODS.subscribeServerConfig]: () =>
-    subscribe([{ version: 1 as const, type: "snapshot" as const, config: serverConfig() }]),
+  [WS_METHODS.subscribeServerConfig]: subscribeServerConfig,
 };
 
 // Unanswered calls stay pending, like a server that has not replied yet.
@@ -564,8 +586,7 @@ const client = new Proxy(handlers, {
 const session: EnvironmentConnectionLease["session"] = {
   client: client as unknown as WsRpcProtocolClient,
   initialConfig: Effect.sync(serverConfig),
-  subscribeServerConfig: () =>
-    subscribe([{ version: 1 as const, type: "snapshot" as const, config: serverConfig() }]),
+  subscribeServerConfig,
   ready: Effect.void,
   probe: Effect.void,
   inboundFrames: Effect.succeed(0),
@@ -625,6 +646,7 @@ export function installFakeEnvironment(
     },
     keybindings: options?.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS,
   };
+  publishConfig();
   dispatched = [];
   acceptCommands = options?.acceptCommands === true;
   projects = [
@@ -658,6 +680,7 @@ export function installFakeEnvironment(
       globalThis.fetch = realFetch;
       threads = [];
       baseServerConfig = makeServerConfig([CODEX_PROVIDER]);
+      publishConfig();
       dispatched = [];
       acceptCommands = false;
       projects = [project];

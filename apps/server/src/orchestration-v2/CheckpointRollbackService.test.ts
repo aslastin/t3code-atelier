@@ -871,6 +871,52 @@ const seedRollbackHistory = Effect.gen(function* () {
 it.layer(ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)))(
   "rollback history reads",
   (it) => {
+    it.effect.each([false, true])("reopens the reverted plan with a held Build turn: %s", (held) =>
+      Effect.gen(function* () {
+        const history = yield* seedRollbackHistory;
+        const sql = yield* SqlClient.SqlClient;
+        const { threadId, runId, nodeId } = history;
+        const plan = {
+          id: `reverted-implementation-plan-${held}`,
+          threadId,
+          runId: runId(2),
+          nodeId: nodeId(2),
+          kind: "proposed_plan",
+          status: "completed",
+          markdown: "# Final\n\nKeep every file.",
+          implementationThreadId: threadId,
+        };
+        yield* sql`INSERT INTO orchestration_v2_projection_plans (plan_id,thread_id,run_id,node_id,kind,status,payload_json)
+          VALUES (${plan.id},${threadId},${plan.runId},${plan.nodeId},'proposed_plan','completed',${JSON.stringify(plan)})`;
+        yield* sql`UPDATE orchestration_v2_projection_runs SET payload_json =
+          json_set(payload_json, '$.sourcePlanRef', json_object('threadId', ${threadId}, 'planId', ${plan.id})) WHERE run_id = ${runId(4)}`;
+        yield* history.rollback(5);
+        assert.equal((yield* history.store.getLatestProposedPlan(threadId))?.status, "completed");
+        if (held) {
+          yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'queued',
+            payload_json = json_set(payload_json, '$.status','queued', '$.queueHeld', json('true'))
+            WHERE run_id = ${runId(7)}`;
+        }
+        yield* history.rollback(2);
+        const reopened = yield* history.store.getLatestProposedPlan(threadId);
+        assert.equal(reopened?.status, "active");
+        assert.equal(reopened?.kind === "proposed_plan" && reopened.markdown, plan.markdown);
+        assert.notProperty(reopened!, "implementationThreadId");
+        assert.equal(
+          (yield* history.store.getThread(threadId)).interactionMode,
+          held ? "default" : "plan",
+        );
+        const { projection } = yield* history.store.getThreadSnapshotWindow(threadId, {
+          rowLimit: 1,
+        });
+        assert.deepInclude(
+          projection.plans.find((candidate) => candidate.id === plan.id)!,
+          { status: "active", markdown: plan.markdown },
+        );
+        yield* history.rollback(0);
+        assert.isUndefined(yield* history.store.getLatestProposedPlan(threadId));
+      }),
+    );
     it.effect("rolls back later terminal runs despite obsolete unrelated SQLite payloads", () =>
       Effect.gen(function* () {
         const history = yield* seedRollbackHistory;
@@ -895,7 +941,26 @@ it.layer(ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMe
           "Failure",
         );
 
+        for (const [ordinal, status] of [
+          [2, "superseded"],
+          [4, "active"],
+        ] as const) {
+          const plan = {
+            id: "plan-" + ordinal,
+            threadId,
+            runId: runId(ordinal),
+            nodeId: nodeId(ordinal),
+            kind: "proposed_plan",
+            status,
+            markdown: "# " + ordinal,
+          };
+          yield* sql`INSERT INTO orchestration_v2_projection_plans (plan_id, thread_id, run_id, node_id, kind, status, payload_json)
+            VALUES (${plan.id}, ${threadId}, ${plan.runId}, ${plan.nodeId}, 'proposed_plan', ${status}, ${JSON.stringify(plan)})`;
+        }
         yield* history.rollback(2);
+        const surviving = yield* history.store.getLatestProposedPlan(threadId);
+        assert.equal(surviving?.id, "plan-2");
+        assert.equal(surviving?.status, "active");
 
         assert.deepEqual(history.rollbackCounts, [4]);
         assert.deepEqual(history.restored, [checkpointId(2)]);

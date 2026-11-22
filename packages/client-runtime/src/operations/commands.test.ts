@@ -8,6 +8,7 @@ import {
   NodeId,
   ORCHESTRATION_V2_WS_METHODS,
   ProjectId,
+  PlanId,
   ProviderInstanceId,
   ProviderDriverKind,
   RunId,
@@ -259,6 +260,49 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(layerTestRandom)),
   );
 
+  it.effect("refuses to dispatch a plan to a host without plan implementation support", () =>
+    Effect.gen(function* () {
+      const launches: OrchestrationV2ThreadLaunchInput[] = [];
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [], launches });
+      for (const newThread of [false, true]) {
+        const result = yield* startThreadTurn({
+          threadId: v2ThreadId,
+          sourceProposedPlan: { threadId: v2ThreadId, planId: PlanId.make("plan") },
+          message: {
+            messageId: MessageId.make("implement"),
+            role: "user",
+            text: "Implement",
+            attachments: [],
+          },
+          runtimeMode: "auto",
+          interactionMode: "default",
+          ...(newThread
+            ? {
+                bootstrap: {
+                  createThread: {
+                    projectId: ProjectId.make("project"),
+                    title: "Implement",
+                    modelSelection: v2Projection.thread.modelSelection,
+                    runtimeMode: "auto",
+                    interactionMode: "default",
+                    branch: null,
+                    worktreePath: null,
+                  },
+                },
+              }
+            : {}),
+        }).pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.result,
+        );
+        expect(result._tag).toBe("Failure");
+      }
+      expect(commands).toHaveLength(0);
+      expect(launches).toHaveLength(0);
+    }).pipe(Effect.provide(layerTestRandom)),
+  );
+
   it.effect("preserves an existing worktree and branch during first-message launch", () =>
     Effect.gen(function* () {
       const launches: OrchestrationV2ThreadLaunchInput[] = [];
@@ -331,6 +375,7 @@ describe("V2 environment commands", () => {
 
         expect(commands.at(-1)).toMatchObject({
           type: "message.dispatch",
+          expectedInteractionMode: "default",
           dispatchMode: { type: expectedType },
           ...(mode === "queue" ? {} : { deliveryIntent: mode }),
         });

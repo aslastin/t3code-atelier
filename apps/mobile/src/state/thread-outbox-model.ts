@@ -9,7 +9,6 @@ import type { EnvironmentShellStatus } from "@t3tools/client-runtime/state/shell
 import type { ThreadFamilyRead } from "@t3tools/client-runtime/state/threads";
 import {
   CommandId,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
   EnvironmentId,
   IsoDateTime,
   MessageId,
@@ -117,16 +116,6 @@ export interface ThreadSettingsSnapshot {
   readonly interactionMode: ProviderInteractionModeType;
 }
 
-// Providers without a Build/Plan toggle always run in build mode.
-function resolveProviderInteractionMode(
-  provider: Pick<ServerProvider, "showInteractionModeToggle"> | undefined,
-  interactionMode: ProviderInteractionModeType,
-): ProviderInteractionModeType {
-  return provider?.showInteractionModeToggle === false
-    ? DEFAULT_PROVIDER_INTERACTION_MODE
-    : interactionMode;
-}
-
 export function resolveQueuedThreadSettings(
   message: QueuedThreadMessage,
   thread: ThreadSettingsSnapshot,
@@ -140,16 +129,13 @@ export function resolveQueuedThreadSettings(
     message.modelSelection ?? thread.modelSelection,
     providers,
   );
-  const provider = providers.find(
-    (candidate) => candidate.instanceId === modelSelection.instanceId,
-  );
   return {
     modelSelection,
     runtimeMode: message.runtimeMode ?? thread.runtimeMode,
-    interactionMode: resolveProviderInteractionMode(
-      provider,
-      message.interactionMode ?? thread.interactionMode,
-    ),
+    interactionMode:
+      thread.interactionMode === "plan"
+        ? "plan"
+        : (message.interactionMode ?? thread.interactionMode),
   };
 }
 

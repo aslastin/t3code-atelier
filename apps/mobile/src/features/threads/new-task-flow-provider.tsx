@@ -172,6 +172,7 @@ type NewTaskFlowContextValue = {
   readonly branchesLoading: boolean;
   readonly availableBranches: ReadonlyArray<VcsRef>;
   readonly currentCheckoutBranchName: string | null;
+  readonly interactionMode: "default" | "plan";
   readonly runtimeMode: RuntimeMode;
   readonly expandedProvider: string | null;
   readonly environments: ReadonlyArray<{
@@ -827,7 +828,7 @@ export function NewTaskFlowProvider(
         defaultRuntimeMode,
         managedPolicy,
       ),
-      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      interactionMode: draft.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
       creation: {
         projectId: selectedProject.id,
         projectTitle: selectedProject.title,
@@ -940,6 +941,7 @@ export function NewTaskFlowProvider(
     branchesLoading,
     availableBranches,
     currentCheckoutBranchName,
+    interactionMode: selectedProjectDraft.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
     runtimeMode,
     expandedProvider,
     environments,

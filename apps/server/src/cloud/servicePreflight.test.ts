@@ -98,6 +98,26 @@ it.layer(NodeServices.layer)("service preflight database", (it) => {
           .status,
       ).toBe("ready");
 
+      const legacyPath = path.join(path.dirname(databasePath), "atelier-preview.sqlite");
+      const legacy = new NodeSqlite.DatabaseSync(legacyPath);
+      legacy.exec(
+        "CREATE TABLE effect_sql_migrations (migration_id INTEGER PRIMARY KEY, name TEXT)",
+      );
+      const legacyRow = legacy.prepare("INSERT INTO effect_sql_migrations VALUES (?, ?)");
+      for (const [id, name] of migrationManifest.filter(([id]) => id <= 105))
+        legacyRow.run(id, name);
+      legacyRow.run(106, "ProposedPlanImplementations");
+      legacyRow.run(107, "RevertedPlanImplementations");
+      legacyRow.run(108, "ReplayRevertedPlans");
+      legacy.close();
+      expect(
+        runServicePreflight({
+          databasePath: legacyPath,
+          launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
+        }).status,
+      ).toBe("ready");
+      expect(databaseMigrationHead(legacyPath)).toBe(BUILD_MIGRATION_HEAD);
+
       const newerId = Math.max(...migrationManifest.map(([id]) => id)) + 1;
       insert.run(newerId, "FromNightly");
       db.close();

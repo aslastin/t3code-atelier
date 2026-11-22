@@ -96,6 +96,7 @@ export function composerCommandKeyHandler(input: {
     dispatchMode: ComposerDispatchMode,
     submissionIntent: ComposerSubmissionIntent,
   ) => void;
+  readonly togglePlanMode?: (() => void) | undefined;
   /** Predicted next prompt that Tab fills into an empty composer; Escape dismisses it. */
   readonly promptSuggestion: string | null;
   readonly dismissPromptSuggestion: () => void;
@@ -232,7 +233,19 @@ export function composerCommandKeyHandler(input: {
       prompt: promptRef.current,
     });
     if (key === "Tab" && event.shiftKey && submissionIntent === null) {
-      return applyListEdit(event, listOutdentForTab);
+      if (resolveActiveComposerTrigger().trigger !== null) return false;
+      if (applyListEdit(event, listOutdentForTab)) return true;
+      if (
+        !input.togglePlanMode ||
+        isLiteralPendingAnswer ||
+        event.isComposing ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey
+      )
+        return false;
+      input.togglePlanMode();
+      return true;
     }
     const { trigger } = resolveActiveComposerTrigger();
     const menuIsActive = !isLiteralPendingAnswer && trigger !== null;

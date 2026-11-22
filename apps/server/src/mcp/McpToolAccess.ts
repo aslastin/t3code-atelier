@@ -132,6 +132,16 @@ const refuseReadOnlyClient = McpInvocationContext.McpInvocationContext.pipe(
   ),
 );
 
+const requireBuildMode = (caller: Caller) =>
+  caller.scope.thread !== undefined && caller.limits.interactionMode === "plan"
+    ? Effect.fail(
+        new OrchestratorMcpFailure({
+          code: "capability_denied",
+          message: "Implement the plan before changing the environment.",
+        }),
+      )
+    : Effect.void;
+
 const writingCaller = refuseReadOnlyClient.pipe(
   Effect.andThen(loadCaller()),
   Effect.tap(assertLiveCaller),
@@ -140,6 +150,7 @@ const writingCaller = refuseReadOnlyClient.pipe(
 const orchestratingCaller = refuseReadOnlyClient.pipe(
   Effect.andThen(readCaller()),
   Effect.tap(assertLiveCaller),
+  Effect.tap(requireBuildMode),
 );
 
 const requireThreadCaller = McpInvocationContext.McpInvocationContext.pipe(
@@ -155,11 +166,15 @@ export const reads = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>)
 export const readsAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
   declare((params: P) => requireThreadCaller.pipe(Effect.flatMap(() => handle(params))), undefined);
 
-export const actsAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+export const actsAsCaller = <P, A, E, R>(
+  handle: (params: P) => Effect.Effect<A, E, R>,
+  options?: { readonly availableInPlan: true },
+) =>
   declare(
     (params: P) =>
       requireThreadCaller.pipe(
         Effect.andThen(writingCaller),
+        Effect.tap((caller) => (options?.availableInPlan ? Effect.void : requireBuildMode(caller))),
         Effect.flatMap(() => handle(params)),
       ),
     undefined,
@@ -195,10 +210,11 @@ export const writesWithCapability = <P, A, E, R>(handle: (params: P) => Effect.E
   declare(
     (params: P) =>
       writingCaller.pipe(
+        Effect.tap(requireBuildMode),
         Effect.tap((caller) => assertNotLinked(caller, "start work here that is not its link's")),
         Effect.flatMap(() => handle(params)),
       ),
-    () => writingCaller,
+    () => writingCaller.pipe(Effect.tap(requireBuildMode)),
   );
 
 export const writesThreads = <P, A, E, R>(
@@ -219,6 +235,7 @@ export const writesThreads = <P, A, E, R>(
             yield* assertSameLink(caller, target);
           }
         }
+        yield* requireBuildMode(caller);
         // Modes can rise after this check; the orchestrator rechecks under lock and records refusal before handlers wrap errors.
         const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
         return yield* handle(params).pipe(
@@ -232,7 +249,7 @@ export const writesThreads = <P, A, E, R>(
           ),
         );
       }),
-    () => writingCaller,
+    () => writingCaller.pipe(Effect.tap(requireBuildMode)),
   );
 
 const escalationDenied = (refusal: DispatchModeRefusal) =>
@@ -266,7 +283,7 @@ export const startsThreads = <P, A, E, R>(
 ) => {
   const started = Effect.fn("McpToolAccess.started")(function* (caller: Caller, params: P) {
     const requested = modes(params);
-    return {
+    const resolved = {
       runtimeMode: yield* resolveRuntimeMode(caller.limits.runtimeMode, requested.runtimeMode),
       interactionMode: yield* resolveInteractionMode(
         caller.limits.interactionMode,
@@ -274,6 +291,8 @@ export const startsThreads = <P, A, E, R>(
       ),
       linkOrigin: callerLinkOrigin(caller),
     } satisfies StartedModes;
+    yield* requireBuildMode(caller);
+    return resolved;
   });
   return declare(
     (params: P) =>

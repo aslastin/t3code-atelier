@@ -99,6 +99,65 @@ function setup() {
   };
 }
 
+it("collapses and reopens a short implementation history without an inner scrollbar", async () => {
+  setup();
+  const projection = makeThreadProjectionFixture();
+  state.projection = {
+    ...projection,
+    thread: { ...projection.thread, id: threadId },
+    runs: [
+      { ordinal: 1, sourcePlanRef: { threadId: "discussion", planId: "original-plan" } },
+      { ordinal: 2, sourcePlanRef: { threadId, planId: "local-plan" } },
+    ],
+    plans: ["first", "second", "third", "first", threadId].map((id) => ({
+      kind: "proposed_plan",
+      status: "completed",
+      implementationThreadId: id,
+    })),
+  };
+  state.relatedShells = [
+    { ...projection.thread, id: "discussion", title: "Original discussion" },
+    { ...projection.thread, id: "first", title: "Original approach" },
+    { ...projection.thread, id: "second", title: "Revised approach" },
+    { ...projection.thread, id: "third", title: "Final approach" },
+  ];
+  await using screen = await render(
+    <ThreadRelationshipsPanel
+      environmentId={environmentId}
+      threadId={threadId}
+      showLineage
+      showSideChats
+    />,
+    { router: "/environment/fork" },
+  );
+  const panel = screen.getByRole("region", { name: "Plan implementations" });
+  const discussion = screen.getByRole("region", { name: "Plan discussion" });
+  await discussion.getByRole("button", { name: /Original discussion/ }).click();
+  await vi.waitFor(() =>
+    expect(screen.router?.state.location.pathname).toBe("/environment/discussion"),
+  );
+  await expect.element(panel.getByRole("button", { name: /Revised approach/ })).toBeVisible();
+  const list = panel.getByRole("list");
+  expect(list.getByRole("button").elements()).toHaveLength(3);
+  expect(list.element().scrollHeight).toBe(list.element().clientHeight);
+  const header = panel.getByRole("button", { name: /Plan implementations/ });
+  await header.click();
+  await expect.element(header).toHaveAttribute("aria-expanded", "false");
+  await expect.element(list).not.toBeInTheDocument();
+  await header.click();
+  await expect.element(header).toHaveAttribute("aria-expanded", "true");
+  for (const [title, id] of [
+    [/Original approach/, "first"],
+    [/Revised approach/, "second"],
+    [/Final approach/, "third"],
+  ] as const) {
+    await panel.getByRole("button", { name: title }).click();
+    await vi.waitFor(() =>
+      expect(screen.router?.state.location.pathname).toBe(`/environment/${id}`),
+    );
+  }
+});
+
 it.each([
   ["merge", "Could not merge back"],
   ["disconnect", "Could not disconnect agent session"],

@@ -307,6 +307,19 @@ export const ServerProvider = Schema.Struct({
 });
 export type ServerProvider = typeof ServerProvider.Type;
 
+export function supportsPlanMode(
+  provider: ServerProvider | null | undefined,
+  existingPlan = false,
+) {
+  return (
+    provider != null &&
+    (provider.showInteractionModeToggle === true ||
+      (existingPlan && provider.driver === "acpRegistry")) &&
+    provider.compatibilityAdvisory?.status !== "unsupported" &&
+    provider.compatibilityAdvisory?.status !== "broken"
+  );
+}
+
 /** A provider without the lists that equal the ones its reader already holds. */
 export const ServerProviderDelta = ServerProvider.mapFields((fields) => ({
   ...fields,

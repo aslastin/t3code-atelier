@@ -21,6 +21,8 @@ import {
   EnvironmentId,
   GitCommandError,
   MessageId,
+  userMessageTurnItemId,
+  PlanId,
   RunId,
   ProjectId,
   ProviderDriverKind,
@@ -382,6 +384,243 @@ function launchInput(input: {
     creationSource: "web" as const,
   };
 }
+
+it.effect.each(["thread.archive", "thread.delete"] as const)(
+  "refuses a new plan launch after %s of the source",
+  (type) =>
+    Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const sql = yield* SqlClient.SqlClient;
+      const { threadId } = yield* launches.launch(
+        launchInput({ command: "create-source", thread: "source" }),
+      );
+      const planId = PlanId.make("closed-source-plan");
+      yield* sql`INSERT INTO orchestration_v2_projection_plans (plan_id,thread_id,node_id,kind,status,payload_json)
+      VALUES (${planId}, ${threadId}, 'node','proposed_plan','active', ${JSON.stringify({ id: planId, threadId, nodeId: "node", runId: null, kind: "proposed_plan", status: "active", markdown: "# Latest" })})`;
+      yield* threads.dispatch({ type, threadId, commandId: CommandId.make("close-source") });
+      const result = yield* launches
+        .launch({
+          ...launchInput({ command: "implement-closed", thread: "destination" }),
+          initialMessage: {
+            text: "PLEASE IMPLEMENT THIS PLAN:\n# Latest",
+            attachments: [],
+            sourcePlanRef: { threadId, planId },
+          },
+        })
+        .pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      assert.deepEqual(
+        yield* sql`SELECT thread_id FROM orchestration_v2_projection_threads WHERE thread_id = 'destination'`,
+        [],
+      );
+    }).pipe(Effect.provide(makeHarness().layer)),
+);
+
+it.effect.each([
+  { type: "root", branch: null, worktreePath: null },
+  { type: "existing", branch: "t3/deadbeef", worktreePath: "/existing-checkout" },
+] as const)("keeps the source $type checkout through plan launch preparation", (checkout) => {
+  let currentBranch: string | null = "switched";
+  const harness = makeHarness({ git: { currentBranch: () => Effect.succeed(currentBranch) } });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const sql = yield* SqlClient.SqlClient;
+    const source = ThreadId.make("plan-source");
+    const template = launchInput({ command: "launch-plan", thread: "plan-destination" });
+    yield* threads.dispatch({
+      type: "thread.create",
+      threadId: source,
+      commandId: CommandId.make("source"),
+      projectId: template.projectId,
+      title: "Plan",
+      modelSelection: template.modelSelection,
+      interactionMode: "plan",
+      runtimeMode: template.runtimeMode,
+      branch: checkout.branch,
+      worktreePath: checkout.worktreePath,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const planId = PlanId.make("plan");
+    yield* sql`INSERT INTO orchestration_v2_projection_plans (plan_id,thread_id,node_id,kind,status,payload_json)
+      VALUES (${planId},${source},'node','proposed_plan','active',${JSON.stringify({ id: planId, threadId: source, runId: null, nodeId: "node", kind: "proposed_plan", status: "active", markdown: "# Latest" })})`;
+    const input = {
+      ...template,
+      workspaceStrategy:
+        checkout.type === "root"
+          ? { type: "root" }
+          : {
+              type: "existing_worktree",
+              branch: checkout.branch,
+              worktreePath: checkout.worktreePath,
+            },
+      initialMessage: {
+        text: "PLEASE IMPLEMENT THIS PLAN:\n# Latest",
+        attachments: [],
+        sourcePlanRef: {
+          threadId: source,
+          planId,
+          expectedSource: {
+            projectId: template.projectId,
+            runtimeMode: template.runtimeMode,
+            branch: checkout.branch,
+            worktreePath: checkout.worktreePath,
+          },
+        },
+      },
+    } satisfies ThreadLaunch.ThreadLaunchInput;
+    if (checkout.branch !== null) {
+      const stale = yield* Effect.result(launches.launch(input));
+      assert.equal(stale._tag, "Failure");
+      assert.isNull(yield* threads.getThreadShell(template.threadId));
+    }
+    currentBranch = checkout.branch;
+    const launched = yield* launches.launch(input);
+    const { thread, runs } = yield* preparationSettled(launched.threadId);
+    assert.equal(thread.branch, checkout.branch);
+    assert.equal(thread.worktreePath, checkout.worktreePath);
+    assert.equal(runs[0]?.status, "starting");
+    assert.equal(harness.renameBranch.mock.calls.length, 0);
+    assert.equal(harness.runSetup.mock.calls.length, 0);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect(
+  "recovers the original plan launch after a lost reply and unlinks a deleted destination",
+  () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const sql = yield* SqlClient.SqlClient;
+      const source = yield* launches.launch(
+        launchInput({ command: "plan-source", thread: "source" }),
+      );
+      const planId = PlanId.make("plan-to-retry");
+      const plan = {
+        id: planId,
+        threadId: source.threadId,
+        runId: null,
+        nodeId: "plan-node",
+        kind: "proposed_plan",
+        status: "active",
+        markdown: "# Latest",
+      };
+      yield* sql`INSERT INTO orchestration_v2_projection_plans (plan_id,thread_id,node_id,kind,status,payload_json)
+      VALUES (${planId}, ${source.threadId}, 'plan-node', 'proposed_plan', 'active', ${JSON.stringify(plan)})`;
+      const input = {
+        ...launchInput({ command: "plan-first", thread: "plan-destination" }),
+        createdBy: "user" as const,
+        initialMessage: {
+          text: "PLEASE IMPLEMENT THIS PLAN:\n# Latest",
+          messageId: MessageId.make("plan-message"),
+          attachments: [],
+          sourcePlanRef: { threadId: source.threadId, planId },
+        },
+      };
+      const wrongCheckout = yield* Effect.result(
+        launches.launch({
+          ...input,
+          commandId: CommandId.make("stale-checkout"),
+          threadId: ThreadId.make("stale-destination"),
+          workspaceStrategy: { type: "existing_worktree", worktreePath: "/other-checkout" },
+        }),
+      );
+      assert.isTrue(wrongCheckout._tag === "Failure");
+      // The claim committed but the launch reply failed before preparation was scheduled.
+      const first = { threadId: input.threadId };
+      yield* threads.dispatch({
+        type: "thread.create",
+        ...input,
+        branch: null,
+        worktreePath: null,
+        initialMessage: { ...input.initialMessage, workspaceStrategy: input.workspaceStrategy },
+      });
+      const messageId = input.initialMessage.messageId;
+      const receipt = yield* threads.getTurnItem({
+        threadId: first.threadId,
+        itemId: userMessageTurnItemId(messageId),
+        messageId,
+      });
+      assert.isTrue(receipt.item !== null || receipt.messageRecorded === true);
+      const recovered = yield* launches.launch({
+        ...input,
+        commandId: CommandId.make("recover-preparation"),
+      });
+      assert.isTrue(recovered.resumed);
+      const preparing = (yield* preparationSettled(first.threadId)).runs[0]!;
+      assert.equal(preparing.status, "starting");
+      yield* sql`UPDATE orchestration_v2_projection_runs SET payload_json = json_set(payload_json, '$.userMessageId', 'steered-message') WHERE run_id = ${preparing.id}`;
+      const draft = { ...plan, id: "unfinished-plan", status: "draft", markdown: "Partial" };
+      yield* sql`INSERT INTO orchestration_v2_projection_plans (plan_id,thread_id,node_id,kind,status,payload_json)
+        VALUES (${draft.id}, ${source.threadId}, 'draft-node', 'proposed_plan', 'draft', ${JSON.stringify(draft)})`;
+      const snapshot = yield* threads.getThreadSnapshotWindow(source.threadId, { rowLimit: 1 });
+      assert.deepInclude(snapshot.projection.plans[0], { implementationThreadId: first.threadId });
+      const again = yield* launches.launch({ ...input, commandId: CommandId.make("plan-retry") });
+      assert.equal(again.threadId, first.threadId);
+      assert.isTrue(again.resumed);
+      assert.lengthOf(again.projection.runs, 1);
+      // Older clients could send a plan to an existing thread with previous turns.
+      const original = again.projection.runs[0]!;
+      yield* sql`UPDATE orchestration_v2_projection_runs SET run_id = 'legacy-second', ordinal = 2,
+        payload_json = json_set(payload_json, '$.id', 'legacy-second', '$.ordinal', 2) WHERE run_id = ${original.id}`;
+      yield* threads.dispatch({
+        type: "thread.archive",
+        threadId: first.threadId,
+        commandId: CommandId.make("archive-plan-destination"),
+      });
+      const archived = yield* threads.getThreadProjection(source.threadId);
+      assert.notProperty(archived.plans[0], "implementationThreadId");
+      yield* threads.dispatch({
+        type: "thread.unarchive",
+        threadId: first.threadId,
+        commandId: CommandId.make("restore-plan-destination"),
+      });
+      const restored = yield* threads.getThreadProjection(source.threadId);
+      assert.deepInclude(restored.plans[0], { implementationThreadId: first.threadId });
+
+      const revision = { ...plan, id: PlanId.make("revised-plan"), markdown: "# Revised" };
+      yield* sql`INSERT INTO orchestration_v2_projection_plans (plan_id,thread_id,node_id,kind,status,payload_json)
+        VALUES (${revision.id}, ${source.threadId}, 'plan-node', 'proposed_plan', 'active', ${JSON.stringify(revision)})`;
+      const second = yield* launches.launch({
+        ...input,
+        commandId: CommandId.make("implement-revision"),
+        threadId: ThreadId.make("second-destination"),
+        initialMessage: {
+          ...input.initialMessage,
+          messageId: MessageId.make("revision-message"),
+          text: "PLEASE IMPLEMENT THIS PLAN:\n# Revised",
+          sourcePlanRef: { threadId: source.threadId, planId: revision.id },
+        },
+      });
+      const history = yield* threads.getThreadSnapshotWindow(source.threadId, { rowLimit: 1 });
+      assert.deepInclude(
+        history.projection.plans.find((p) => p.id === planId),
+        {
+          markdown: "",
+          detailInTurnItem: true,
+        },
+      );
+      assert.sameMembers(
+        history.projection.plans.flatMap((p) =>
+          p.kind === "proposed_plan" && p.implementationThreadId ? [p.implementationThreadId] : [],
+        ),
+        [first.threadId, second.threadId],
+      );
+
+      yield* threads.dispatch({
+        type: "thread.delete",
+        threadId: first.threadId,
+        commandId: CommandId.make("delete-plan-destination"),
+      });
+      const { plans } = yield* threads.getThreadProjection(source.threadId);
+      assert.deepInclude(plans[0], { status: "completed" });
+      assert.notProperty(plans[0], "implementationThreadId");
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
 
 it.effect.each(
   (["new", "existing"] as const).flatMap((target) =>

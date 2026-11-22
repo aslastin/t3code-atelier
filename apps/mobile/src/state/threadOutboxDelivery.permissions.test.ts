@@ -25,6 +25,7 @@ const state = vi.hoisted(() => ({
   metadata: vi.fn(),
   runtime: vi.fn(),
   interaction: vi.fn(),
+  deliveredItem: null as { type: string; messageId: string } | null,
   prepare: vi.fn(),
   checkout: vi.fn(),
   // Delivery runs commands as Effects; tests steer them with the settled results the mocks return.
@@ -103,6 +104,9 @@ vi.mock("./threads", async () => {
   return {
     threadEnvironment: {
       startTurn: state.command(Effect, state.start),
+      readTurnItem: state.command(Effect, () =>
+        AsyncResult.success({ item: null, messageRecorded: state.deliveredItem !== null }),
+      ),
       updateMetadata: state.command(Effect, state.metadata),
       setRuntimeMode: state.command(Effect, state.runtime),
       setInteractionMode: state.command(Effect, state.interaction),
@@ -175,7 +179,7 @@ vi.mock("./use-composer-drafts", async () => {
     setFreshSessionPending: vi.fn(),
     undoComposerDraftMerge: vi.fn(),
     updateComposerDraftSettings: vi.fn(),
-    waitForComposerDraftsLoaded: vi.fn(),
+    waitForComposerDraftsLoaded: vi.fn(async () => {}),
   };
 });
 
@@ -232,6 +236,7 @@ function startDelivery(): void {
 beforeEach(() => {
   setOperateGrant("primary", true);
   setOperateGrant("secondary", false);
+  state.deliveredItem = null;
   state.draftText = "Keep this draft separate";
   state.config.shellThreadFamilies = false;
   state.modelUnavailable.mockReset().mockReturnValue(false);
@@ -411,12 +416,32 @@ describe("queued task operation access", () => {
     expect(remaining()).toEqual([]);
   });
 
+  it.each([
+    ["plan", "default"],
+    ["default", "plan"],
+  ] as const)(
+    "returns queued %s feedback to the draft when the thread is now in %s",
+    async (queuedMode, liveMode) => {
+      setOperateGrant("secondary", true);
+      appAtomRegistry.set(state.threadShells, [{ ...state.thread, interactionMode: liveMode }]);
+      await state.manager.enqueue(
+        message({ interactionMode: queuedMode, runtimeMode: "approval-required" }),
+      );
+      await runDrain();
+      expect(state.runtime).not.toHaveBeenCalled();
+      expect(state.interaction).not.toHaveBeenCalled();
+      expect(state.start).not.toHaveBeenCalled();
+      expect(remaining()).toEqual([]);
+      expect(state.draftText).toBe("Keep this draft separate\nKeep this queued");
+    },
+  );
+
   it("stops the remaining settings and turn commands when an earlier update loses access", async () => {
     setOperateGrant("secondary", true);
     const queued = message({
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "different-model" },
       runtimeMode: "approval-required",
-      interactionMode: "plan",
+      interactionMode: "default",
     });
     await state.manager.enqueue(queued);
     state.runtime.mockImplementationOnce(async () => {
@@ -562,6 +587,24 @@ describe("queued task whose launch reply is lost", () => {
     appAtomRegistry.set(state.threadShells, [state.thread, { ...state.thread, id: "new-thread" }]);
   }
 
+  it("recognizes accepted feedback after a lost reply and a mode change", async () => {
+    const queued = message({ interactionMode: "default" });
+    setOperateGrant("secondary", true);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    state.cleanups.push(() => vi.useRealTimers());
+    await state.manager.enqueue(queued);
+    state.start.mockResolvedValueOnce(
+      AsyncResult.failure(Cause.fail(new Error("Socket is not connected"))),
+    );
+    await runDrain();
+    expect(remaining()).toEqual([queued]);
+    state.deliveredItem = { type: "user_message", messageId: queued.messageId };
+    appAtomRegistry.set(state.threadShells, [{ ...state.thread, interactionMode: "plan" }]);
+    await fireRetry();
+    expect(state.start).toHaveBeenCalledOnce();
+    expect(remaining()).toEqual([]);
+    expect(state.draftText).toBe("Keep this draft separate");
+  });
   async function fireRetry(): Promise<void> {
     const settled = Promise.withResolvers<void>();
     const release = appAtomRegistry.subscribe(dispatchingQueuedMessageIdsAtom, (ids) => {

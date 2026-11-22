@@ -7,7 +7,7 @@ import * as DateTime from "effect/DateTime";
 
 import type { ThreadStructure } from "./models.ts";
 
-export type ThreadRelationshipKind = "parent" | "fork" | "subagent" | "transfer";
+export type ThreadRelationshipKind = "parent" | "fork" | "subagent" | "transfer" | "implementation";
 
 export interface ThreadRelationshipNode {
   readonly threadId: ThreadId;
@@ -45,6 +45,34 @@ export function resolveMergeBackTargetThreadId(
 
 function edgeKey(edge: ThreadRelationshipEdge): string {
   return `${edge.sourceThreadId}\u001f${edge.targetThreadId}\u001f${edge.kind}`;
+}
+
+export function planImplementationThreadIds(
+  projection: Pick<ThreadStructure, "thread" | "plans"> | null,
+): ThreadId[] {
+  const ids = new Set<ThreadId>();
+  if (!projection) return [];
+  for (const plan of projection.plans ?? []) {
+    if (
+      plan.kind === "proposed_plan" &&
+      plan.implementationThreadId &&
+      plan.implementationThreadId !== projection.thread.id
+    ) {
+      ids.add(plan.implementationThreadId);
+    }
+  }
+  return [...ids];
+}
+
+export function planDiscussionThreadIds(
+  projection: Pick<ThreadStructure, "thread" | "runs"> | null,
+): ThreadId[] {
+  const sources = new Set<ThreadId>();
+  for (const run of projection?.runs ?? []) {
+    const source = run.sourcePlanRef?.threadId;
+    if (source && source !== projection?.thread.id) sources.add(source);
+  }
+  return [...sources];
 }
 
 export function deriveThreadRelationshipGraph(input: {
@@ -102,6 +130,15 @@ export function deriveThreadRelationshipGraph(input: {
 
   if (input.projection !== null) {
     const ownerThreadId = input.projection.thread.id;
+    for (const discussion of planDiscussionThreadIds(input.projection)) {
+      const target = threadsById.get(ownerThreadId);
+      addEdge({
+        sourceThreadId: discussion,
+        targetThreadId: ownerThreadId,
+        kind: "implementation",
+        status: target?.activityRunStatus ?? target?.status ?? null,
+      });
+    }
     for (const subagent of input.projection.subagents) {
       if (subagent.childThreadId === null) continue;
       const child = threadsById.get(subagent.childThreadId);
@@ -114,6 +151,15 @@ export function deriveThreadRelationshipGraph(input: {
           (child?.latestRunId != null && !isOrchestrationV2WorkActive(subagent.status)
             ? child.status
             : subagent.status),
+      });
+    }
+    for (const threadId of planImplementationThreadIds(input.projection)) {
+      const target = threadsById.get(threadId);
+      addEdge({
+        sourceThreadId: ownerThreadId,
+        targetThreadId: threadId,
+        kind: "implementation",
+        status: target?.activityRunStatus ?? target?.status ?? null,
       });
     }
     for (const transfer of input.projection.contextTransfers) {
@@ -144,8 +190,12 @@ export function immediateThreadRelationships(
         : edge.targetThreadId === threadId
           ? edge.sourceThreadId
           : null;
-    if (relatedId === null || visited.has(relatedId)) continue;
-    visited.add(relatedId);
+    if (relatedId === null) continue;
+    // An existing fork can also implement a plan. Both sections link to it.
+    if (edge.kind !== "implementation") {
+      if (visited.has(relatedId)) continue;
+      visited.add(relatedId);
+    }
     rows.push({ threadId: relatedId, fromThreadId: threadId, depth: 1, edge });
   }
 

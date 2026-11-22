@@ -306,7 +306,7 @@ export interface ProviderOrchestratorReplayVariant {
 
 export interface OrchestratorReplayFixture {
   readonly name: string;
-  readonly buildInput: () => OrchestratorFixtureInput;
+  readonly buildInput: (driver?: ProviderDriverKind) => OrchestratorFixtureInput;
   readonly providers: ReadonlyArray<ProviderOrchestratorReplayVariant>;
 }
 

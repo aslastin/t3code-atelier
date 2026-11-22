@@ -51,6 +51,8 @@ import {
   ChevronDownIcon,
   CornerLeftUpIcon,
   GitForkIcon,
+  ListChecksIcon,
+  type LucideIcon,
   MessagesSquareIcon,
   MoreHorizontalIcon,
   PlusIcon,
@@ -87,6 +89,8 @@ import { useEnvironmentQuery } from "../../state/query";
 import { AgentElapsed } from "./AgentElapsed";
 import { ThreadRelationshipIcon, threadRelationshipStatusLabel } from "./ThreadRelationshipIcon";
 import { ThreadLineageWorkflowRow } from "./ThreadLineageWorkflowRow";
+import { formatFullTimestamp } from "../../timestampFormat";
+import { useClientSettings } from "../../hooks/useSettings";
 import { useSideThreadTrigger } from "../../hooks/useSideThreadTrigger";
 import { openSideThread, resolveThreadOpenRoute } from "../../lib/sideChatPane";
 
@@ -161,12 +165,14 @@ const isFinishedAgentStatus = (status: string | null | undefined) =>
 
 function ThreadLineageGroup<Row extends LineageRow>(props: {
   readonly label: string | null;
+  readonly icon?: LucideIcon;
   readonly rows: ReadonlyArray<Row>;
   readonly expanded: boolean;
   readonly children: (rows: ReadonlyArray<Row>) => ReactNode;
 }) {
   const [expanded, setExpanded] = useState(props.expanded);
   const [visibleCount, setVisibleCount] = useState(THREAD_LINEAGE_INITIAL_COUNT);
+  const Icon = props.icon ?? BotIcon;
   const { visibleRows, hiddenCount } = resolveThreadLineageWindow(props.rows, visibleCount);
   const failedCount = props.rows.filter((row) => {
     const status = lineageRowStatus(row);
@@ -177,7 +183,7 @@ function ThreadLineageGroup<Row extends LineageRow>(props: {
     <div>
       {props.label ? (
         <ThreadDetailsControl aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
-          <BotIcon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
+          <Icon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
           <span className={cn(THREAD_DETAILS_PANEL_LABEL_CLASS, "min-w-0 flex-1 truncate")}>
             {props.label}
           </span>
@@ -222,6 +228,11 @@ function relationshipHint(
   resolve: MessageResolver,
 ) {
   if (sideChat) return resolve(msg("Open side chat"));
+  if (edge.kind === "implementation") {
+    return edge.targetThreadId === currentThreadId
+      ? resolve(msg("Open plan discussion"))
+      : resolve(msg("Open implementation thread"));
+  }
   if (edge.kind === "transfer") return resolve(msg("Open context transfer in this chat"));
   if (edge.kind === "subagent") {
     return edge.sourceThreadId === currentThreadId
@@ -466,6 +477,7 @@ export function ThreadRelationshipsPanel(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly showLineage: boolean;
+  readonly showImplementations?: boolean;
   readonly showSideChats: boolean;
 }) {
   const gt = useGT();
@@ -475,6 +487,7 @@ export function ThreadRelationshipsPanel(props: {
   const providersByEnvironment = useEnvironmentProviders();
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
   const relationshipShells = useThreadRelationshipShells(ref);
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const hiddenKeys = useHiddenThreadKeys();
   const hidingAnywhere = useAnyEnvironmentHiding();
   const allProjects = useProjects();
@@ -618,8 +631,11 @@ export function ThreadRelationshipsPanel(props: {
     active = [],
     previous = [],
     sideChats = [],
+    implementations = [],
+    planDiscussion = [],
   } = groupBy(visibleRelationships, ({ threadId, edge }) => {
     const isParent = isParentThreadRelationship(edge, props.threadId);
+    if (edge.kind === "implementation") return isParent ? "planDiscussion" : "implementations";
     if (!isParent && graph.nodes.get(threadId)?.thread?.lineage.sideChat === true)
       return "sideChats";
     if (edge.kind !== "subagent" || isParent) return "related";
@@ -668,7 +684,9 @@ export function ThreadRelationshipsPanel(props: {
   const sideChatsVisible = props.showSideChats && sideChats.length > 0;
   const runningSideChats = sideChats.filter(({ edge }) => edge.status === "running").length;
 
-  if (!lineageVisible && !sideChatsVisible) {
+  const implementationsVisible = props.showImplementations !== false && implementations.length > 0;
+  const planDiscussionVisible = props.showImplementations !== false && planDiscussion.length > 0;
+  if (!lineageVisible && !sideChatsVisible && !implementationsVisible && !planDiscussionVisible) {
     return null;
   }
 
@@ -792,11 +810,13 @@ export function ThreadRelationshipsPanel(props: {
         : undefined) ?? threadRelationshipRowStatus(graph, { threadId, edge });
     const RelationshipIcon = isParent
       ? CornerLeftUpIcon
-      : isSubagent
-        ? BotIcon
-        : node?.thread?.lineage.sideChat === true
-          ? MessagesSquareIcon
-          : GitForkIcon;
+      : edge.kind === "implementation"
+        ? ListChecksIcon
+        : isSubagent
+          ? BotIcon
+          : node?.thread?.lineage.sideChat === true
+            ? MessagesSquareIcon
+            : GitForkIcon;
 
     const projectedAgent = isSubagent && !isParent ? subagentsByThreadId.get(threadId) : undefined;
     const workflowGroup =
@@ -869,6 +889,10 @@ export function ThreadRelationshipsPanel(props: {
     ) : (
       <LineageTooltipContent title={threadTitle} hint={hint} />
     );
+    const implementationDate =
+      edge.kind === "implementation" && !isParent && node?.thread?.createdAt
+        ? DateTime.formatIso(node.thread.createdAt)
+        : null;
     const relationshipContent = (
       <>
         <ThreadRelationshipIcon
@@ -882,6 +906,14 @@ export function ThreadRelationshipsPanel(props: {
           <span className="block truncate text-left text-sm font-medium leading-4 text-foreground/85">
             {threadTitle}
           </span>
+          {implementationDate ? (
+            <time
+              dateTime={implementationDate}
+              className="block truncate text-2xs font-normal text-muted-foreground"
+            >
+              {formatFullTimestamp(implementationDate, timestampFormat)}
+            </time>
+          ) : null}
         </span>
         {agent ? null : (
           <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
@@ -914,6 +946,7 @@ export function ThreadRelationshipsPanel(props: {
               size="sm"
               variant="ghost"
               part={workflowGroup ? "primary" : "row"}
+              multiline={implementationDate !== null}
               {...openProps}
             />
           }
@@ -944,7 +977,7 @@ export function ThreadRelationshipsPanel(props: {
       );
     }
     return (
-      <li key={threadId} className="group relative flex h-8 items-center rounded-lg">
+      <li key={threadId} className="group relative flex min-h-8 items-center rounded-lg">
         {isMergeTarget ? (
           <div className={THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS}>
             <Tooltip>
@@ -1112,6 +1145,33 @@ export function ThreadRelationshipsPanel(props: {
               }
             </ThreadLineageGroup>
           ))}
+        </ThreadDetailsSection>
+      ) : null}
+      {planDiscussionVisible ? (
+        <ThreadDetailsSection
+          data-thread-plan-implementations-panel
+          headingId="thread-details-plan-discussion-heading"
+          title={gt("Plan discussion")}
+        >
+          <ul className="m-0 list-none p-0">{planDiscussion.map(renderRelationshipRow)}</ul>
+        </ThreadDetailsSection>
+      ) : null}
+      {implementationsVisible ? (
+        <ThreadDetailsSection
+          data-thread-plan-implementations-panel
+          headingId="thread-details-plan-implementations-heading"
+          title={gt("Plan implementations")}
+          showHeading={false}
+        >
+          <ThreadLineageGroup
+            key={`${scopedThreadKey(ref)}:implementations`}
+            label={gt("Plan implementations")}
+            icon={ListChecksIcon}
+            rows={implementations}
+            expanded
+          >
+            {(visibleRows) => visibleRows.map(renderRelationshipRow)}
+          </ThreadLineageGroup>
         </ThreadDetailsSection>
       ) : null}
       {sideChatsVisible ? (

@@ -42,6 +42,8 @@ import type {
 import {
   EnvironmentRequestInvalidError,
   AuthOrchestrationOperateScope,
+  supportsPlanMode,
+  pendingInteractionModeRunStatuses,
   clampManagedRuntimeMode,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -250,6 +252,7 @@ import { BuildingIcon, PlayIcon, ReplyIcon } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import { assistantCitationLabel } from "@t3tools/shared/assistantCitations";
 import { assistantCitationNavigation } from "../../lib/assistantCitationNavigation";
+import type { ProposedPlan } from "@t3tools/client-runtime/operations";
 import { Button } from "../ui/button";
 import { useManagedPolicy } from "../../state/managedPolicy";
 import { hasProviderSetup } from "./ProviderStatusBanner";
@@ -412,6 +415,11 @@ export interface ChatComposerProps {
   respondingRequestIds: RuntimeRequestId[];
 
   runtimeMode: RuntimeMode;
+  interactionMode?: "default" | "plan";
+  onChangeInteractionMode?: (mode: "default" | "plan") => void;
+  supportsPlanImplementations?: boolean;
+  proposedPlan?: ProposedPlan | undefined;
+  onImplementPlan?: (newThread: boolean) => void;
   defaultRuntimeMode?: RuntimeMode;
 
   lockedProvider: ProviderDriverKind | null;
@@ -915,6 +923,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     lockedInstanceId:
       activeThread?.runtime?.providerInstanceId ?? activeThreadModelSelection?.instanceId,
   });
+  const mode = props.interactionMode ?? "default";
+  const planModesAvailable =
+    multipleModelSelections === null &&
+    Boolean(props.onChangeInteractionMode) &&
+    (mode === "plan" ||
+      (props.supportsPlanImplementations === true &&
+        settings.planModeEnabled &&
+        supportsPlanMode(selectedProviderEntry?.snapshot)));
+  const modeLocked =
+    isSendBusy ||
+    activeThreadRuns.some((run) => pendingInteractionModeRunStatuses.includes(run.status));
+  const canChangeMode = planModesAvailable && canOperateThread && !modeLocked;
+  const toggleMode = () => props.onChangeInteractionMode?.(mode === "plan" ? "default" : "plan");
   const noProviderAvailable =
     selectedProviderEntry === undefined && multipleModelSelections === null;
   const providerCatalogPending = noProviderAvailable && !providerCatalogKnown;
@@ -951,14 +972,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedModel,
     m,
   );
-  const sendDisabledReason =
+  const implementationDisabledReason =
+    externalSendDisabledReason ?? runtimeModeCeilingDenial ?? providerSendBlockReason;
+  const buildDisabledReason =
     externalSendDisabledReason ??
     (multipleModelSelections?.length === 0 ? gt("Select at least one model.") : null) ??
+    attachmentBlockReason ??
     (activePendingProgress
-      ? attachmentBlockReason
-      : (attachmentBlockReason ??
-        runtimeModeCeilingDenial ??
+      ? null
+      : (runtimeModeCeilingDenial ??
         (multipleModelSelections === null ? providerSendBlockReason : null)));
+  const planUnavailable =
+    mode === "plan" &&
+    (!props.supportsPlanImplementations ||
+      (selectedProviderEntry &&
+        !supportsPlanMode(selectedProviderEntry.snapshot, routeKind === "server")));
+  const sendDisabledReason =
+    buildDisabledReason ??
+    (planUnavailable && !activePendingProgress && prompt.trim() !== "/default"
+      ? gt("Choose a provider that supports Plan or switch to Build.")
+      : null);
   const isSendDisabled = sendDisabledReason !== null;
   const selectedProviderStatus = selectedProviderEntry?.snapshot ?? null;
   const selectedProviderSkills = selectedProviderStatus
@@ -1157,6 +1190,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     sideChatDisabledReason: props.sideChatDisabledReason ?? null,
     freshSessionAvailable: props.onFreshSession !== undefined,
     compactSlashCommandAvailable,
+    planModesAvailable: canChangeMode,
     selectedProvider,
     selectedProviderSkills,
     selectedProviderSlashCommands,
@@ -1978,6 +2012,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return;
     }
     if (item.type === "slash-command") {
+      if (item.command === "plan" || item.command === "default") {
+        if (canChangeMode && applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, ""))
+          props.onChangeInteractionMode?.(item.command);
+        return;
+      }
       if (item.command === "model") {
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
@@ -2201,6 +2240,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       event?.preventDefault();
       return false;
     }
+    const modeCommand = promptRef.current.trim();
+    if (
+      planModesAvailable &&
+      !activePendingProgress &&
+      (modeCommand === "/plan" || modeCommand === "/default")
+    ) {
+      event?.preventDefault();
+      if (canChangeMode && applyPromptReplacement(0, promptRef.current.length, ""))
+        props.onChangeInteractionMode?.(modeCommand === "/plan" ? "plan" : "default");
+      return true;
+    }
     // Sending now would leave a still-compressing image out of the turn, so wait for it.
     if (
       activeThreadId &&
@@ -2387,6 +2437,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const onComposerCommandKey = (key: string, event: KeyboardEvent, isTaskItem?: boolean) =>
     composerCommandKeyHandler({
+      togglePlanMode: canChangeMode ? toggleMode : undefined,
       keybindings,
       getShortcutContext,
       sendShortcut: settings.sendShortcut,
@@ -2502,53 +2553,68 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ? 0
       : expandedControlsIconOnlyBlockCount;
   const composerControls = (
-    <ComposerControlsBar
-      environmentId={environmentId}
-      workspaceCwd={gitCwd}
-      routeKind={routeKind}
-      routeThreadRef={routeThreadRef}
-      draftId={draftId}
-      selectedProvider={selectedProvider}
-      selectedInstanceId={selectedInstanceId}
-      selectedModel={selectedModel}
-      selectedProviderModels={selectedProviderModels}
-      composerModelOptions={composerModelOptions}
-      reportedModelSelection={reportedModelSelection}
-      promptUltrathink={promptUltrathink}
-      onPromptEdit={editPromptFromTraitsStable}
-      compatibleRuntimeMode={compatibleRuntimeMode}
-      defaultRuntimeMode={props.defaultRuntimeMode}
-      compatibleRuntimeModeOptions={compatibleRuntimeModeOptions}
-      handleRuntimeModeChange={handleRuntimeModeChange}
-      composerControlsCollapsed={composerControlsCollapsed}
-      effortDisplay={settings.effortDisplay}
-      permissionsShownInStrip={props.permissionsShownInStrip}
-      composerControlsHidden={composerControlsHidden}
-      restingHiddenBlockCount={restingHiddenBlockCount}
-      iconOnlyBlockCount={iconOnlyBlockCount}
-      showProviderUnavailable={showProviderUnavailable}
-      providerSetupInstanceId={providerSetupInstanceId}
-      onOpenProviderSetup={onOpenProviderSetup}
-      providerCatalogPending={providerCatalogPending}
-      isSendBusy={isSendBusy}
-      multipleModelsEnabled={routeKind === "draft" && supportsMultipleModels}
-      multipleModelSelections={multipleModelSelections}
-      onMultipleModelSelectionsChange={setMultipleModelSelections}
-      selectedModelSelection={selectedModelSelection}
-      onProviderModelSelect={onProviderModelSelect}
-      activeThreadModelSelection={activeThreadModelSelection}
-      selectedModelForPickerWithCustomFallback={selectedModelForPickerWithCustomFallback}
-      lockedProvider={lockedProvider}
-      lockedContinuationGroupKey={lockedContinuationGroupKey}
-      providerInstanceEntries={providerInstanceEntries}
-      keybindings={keybindings}
-      modelOptionsByInstance={modelOptionsByInstance}
-      terminalOpen={terminalOpen}
-      modelPickerOpen={isComposerModelPickerOpen}
-      onModelPickerOpenChange={setIsComposerModelPickerOpen}
-      modelPickerIconClassName={composerProviderState.modelPickerIconClassName}
-      getModelDisabledReason={getModelDisabledReason}
-    />
+    <>
+      {planModesAvailable && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={!canChangeMode}
+          aria-pressed={mode === "plan"}
+          aria-label={gt("Plan mode")}
+          onClick={toggleMode}
+        >
+          {mode === "plan" ? gt("Plan") : gt("Build")}
+        </Button>
+      )}
+      <ComposerControlsBar
+        environmentId={environmentId}
+        workspaceCwd={gitCwd}
+        routeKind={routeKind}
+        routeThreadRef={routeThreadRef}
+        draftId={draftId}
+        selectedProvider={selectedProvider}
+        selectedInstanceId={selectedInstanceId}
+        selectedModel={selectedModel}
+        selectedProviderModels={selectedProviderModels}
+        composerModelOptions={composerModelOptions}
+        reportedModelSelection={reportedModelSelection}
+        promptUltrathink={promptUltrathink}
+        onPromptEdit={editPromptFromTraitsStable}
+        compatibleRuntimeMode={compatibleRuntimeMode}
+        defaultRuntimeMode={props.defaultRuntimeMode}
+        compatibleRuntimeModeOptions={compatibleRuntimeModeOptions}
+        handleRuntimeModeChange={handleRuntimeModeChange}
+        composerControlsCollapsed={composerControlsCollapsed}
+        effortDisplay={settings.effortDisplay}
+        permissionsShownInStrip={props.permissionsShownInStrip}
+        composerControlsHidden={composerControlsHidden}
+        restingHiddenBlockCount={restingHiddenBlockCount}
+        iconOnlyBlockCount={iconOnlyBlockCount}
+        showProviderUnavailable={showProviderUnavailable}
+        providerSetupInstanceId={providerSetupInstanceId}
+        onOpenProviderSetup={onOpenProviderSetup}
+        providerCatalogPending={providerCatalogPending}
+        isSendBusy={isSendBusy}
+        multipleModelsEnabled={routeKind === "draft" && supportsMultipleModels && mode !== "plan"}
+        multipleModelSelections={multipleModelSelections}
+        onMultipleModelSelectionsChange={setMultipleModelSelections}
+        selectedModelSelection={selectedModelSelection}
+        onProviderModelSelect={onProviderModelSelect}
+        activeThreadModelSelection={activeThreadModelSelection}
+        selectedModelForPickerWithCustomFallback={selectedModelForPickerWithCustomFallback}
+        lockedProvider={lockedProvider}
+        lockedContinuationGroupKey={lockedContinuationGroupKey}
+        providerInstanceEntries={providerInstanceEntries}
+        keybindings={keybindings}
+        modelOptionsByInstance={modelOptionsByInstance}
+        terminalOpen={terminalOpen}
+        modelPickerOpen={isComposerModelPickerOpen}
+        onModelPickerOpenChange={setIsComposerModelPickerOpen}
+        modelPickerIconClassName={composerProviderState.modelPickerIconClassName}
+        getModelDisabledReason={getModelDisabledReason}
+      />
+    </>
   );
   // An open question owns the space above the composer. Only a machine problem,
   // which is why an answer could not go through, stays beside it.
@@ -3481,6 +3547,59 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       <ComposerBanner.Dock>
         <ComposerBanner.Column>
           <ComposerBannerStack items={shelfItems} />
+          {props.proposedPlan?.status === "active" &&
+          !activePendingProgress &&
+          pendingApprovals.length === 0 &&
+          phase !== "running" &&
+          phase !== "connecting" ? (
+            <ComposerBanner.Attachment>
+              <ComposerBanner.Root>
+                <div className="flex flex-wrap items-center gap-2 px-2 py-1">
+                  {mode === "plan" && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={!prompt.trim() || isSendDisabled || !canOperateThread || isSendBusy}
+                      onClick={() => submitComposerStable()}
+                    >
+                      {gt("Refine")}
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="default"
+                    disabled={
+                      implementationDisabledReason != null ||
+                      environmentUnavailable !== null ||
+                      !canOperateThread ||
+                      modeLocked ||
+                      noProviderAvailable
+                    }
+                    onClick={() => props.onImplementPlan?.(false)}
+                  >
+                    {gt("Implement")}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={
+                      implementationDisabledReason != null ||
+                      environmentUnavailable !== null ||
+                      !canOperateThread ||
+                      isSendBusy ||
+                      noProviderAvailable
+                    }
+                    onClick={() => props.onImplementPlan?.(true)}
+                  >
+                    {gt("Implement in a new thread")}
+                  </Button>
+                </div>
+              </ComposerBanner.Root>
+            </ComposerBanner.Attachment>
+          ) : null}
           {showComposerTopDrawer ? (
             <ComposerBanner.Attachment>
               <ComposerBanner.Root data-chat-composer-top-drawer="true" variant="info">

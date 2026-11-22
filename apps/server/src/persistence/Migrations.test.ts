@@ -29,6 +29,21 @@ const v2TableCount = Effect.gen(function* () {
 });
 
 describe("runMigrations", () => {
+  it.effect("releases the development Plan migration IDs for upstream", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 105 });
+      yield* sql`INSERT INTO effect_sql_migrations(migration_id, name) VALUES
+        (106,'ProposedPlanImplementations'), (107,'RevertedPlanImplementations'), (108,'ReplayRevertedPlans')`;
+      yield* runMigrations();
+      assert.deepStrictEqual(yield* history, migrationManifest);
+      const laterId = Math.max(106, newerMigrationId);
+      yield* sql`INSERT INTO effect_sql_migrations(migration_id, name) VALUES (${laterId},'UpstreamChange')`;
+      yield* runMigrations();
+      assert.includeDeepMembers(yield* history, [[laterId, "UpstreamChange"]]);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("refuses to start when another migration took a V2 id", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

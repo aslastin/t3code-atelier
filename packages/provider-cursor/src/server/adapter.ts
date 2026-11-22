@@ -324,6 +324,22 @@ export function makeCursorAgentOptions(input: {
   return {
     model: cursorSdkModelSelection(input.modelSelection, input.models, input.sdkModels),
     name: `T3 Code ${input.threadId}`,
+    // Cursor's task tool starts children with their own toolsets, outside this allowlist.
+    ...(input.runtimePolicy.interactionMode === "plan"
+      ? {
+          tools: [
+            "read",
+            "grep",
+            "glob",
+            "ls",
+            "readLints",
+            "semSearch",
+            "askQuestion",
+            "await",
+            "create_plan_tool_call",
+          ],
+        }
+      : {}),
     mode: input.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
     ...(input.apiKey === undefined ? {} : { apiKey: input.apiKey }),
     local: {
@@ -333,6 +349,7 @@ export function makeCursorAgentOptions(input: {
         : { dirs: [...input.runtimePolicy.workspace.extraRoots] }),
       autoReview: policy.autoReview,
       settingSources:
+        input.runtimePolicy.interactionMode !== "plan" &&
         input.runtimePolicy.runtimeMode === "full-access" &&
         !policy.autoReview &&
         !policy.sandboxEnabled
@@ -1038,6 +1055,7 @@ const addCursorTurnUsage = (
 };
 
 interface CursorLiveAgent {
+  readonly planning: boolean;
   readonly nativeThreadId: string;
   readonly storeCwd: string;
   readonly session: CursorAgentSdk.CursorAgentSdkSession;
@@ -2736,6 +2754,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             existing !== null &&
             openInput.operation === "resume" &&
             existing.nativeThreadId === openInput.agentId &&
+            existing.planning === (openInput.runtimePolicy.interactionMode === "plan") &&
             existing.session.isAlive?.() !== false
           ) {
             return existing;
@@ -2777,6 +2796,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             .pipe(Effect.mapError(classifyCursorModelRejection(openInput.modelSelection)));
           const next = {
             nativeThreadId: sdkSession.agentId,
+            planning: openInput.runtimePolicy.interactionMode === "plan",
             storeCwd,
             session: sdkSession,
           } satisfies CursorLiveAgent;

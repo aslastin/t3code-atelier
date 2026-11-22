@@ -73,6 +73,7 @@ describe("thread relationships", () => {
               : null,
           lineage: { rootThreadId: parent, parentThreadId: parent, relationshipToParent },
         },
+        runs: [],
         subagents: [],
         contextTransfers: [],
       } as never;
@@ -178,6 +179,11 @@ describe("thread relationships", () => {
       ] as never,
       projection: {
         thread: { id: parent },
+        runs: [
+          { ordinal: 1 },
+          { ordinal: 2, sourcePlanRef: { threadId: transferTarget } },
+          { ordinal: 3, sourcePlanRef: { threadId: parent } },
+        ],
         subagents: [{ childThreadId: child, status: "completed" }],
         contextTransfers: [
           {
@@ -189,6 +195,9 @@ describe("thread relationships", () => {
       } as never,
     });
 
+    expect(graph.edges.filter((edge) => edge.kind === "implementation")).toEqual([
+      expect.objectContaining({ sourceThreadId: transferTarget, targetThreadId: parent }),
+    ]);
     expect(graph.nodes.get(child)?.thread?.archivedAt).not.toBeNull();
     expect(graph.nodes.get(transferTarget)?.missing).toBe(true);
     expect(graph.edges).toEqual(
@@ -430,6 +439,7 @@ describe("web thread lineage ordering", () => {
         ],
         projection: {
           thread: { id: current },
+          runs: [],
           subagents: [],
           contextTransfers: [
             { sourceThreadId: current, targetThreadId: missingTransfer, status: "completed" },

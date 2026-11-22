@@ -1,8 +1,9 @@
 import { PLAN_QUESTIONS_PROMPT, type OrchestratorFixtureInput } from "../shared.ts";
 
-export function planQuestionsInput(): OrchestratorFixtureInput {
+export function planQuestionsInput(driver?: string): OrchestratorFixtureInput {
   return {
-    interactionMode: "plan",
+    // Only the Codex recording entered native Plan. Grok and OpenCode v1 asked in Build.
+    interactionMode: driver === "codex" ? "plan" : "default",
     steps: [
       { type: "message", text: PLAN_QUESTIONS_PROMPT },
       {

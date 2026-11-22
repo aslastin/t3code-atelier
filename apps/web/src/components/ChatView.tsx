@@ -169,6 +169,10 @@ import {
 } from "../session-logic";
 import { type LegendListRef } from "@legendapp/list/react";
 import { useWorkspaceMutationRefresh } from "../hooks/useWorkspaceMutationRefresh";
+import {
+  latestActiveProposedPlan,
+  planImplementationTurn,
+} from "@t3tools/client-runtime/operations";
 import { DEFAULT_INTERACTION_MODE, type ChatMessage } from "../types";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { useTheme } from "../hooks/useTheme";
@@ -626,6 +630,9 @@ export default function ChatView(props: ChatViewProps) {
   useSideChatCitationReveal(embedded ? null : routeThreadRef, locationCitation, citationActivation);
   const citationHistory = useCitedHistory(citationRequest);
   const { resolvedTheme } = useTheme();
+  const draftInteractionMode = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.interactionMode,
+  );
   const composerRuntimeMode = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.runtimeMode ?? null,
   );
@@ -1028,6 +1035,9 @@ export default function ChatView(props: ChatViewProps) {
     composerRuntimeMode ??
     (isServerThread ? activeThread?.runtimeMode : undefined) ??
     defaultRuntimeMode;
+  const interactionMode = isServerThread
+    ? (activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE)
+    : (draftInteractionMode ?? DEFAULT_INTERACTION_MODE);
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = canWriteSourceControl && isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
@@ -1335,6 +1345,11 @@ export default function ChatView(props: ChatViewProps) {
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig !== null;
   const attachmentEnvironmentConfig = environmentById.get(environmentId)?.serverConfig ?? null;
+  const supportsPlanImplementations =
+    attachmentEnvironmentConfig?.environment.capabilities.planImplementations === true;
+  const proposedPlan = supportsPlanImplementations
+    ? latestActiveProposedPlan(serverProjection)
+    : undefined;
   const attachmentUploadsCapabilityKnown = attachmentEnvironmentConfig !== null;
   const supportsQuestionAttachments = attachmentEnvironmentConfig !== null;
   const supportsAttachmentUploads = attachmentEnvironmentConfig !== null;
@@ -1434,6 +1449,25 @@ export default function ChatView(props: ChatViewProps) {
     setLocalServerErrorsByThreadKey,
     setLocalDraftErrorsByDraftId,
   });
+  const changeInteractionMode = async (mode: ProviderInteractionMode) => {
+    if (!activeThread || !canOperateThread || sendInFlightRef.current) return;
+    if (!isServerThread) {
+      useComposerDraftStore.getState().setInteractionMode(composerDraftTarget, mode);
+      return;
+    }
+    sendInFlightRef.current = true;
+    const result = await setThreadInteractionMode({
+      environmentId,
+      input: { threadId: activeThread.id, interactionMode: mode },
+    }).finally(() => {
+      sendInFlightRef.current = false;
+    });
+    if (result._tag === "Failure")
+      setThreadError(
+        activeThread.id,
+        thrownErrorMessage(squashAtomCommandFailure(result), m) ?? gt("Could not change mode."),
+      );
+  };
   const {
     pendingApprovals,
     pendingUserInputs,
@@ -1962,7 +1996,7 @@ export default function ChatView(props: ChatViewProps) {
         threadId: activeThreadId,
         message: { messageId: newMessageId(), role: "user", text, attachments: [] },
         runtimeMode,
-        interactionMode: DEFAULT_INTERACTION_MODE,
+        interactionMode,
         dispatchMode: "queue",
       },
     });
@@ -3033,6 +3067,58 @@ export default function ChatView(props: ChatViewProps) {
     scrollToEnd,
     setThreadError,
   });
+  const implementPlan = async (inNewThread: boolean) => {
+    const send = composerRef.current?.getSendContext();
+    if (
+      !activeThread ||
+      !send?.providerAvailable ||
+      proposedPlan?.status !== "active" ||
+      !canOperateThread ||
+      sendInFlightRef.current
+    )
+      return;
+    if (localCheckoutBranchMismatch) {
+      setThreadError(
+        activeThread.id,
+        gt(
+          "The checkout is on {actual}. Restore {expected} or refine the plan on the current branch.",
+          {
+            actual: localCheckoutBranchMismatch.currentBranch,
+            expected: localCheckoutBranchMismatch.threadBranch,
+          },
+        ),
+      );
+      return;
+    }
+    const input = planImplementationTurn({
+      source: activeThread,
+      plan: proposedPlan,
+      runtimeMode,
+      modelSelection: send.selectedModelSelection,
+      newThread: inNewThread,
+      creationSource: "web",
+    });
+    sendInFlightRef.current = true;
+    const launch = async () => {
+      const started = await startThreadTurn({ environmentId, input });
+      if (started._tag === "Failure") throw squashAtomCommandFailure(started);
+      if (inNewThread)
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: { environmentId, threadId: input.threadId },
+        });
+    };
+    await launch()
+      .catch((error: unknown) => {
+        setThreadError(
+          activeThread.id,
+          thrownErrorMessage(error, m) ?? gt("Could not implement plan."),
+        );
+      })
+      .finally(() => {
+        sendInFlightRef.current = false;
+      });
+  };
   const { onSend } = useComposerSend({
     environmentId,
     routeThreadKey,
@@ -3051,6 +3137,7 @@ export default function ChatView(props: ChatViewProps) {
     isGitRepo,
     phase,
     runtimeMode,
+    interactionMode,
     sendEnvMode,
     worktreeRepositories,
     startFromOrigin,
@@ -3832,6 +3919,11 @@ export default function ChatView(props: ChatViewProps) {
                                 pendingUserInputs={pendingUserInputs}
                                 activePendingIsResponding={activePendingIsResponding}
                                 respondingRequestIds={respondingRequestIds}
+                                interactionMode={interactionMode}
+                                onChangeInteractionMode={changeInteractionMode}
+                                supportsPlanImplementations={supportsPlanImplementations}
+                                proposedPlan={proposedPlan}
+                                onImplementPlan={implementPlan}
                                 runtimeMode={runtimeMode}
                                 defaultRuntimeMode={defaultRuntimeMode}
                                 lockedProvider={modelPickerLockedProvider}

@@ -38,7 +38,10 @@ import {
   resolveSelectableModel,
   withLegacyUltracodeEffort,
 } from "@t3tools/shared/model";
-import { unsentManualContinuationSource } from "@t3tools/shared/orchestrationV2ManualContinuation";
+import {
+  failedUnsentPlan,
+  unsentManualContinuationSource,
+} from "@t3tools/shared/orchestrationV2ManualContinuation";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import * as DateTime from "effect/DateTime";
 
@@ -356,8 +359,9 @@ export function deriveResumableRunId(
   const resumable =
     run?.status === "interrupted" ||
     (run?.status === "failed" &&
-      runtime?.lastErrorClass === "usage_limit" &&
-      latestRootProviderFailure(run, projection.turnItems)?.class === "usage_limit");
+      (failedUnsentPlan(run, projection) !== undefined ||
+        (runtime?.lastErrorClass === "usage_limit" &&
+          latestRootProviderFailure(run, projection.turnItems)?.class === "usage_limit")));
   if (!resumable) return null;
   // Without native resume the server can only resend a message the provider never received.
   if (

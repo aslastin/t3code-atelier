@@ -86,6 +86,7 @@ export type ThreadLaunchWorkspaceStrategy =
     };
 
 export interface ThreadLaunchInitialMessage {
+  readonly sourcePlanRef?: import("@t3tools/contracts").OrchestrationV2SourcePlanRef;
   readonly messageId?: MessageId;
   readonly scheduledTaskId?: ScheduledTaskId;
   readonly senderThreadId?: ThreadId;
@@ -539,6 +540,16 @@ const make = Effect.gen(function* () {
       ? { startRef: "HEAD", baseRefName: "HEAD" }
       : null;
   });
+
+  const releasePreparedRun = (input: PreparationInput, threadId: ThreadId, runId: RunId) =>
+    threads
+      .dispatch({
+        type: "prepared-run.release",
+        commandId: CommandId.make(`${input.commandId}:release`),
+        threadId,
+        runId,
+      })
+      .pipe(Effect.mapError(mapError(input, "release-run", threadId)));
 
   const prepareInBackground = Effect.fn("ThreadLaunchService.prepareInBackground")(function* (
     input: PreparationInput,
@@ -1084,22 +1095,14 @@ const make = Effect.gen(function* () {
       yield* setupTracker.markUncancellable(threadId);
       yield* setupTracker.stageStatus(threadId, "agent", "running");
       if (runId !== null) {
-        yield* threads
-          .dispatch({
-            type: "prepared-run.release",
-            commandId: CommandId.make(`${input.commandId}:release`),
-            threadId,
-            runId,
-          })
-          .pipe(
-            Effect.mapError(mapError(input, "release-run", threadId)),
-            Effect.tap(() =>
-              Effect.sync(() => {
-                runReleased = true;
-              }),
-            ),
-            Effect.uninterruptible,
-          );
+        yield* releasePreparedRun(input, threadId, runId).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              runReleased = true;
+            }),
+          ),
+          Effect.uninterruptible,
+        );
       }
       yield* setupTracker.stageStatus(threadId, "agent", "done");
       yield* awaitAsyncSetup;
@@ -1287,8 +1290,14 @@ const make = Effect.gen(function* () {
     input: PreparationInput,
     threadId: ThreadId,
     runId: RunId | null,
+    implementsPlan: boolean,
   ) {
     const preparation = Effect.gen(function* () {
+      // The plan already owns this checkout. Preparing it again can rename the source branch.
+      if (implementsPlan && runId !== null) {
+        yield* releasePreparedRun(input, threadId, runId);
+        return;
+      }
       const prepare = prepareInBackground(input, threadId, runId);
       if (
         runId === null ||
@@ -1401,7 +1410,9 @@ const make = Effect.gen(function* () {
         }
 
         const workspaceStrategy: ThreadLaunchWorkspaceStrategy =
-          input.workspaceStrategy.type === "root" && Option.isNone(launchReceipt)
+          input.workspaceStrategy.type === "root" &&
+          !input.initialMessage?.sourcePlanRef &&
+          Option.isNone(launchReceipt)
             ? Option.match(
                 yield* managedFolders
                   .folderForThread({
@@ -1416,11 +1427,37 @@ const make = Effect.gen(function* () {
                 },
               )
             : input.workspaceStrategy;
-        const initialBranch = yield* Effect.interruptible(
-          launchBranch(workspaceStrategy, project.workspaceRoot),
-        );
+        if (input.initialMessage?.sourcePlanRef && workspaceStrategy.type === "worktree") {
+          return yield* mapError(
+            input,
+            "provision-worktree",
+            candidateThreadId,
+          )("A plan implementation must use the source checkout.");
+        }
+        const initialBranch = input.initialMessage?.sourcePlanRef
+          ? (workspaceStrategy.branch ?? null)
+          : yield* Effect.interruptible(launchBranch(workspaceStrategy, project.workspaceRoot));
         const initialWorktreePath =
           workspaceStrategy.type === "existing_worktree" ? workspaceStrategy.worktreePath : null;
+        if (
+          input.initialMessage?.sourcePlanRef &&
+          initialBranch !== null &&
+          Option.isNone(launchReceipt) &&
+          (yield* threads
+            .getThreadShell(candidateThreadId)
+            .pipe(Effect.mapError(mapError(input, "resolve-project", candidateThreadId)))) === null
+        ) {
+          const branch = yield* git
+            .currentBranch(initialWorktreePath ?? project.workspaceRoot)
+            .pipe(Effect.mapError(mapError(input, "provision-worktree", candidateThreadId)));
+          if (branch !== initialBranch) {
+            return yield* mapError(
+              input,
+              "provision-worktree",
+              candidateThreadId,
+            )("The checkout branch changed. Review the branch before implementing the plan.");
+          }
+        }
         const initialMessage =
           input.initialMessage === undefined
             ? undefined
@@ -1431,6 +1468,9 @@ const make = Effect.gen(function* () {
                     .message({ threadId: candidateThreadId, ordinal: 1 })
                     .pipe(Effect.mapError(mapError(input, "dispatch-message", candidateThreadId)))),
                 text: input.initialMessage.text,
+                ...(input.initialMessage.sourcePlanRef
+                  ? { sourcePlanRef: input.initialMessage.sourcePlanRef }
+                  : {}),
                 ...(input.initialMessage.scheduledTaskId === undefined
                   ? {}
                   : { scheduledTaskId: input.initialMessage.scheduledTaskId }),
@@ -1476,15 +1516,44 @@ const make = Effect.gen(function* () {
                   ? {}
                   : { initialMessage: { ...initialMessage, workspaceStrategy } }),
               });
-        const claimed = yield* claimDispatch.pipe(
-          Effect.mapError(
-            mapError(
-              input,
-              input.reuseExistingThread === true ? "update-thread" : "create-thread",
-              candidateThreadId,
-            ),
-          ),
-        );
+        const claim = yield* Effect.result(claimDispatch);
+        if (claim._tag === "Failure") {
+          const failure = mapError(
+            input,
+            input.reuseExistingThread ? "update-thread" : "create-thread",
+            candidateThreadId,
+          );
+          const ref = initialMessage?.sourcePlanRef;
+          if (ref && claim.failure._tag === "OrchestratorThreadAlreadyExistsError") {
+            const projection = yield* threads
+              .getThreadProjection(candidateThreadId)
+              .pipe(Effect.mapError(failure));
+            const original = projection.runs.find((run) => run.ordinal === 1);
+            if (
+              projection.thread.deletedAt === null &&
+              projection.thread.projectId === input.projectId &&
+              original?.sourcePlanRef?.planId === ref.planId &&
+              original.sourcePlanRef.threadId === ref.threadId &&
+              projection.messages.some(
+                (message) =>
+                  message.runId === original.id &&
+                  message.id === initialMessage.messageId &&
+                  message.text === initialMessage.text,
+              )
+            ) {
+              if (original.status === "preparing") {
+                yield* prepareRun({
+                  threadId: candidateThreadId,
+                  runId: original.id,
+                  commandId: CommandId.make(`prepare-plan:${original.id}`),
+                });
+              }
+              return { threadId: candidateThreadId, projection, resumed: true };
+            }
+          }
+          return yield* failure(claim.failure);
+        }
+        const claimed = claim.success;
         const threadId =
           claimed.storedEvents.find((stored) => stored.event.type.startsWith("thread."))?.event
             .threadId ?? candidateThreadId;
@@ -1548,7 +1617,13 @@ const make = Effect.gen(function* () {
 
         // Fork preparation before the full projection read; it is only part of the reply.
         const shouldSchedule = runId === null ? Option.isNone(launchReceipt) : true;
-        if (shouldSchedule && (yield* reservePreparation(input.commandId))) {
+        if (runId !== null && initialMessage?.sourcePlanRef) {
+          yield* prepareRun({
+            threadId,
+            runId,
+            commandId: CommandId.make(`prepare-plan:${runId}`),
+          });
+        } else if (shouldSchedule && (yield* reservePreparation(input.commandId))) {
           yield* Effect.gen(function* () {
             const current =
               runId === null
@@ -1565,7 +1640,8 @@ const make = Effect.gen(function* () {
             const boundWorktreePath = current?.thread.worktreePath ?? null;
             // A retry prepares the worktree the accepted launch asked for, not the
             // retry's own strategy, whose defaults may resolve differently.
-            const accepted = current?.runs.find((run) => run.id === runId)?.workspacePreparation;
+            const acceptedRun = current?.runs.find((run) => run.id === runId);
+            const accepted = acceptedRun?.workspacePreparation;
             const preparationStrategy: ThreadLaunchWorkspaceStrategy =
               Option.isSome(launchReceipt) &&
               (accepted?.type === "worktree" || accepted?.type === "existing_worktree")
@@ -1583,6 +1659,7 @@ const make = Effect.gen(function* () {
               { ...input, workspaceStrategy: preparationStrategy },
               threadId,
               runId,
+              acceptedRun?.sourcePlanRef !== undefined,
             );
           }).pipe(Effect.onError(() => releasePreparation(input.commandId)));
         }
@@ -1689,6 +1766,7 @@ const make = Effect.gen(function* () {
       },
       input.threadId,
       run.id,
+      run.sourcePlanRef !== undefined,
     );
   });
 

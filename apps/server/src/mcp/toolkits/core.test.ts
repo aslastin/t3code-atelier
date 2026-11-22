@@ -149,6 +149,34 @@ it.effect("checks capability through the production registration", () =>
   ),
 );
 
+it.effect("a Plan turn can return its structured output", () => {
+  const shell = McpToolAccessTestkit.liveThreadShell(threadId, { interactionMode: "plan" });
+  const runId = RunId.make("plan-output");
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const result = yield* server
+      .callTool({ name: "t3_submit_output", arguments: { json: "{}" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    expect(result.structuredContent).toEqual({ runId });
+  }).pipe(
+    Effect.provide(
+      layerThreadToolkit.pipe(
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: () => Effect.succeed(shell),
+            submitRunOutput: () => Effect.succeed({ runId }),
+          }),
+        ),
+      ),
+    ),
+  );
+});
+
 it.effect("an answered question reports already answered instead of not found", () => {
   const shell = McpToolAccessTestkit.liveThreadShell(threadId);
   const requestId = RuntimeRequestId.make("answered-question");
@@ -995,7 +1023,7 @@ it.effect("a read-only client reads threads and is refused every write before it
 );
 const dispatched: Array<string> = [];
 
-it.effect("hides act-as-caller tools from a client caller", () =>
+it.effect("checks caller scope and delegates Plan research cancellation to the task service", () =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const error = yield* server
@@ -1012,12 +1040,32 @@ it.effect("hides act-as-caller tools from a client caller", () =>
         Effect.provideService(McpSchema.McpServerClient, client),
       );
     expect(error.message).toContain("Tool 'delegate_task' not found");
+    const missing = yield* server
+      .callTool({ name: "task_cancel", arguments: { taskId: "missing" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    expect(declaredFailure(missing)).toMatchObject({ code: "task_not_found" });
   }).pipe(
     Effect.provide(
       layerOrchestratorToolkit.pipe(
         Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(NodeCrypto.layer),
-        Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: () =>
+              Effect.succeed(
+                McpToolAccessTestkit.liveThreadShell(threadId, { interactionMode: "plan" }),
+              ),
+            getThreadRecords: () =>
+              Effect.succeed(
+                McpToolAccessTestkit.idleThreadProjection(
+                  McpToolAccessTestkit.liveThreadShell(threadId, { interactionMode: "plan" }),
+                ),
+              ),
+          }),
+        ),
         Layer.provide(ServerSettings.layerTest()),
         Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
         Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),

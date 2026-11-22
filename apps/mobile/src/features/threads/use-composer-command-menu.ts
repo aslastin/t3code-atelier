@@ -113,6 +113,7 @@ export function buildComposerSlashCommandItems(
     readonly hasCompactableConversation?: boolean;
     readonly offersUsageLimits?: boolean;
     /** T3's `/clear` replaces the provider's, which would clear a session T3 still treats as live. */
+    readonly offersPlanMode?: boolean;
     readonly offersFreshSession?: boolean;
     readonly offersSideChat?: boolean;
     readonly selectedProviderStatus: Pick<ServerProvider, "driver" | "slashCommands"> | null;
@@ -150,6 +151,18 @@ export function buildComposerSlashCommandItems(
       });
     }
   }
+  if (input.offersPlanMode) {
+    for (const command of ["plan", "default"]) {
+      if (command.includes(query))
+        items.push({
+          id: `cmd:${command}`,
+          type: "slash-command",
+          command,
+          label: `/${command}`,
+          description: command === "plan" ? resolve(msg("Plan mode")) : resolve(msg("Build")),
+        });
+    }
+  }
   if (input.offersFreshSession && "clear".includes(query)) {
     items.push({
       id: "cmd:clear",
@@ -161,6 +174,7 @@ export function buildComposerSlashCommandItems(
   }
   for (const command of input.selectedProviderStatus?.slashCommands ?? []) {
     if (!command.name.toLowerCase().includes(query)) continue;
+    if (input.offersPlanMode && (command.name === "default" || command.name === "plan")) continue;
     if (command.name === "clear" && input.offersFreshSession) continue;
     if (command.name === "compact" && !input.hasCompactableConversation) continue;
     if (command.name === USAGE_LIMITS_COMMAND.name && input.offersUsageLimits && !input.hasThread) {
@@ -271,6 +285,7 @@ export function useComposerCommandMenu({
   modelOptions,
   modelProviders,
   onFreshSession,
+  onChangeInteractionMode,
   offersSideChat = false,
 }: {
   readonly draftMessage: string;
@@ -297,6 +312,7 @@ export function useComposerCommandMenu({
   readonly modelOptions?: ReadonlyArray<ModelOption>;
   readonly modelProviders?: ReadonlyArray<ServerProvider>;
   /** Arms a fresh session for the next message; absent where `/clear` is unavailable. */
+  readonly onChangeInteractionMode?: ((mode: "default" | "plan") => void) | undefined;
   readonly onFreshSession?: () => void;
   readonly offersSideChat?: boolean;
 }) {
@@ -406,6 +422,7 @@ export function useComposerCommandMenu({
           hasThread,
           hasCompactableConversation,
           offersUsageLimits,
+          offersPlanMode: onChangeInteractionMode !== undefined,
           offersFreshSession: onFreshSession !== undefined,
           offersSideChat,
           selectedProviderStatus: selectedProviderStatus
@@ -668,6 +685,15 @@ export function useComposerCommandMenu({
       onChangeDraftMessage(cleared.text);
       action();
     };
+    if (
+      item.type === "slash-command" &&
+      (item.command === "plan" || item.command === "default") &&
+      onChangeInteractionMode
+    ) {
+      const mode = item.command;
+      clearTriggerThen(() => onChangeInteractionMode(mode));
+      return;
+    }
     if (item.type === "slash-command" && item.command === "model") {
       clearTriggerThen(onOpenModelPicker);
       return;

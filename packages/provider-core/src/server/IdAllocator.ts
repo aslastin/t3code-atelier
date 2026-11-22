@@ -20,6 +20,7 @@ import {
   RuntimeRequestId,
   ThreadId,
   TurnItemId,
+  userMessageTurnItemId,
 } from "@t3tools/contracts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- derive ids are synchronous, so the hash must be too.
 import * as NodeCrypto from "node:crypto";
@@ -298,7 +299,7 @@ export const derive: IdAllocatorV2Derive = {
   rootNode: (input) => NodeId.make(joinId("node", "run", input.runId, "root")),
   rootNodeAttempt: (input) =>
     NodeId.make(joinId("node", "run", input.runId, "attempt", input.attemptOrdinal, "root")),
-  userTurnItem: (input) => TurnItemId.make(joinId("turn-item", "message", input.messageId)),
+  userTurnItem: (input) => userMessageTurnItemId(input.messageId),
   runSignalTurnItem: (input) =>
     TurnItemId.make(joinId("turn-item", "run", input.runId, "signal", input.signal)),
   providerThread: deriveProviderThread,

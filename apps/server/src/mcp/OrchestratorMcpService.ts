@@ -2827,9 +2827,17 @@ const make = Effect.gen(function* () {
         input.target === undefined
           ? undefined
           : PeerForwarding.remoteTarget(callerScope, input.target.environmentId);
+      const { scope, parent } = yield* loadThreadCaller(callerScope, "delegate_task");
+      if (
+        parent.thread.interactionMode === "plan" &&
+        (environmentId !== undefined || input.isolation === "worktree")
+      ) {
+        return yield* failure(
+          "capability_denied",
+          "Plan research tasks run in the current environment and checkout.",
+        );
+      }
       if (input.target !== undefined && environmentId !== undefined) {
-        yield* requireCapability(callerScope);
-        const scope = yield* requireThreadScope(callerScope, "delegate_task");
         // The task's child runs as an ordinary thread there; this thread keeps the task.
         const { taskId } = yield* remoteDelegation.delegate(scope, {
           ...input,
@@ -2839,7 +2847,6 @@ const make = Effect.gen(function* () {
           ? awaitTask(scope, taskId, taskId, input.timeoutMs)
           : readTask(scope, taskId, false, true);
       }
-      const { scope, parent } = yield* loadThreadCaller(callerScope, "delegate_task");
       if (
         input.target?.projectId !== undefined &&
         input.target.projectId !== parent.thread.projectId
@@ -2996,7 +3003,14 @@ const make = Effect.gen(function* () {
       const scope = yield* requireThreadScope(callerScope, "task_cancel");
       const current = yield* readTask(scope, input.taskId);
       const childThreadId = current.childThreadId;
+      const parentProjection = yield* loadThreadRecords(scope.thread.threadId, []);
       if (childThreadId === null) {
+        if (parentProjection.thread.interactionMode === "plan") {
+          return yield* failure(
+            "capability_denied",
+            "Plan research tasks can only be cancelled in the current environment.",
+          );
+        }
         // The task runs in a linked environment: its thread there is stopped through the link.
         const subagents = yield* loadTasks(scope.thread.threadId, [input.taskId]);
         const remoteTask = subagents.find(
@@ -3014,7 +3028,6 @@ const make = Effect.gen(function* () {
         return yield* remoteDelegation.cancel(scope, remoteTask, input);
       }
       const key = yield* requestKey(input.clientRequestId);
-      const parentProjection = yield* loadThreadRecords(scope.thread.threadId, []);
       // Cancelling stops the child and every task under it, each a write to a
       // thread its user may have raised above the parent's modes since it was
       // delegated. All of them are checked before anything is stopped.

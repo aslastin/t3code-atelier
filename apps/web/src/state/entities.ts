@@ -1,3 +1,7 @@
+import {
+  planDiscussionThreadIds,
+  planImplementationThreadIds,
+} from "@t3tools/client-runtime/state/thread-relationships";
 import type * as DateTime from "effect/DateTime";
 import { msg } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
@@ -411,7 +415,10 @@ function shellParentThreadId(
 /** Retains unchanged reachable shells so unrelated streams do not re-render the panel. */
 export function selectThreadRelationshipShells(
   threadId: ThreadId,
-  projection: Pick<ThreadStructure, "thread" | "subagents" | "contextTransfers"> | null,
+  projection: Pick<
+    ThreadStructure,
+    "thread" | "subagents" | "contextTransfers" | "plans" | "runs"
+  > | null,
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
 ): ReadonlyArray<OrchestrationV2ThreadShell> {
   const named = new Set<string>([threadId]);
@@ -424,6 +431,8 @@ export function selectThreadRelationshipShells(
         if (agent.childThreadId !== undefined) named.add(agent.childThreadId);
       }
     }
+    for (const id of planImplementationThreadIds(projection)) named.add(id);
+    for (const discussion of planDiscussionThreadIds(projection)) named.add(discussion);
     for (const transfer of projection.contextTransfers) {
       named.add(transfer.sourceThreadId);
       named.add(transfer.targetThreadId);

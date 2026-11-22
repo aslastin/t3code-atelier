@@ -221,7 +221,10 @@ import {
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
-import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
+import {
+  buildRuntimeInstructions,
+  CLAUDE_PLAN_SUBMISSION,
+} from "@t3tools/provider-core/server/runtimeInstructions";
 import {
   mcpToolPresentation,
   normalizeMcpText,
@@ -2284,6 +2287,42 @@ const subagentDeviceInstructions: HookCallback = () =>
     },
   });
 
+const CLAUDE_PLAN_READ_TOOLS = new Set([
+  ...CLAUDE_READ_ONLY_ALLOWED_TOOLS,
+  "AskUserQuestion",
+  "ExitPlanMode",
+  "TaskOutput",
+  "TaskGet",
+  "TaskList",
+  "ToolSearch",
+  "WebSearch",
+  "WebFetch",
+]);
+const CLAUDE_PLAN_DENIAL =
+  "This tool cannot run in Plan mode. Wait for the user to switch to Build.";
+
+function claudePlanToolAvailable(name: string, input: unknown) {
+  if (
+    name === "mcp__t3-code__delegate_task" ||
+    name === "mcp__t3-code__task_status" ||
+    name === "mcp__t3-code__task_cancel" ||
+    name === "mcp__t3-code__t3_thread_read" ||
+    name === "mcp__t3-code__request_secret" ||
+    CLAUDE_PLAN_READ_TOOLS.has(name) ||
+    CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS.includes(name)
+  )
+    return true;
+  if (name !== "Agent" || typeof input !== "object" || input === null) return false;
+  return (
+    Object.keys(input).every((key) =>
+      ["subagent_type", "prompt", "description", "model", "run_in_background"].includes(key),
+    ) &&
+    "subagent_type" in input &&
+    (input.subagent_type === "Explore" || input.subagent_type === "Plan") &&
+    !("run_in_background" in input && input.run_in_background === true)
+  );
+}
+
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
   readonly modelCatalog?: ClaudeModelCatalog;
@@ -2310,6 +2349,7 @@ export function makeClaudeQueryOptions(input: {
   readonly onUserDialog?: ClaudeQueryOptions["onUserDialog"];
   readonly onElicitation?: ClaudeQueryOptions["onElicitation"];
   readonly onStop?: HookCallback;
+  readonly onPlanTool?: HookCallback;
   readonly supportedDialogKinds?: ClaudeQueryOptions["supportedDialogKinds"];
   readonly allowDangerouslySkipPermissions?: boolean;
   readonly appendSystemPromptFileText?: string;
@@ -2410,11 +2450,14 @@ export function makeClaudeQueryOptions(input: {
     // T3 names threads; a supplied title skips Claude's redundant naming request.
     ...(input.title === undefined ? {} : { title: input.title }),
     tools: claudeAgentSdkQueryToolsForSdk(selectedTools),
+    ...(input.permissionMode === "plan" ? { strictMcpConfig: true } : {}),
     permissionMode:
-      (launchArgPermissionMode as PermissionMode | null | undefined) ??
-      (launchArgSkipPermissions === null || launchArgSkipPermissions === "true"
-        ? "bypassPermissions"
-        : (input.permissionMode ?? "default")),
+      input.permissionMode === "plan"
+        ? "plan"
+        : ((launchArgPermissionMode as PermissionMode | null | undefined) ??
+          (launchArgSkipPermissions === null || launchArgSkipPermissions === "true"
+            ? "bypassPermissions"
+            : (input.permissionMode ?? "default"))),
     includePartialMessages: true,
     promptSuggestions: input.promptSuggestions === true,
     ...(compiledSelection.effort === undefined
@@ -2460,7 +2503,12 @@ export function makeClaudeQueryOptions(input: {
       append: [
         buildRuntimeInstructions({
           harness: "Claude Code",
-          runtimePolicy: { cwd: input.cwd, workspace: input.workspace },
+          runtimePolicy: {
+            cwd: input.cwd,
+            workspace: input.workspace,
+            interactionMode: input.permissionMode === "plan" ? "plan" : "default",
+          },
+          planSubmission: CLAUDE_PLAN_SUBMISSION,
         }) +
           (input.mcpServers === undefined
             ? ""
@@ -2473,9 +2521,10 @@ export function makeClaudeQueryOptions(input: {
         ...launchAppendSystemPrompt,
       ].join("\n\n"),
     },
-    ...(deviceInstructions || input.onStop !== undefined
+    ...(deviceInstructions || input.onStop !== undefined || input.onPlanTool !== undefined
       ? {
           hooks: {
+            ...(input.onPlanTool ? { PreToolUse: [{ hooks: [input.onPlanTool] }] } : {}),
             ...(deviceInstructions
               ? { SubagentStart: [{ hooks: [subagentDeviceInstructions] }] }
               : {}),
@@ -6085,6 +6134,48 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           return claudeRuntimeQueryPolicyForRuntimePolicy(
             turnInput.runtimePolicy,
             bypassCache.availability,
+          );
+        });
+        // Claude populates ExitPlanMode from its Markdown file in the provider's own plans directory.
+        const planDirectory = path.join(homePath, "plans");
+        const allowsPlanTool = Effect.fnUntraced(function* (
+          name: string,
+          input: unknown,
+          policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+        ) {
+          if (claudePlanToolAvailable(name, input)) return true;
+          if (
+            (name !== "Write" && name !== "Edit") ||
+            typeof input !== "object" ||
+            input === null ||
+            !("file_path" in input) ||
+            typeof input.file_path !== "string"
+          )
+            return false;
+          const target = input.file_path;
+          if (
+            path.extname(target) !== ".md" ||
+            path.normalize(target) !== target ||
+            path.dirname(target) !== planDirectory
+          )
+            return false;
+          const directory = yield* fileSystem.realPath(planDirectory).pipe(Effect.option);
+          if (Option.isNone(directory) || directory.value !== planDirectory) return false;
+          for (const root of [policy.cwd, ...(policy.workspace?.extraRoots ?? [])]) {
+            if (!root) continue;
+            const physical = yield* fileSystem.realPath(root).pipe(Effect.option);
+            if (Option.isNone(physical)) return false;
+            const relative = path.relative(physical.value, directory.value);
+            if (
+              relative !== ".." &&
+              !relative.startsWith(`..${path.sep}`) &&
+              !path.isAbsolute(relative)
+            )
+              return false;
+          }
+          return yield* fileSystem.lstat(target).pipe(
+            Effect.map((info) => info.type === "File" && Option.getOrUndefined(info.nlink) === 1n),
+            Effect.catch((error) => Effect.succeed(error.reason._tag === "NotFound")),
           );
         });
         const openedNativeThreads = yield* Ref.make(new Set<string>());
@@ -12677,6 +12768,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
           if (
             context.input.runtimePolicy.interactionMode === "plan" &&
+            !(yield* allowsPlanTool(toolName, toolInput, context.input.runtimePolicy))
+          ) {
+            return {
+              behavior: "deny",
+              message: CLAUDE_PLAN_DENIAL,
+              toolUseID: callbackOptions.toolUseID,
+            } satisfies PermissionResult;
+          }
+
+          if (
+            context.input.runtimePolicy.interactionMode === "plan" &&
             context.input.runtimePolicy.approvalPolicy === "never"
           ) {
             return {
@@ -13097,6 +13199,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const mcpOverrides = claudeMcpQueryOverrides({
             mcpSession,
             readOnlySandbox:
+              turnInput.runtimePolicy.interactionMode === "plan" ||
               sandboxPolicyKindForClaudeRuntimePolicy(turnInput.runtimePolicy) === "readOnly",
             ...(queryPolicy.allowedTools === undefined
               ? {}
@@ -13114,7 +13217,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             existing !== null &&
             existing.nativeThreadId === nativeThreadId &&
             !existing.stopping &&
-            isClaudeProviderContinuationTurn(turnInput)
+            isClaudeProviderContinuationTurn(turnInput) &&
+            (existing.openedPermissionMode === "plan") ===
+              (turnInput.runtimePolicy.interactionMode === "plan")
           ) {
             return existing;
           }
@@ -13247,9 +13352,38 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             // Delegated threads have no one typing, so they never ask for suggestions.
             promptSuggestions:
               !isDelegatedAppThread(turnInput.appThread) && (yield* promptSuggestionsEnabled),
-            ...(launchArgSettings === undefined
-              ? {}
-              : { sdkSettings: claudeSdkLaunchArgSettings(launchArgSettings) }),
+            ...(turnInput.runtimePolicy.interactionMode === "plan"
+              ? {
+                  sdkSettings: {
+                    ...(launchArgSettings && claudeSdkLaunchArgSettings(launchArgSettings)),
+                    plansDirectory: "",
+                  },
+                  onPlanTool: (event) =>
+                    runPromise(
+                      Effect.gen(function* () {
+                        if (
+                          event.hook_event_name === "PreToolUse" &&
+                          !(yield* allowsPlanTool(
+                            event.tool_name,
+                            event.tool_input,
+                            turnInput.runtimePolicy,
+                          ))
+                        ) {
+                          return {
+                            hookSpecificOutput: {
+                              hookEventName: "PreToolUse" as const,
+                              permissionDecision: "deny" as const,
+                              permissionDecisionReason: CLAUDE_PLAN_DENIAL,
+                            },
+                          };
+                        }
+                        return {};
+                      }),
+                    ),
+                }
+              : launchArgSettings === undefined
+                ? {}
+                : { sdkSettings: claudeSdkLaunchArgSettings(launchArgSettings) }),
             environment: claudeQueryEnvironment(
               adapterOptions.environment,
               turnInput.appThread,
@@ -13258,7 +13392,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 : undefined,
               shouldResume,
             ),
-            tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
+            tools:
+              turnInput.runtimePolicy.interactionMode === "plan"
+                ? [...CLAUDE_PLAN_READ_TOOLS, "Agent", "Write", "Edit"]
+                : (queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS),
             ...(mcpOverrides.allowedTools === undefined
               ? {}
               : { allowedTools: mcpOverrides.allowedTools }),

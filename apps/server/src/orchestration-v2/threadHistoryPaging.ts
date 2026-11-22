@@ -748,6 +748,9 @@ export function buildBoundedThreadProjection(input: {
       (plan) =>
         plan.status === "active" ||
         plan.id === latestTodoList?.id ||
+        (plan.kind === "proposed_plan" &&
+          plan.implementationThreadId !== undefined &&
+          plan.implementationThreadId !== threadId) ||
         visiblePlanIds.has(String(plan.id)),
     )
     .map((plan) =>

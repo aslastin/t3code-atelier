@@ -2234,6 +2234,9 @@ export const layerWsRpc = (
                                     ? {}
                                     : { messageId: input.initialMessage.messageId }),
                                   text: input.initialMessage.text,
+                                  ...(input.initialMessage.sourcePlanRef
+                                    ? { sourcePlanRef: input.initialMessage.sourcePlanRef }
+                                    : {}),
                                   attachments: input.initialMessage.attachments,
                                   ...(input.initialMessage.context === undefined
                                     ? {}

@@ -488,6 +488,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("hide fold running monitoring threads inbox sidebar shelf")],
   },
   {
+    id: "plan-mode",
+    title: msg("Plan mode"),
+    to: "/settings/labs",
+    searchTerms: ["/plan", "/default", "Shift+Tab"],
+  },
+  {
     id: "boring-sidebar",
     title: msg("Boring sidebar (group by project)"),
     to: "/settings/labs",

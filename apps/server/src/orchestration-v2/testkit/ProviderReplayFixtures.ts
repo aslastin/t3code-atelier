@@ -1,6 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import type { OrchestrationV2DomainEvent, ProviderReplayTranscript } from "@t3tools/contracts";
+import type {
+  OrchestrationV2DomainEvent,
+  ProviderDriverKind,
+  ProviderReplayTranscript,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -92,7 +96,7 @@ function isStreamingAssistantEvent(event: OrchestrationV2DomainEvent): boolean {
 
 export interface ReplayFixtureCase {
   readonly fixtureName: string;
-  readonly buildInput: () => OrchestratorFixtureInput;
+  readonly buildInput: (driver?: ProviderDriverKind) => OrchestratorFixtureInput;
   readonly driver: ProviderOrchestratorReplayVariant;
   readonly transformTranscript?: (transcript: ProviderReplayTranscript) => ProviderReplayTranscript;
   /** The instances the ingestor reads snapshots from, such as an endpoint behind a hub. */
@@ -119,11 +123,15 @@ const runFixtureProvider = Effect.fn("runOrchestratorReplayFixture")(function* <
 >(input: ReplayFixtureRun<Transcript, Error, WorkspaceError>) {
   const recordedTranscript = yield* readReplayFixtureTranscript(input.driver.transcriptFile);
   const rawTranscript = input.transformTranscript?.(recordedTranscript) ?? recordedTranscript;
+  const fixtureInput = input.buildInput(input.driver.driver);
   const replayTranscript = materializeReplayTranscriptRuntimeInstructions(
     transcriptEntriesThroughLabel(rawTranscript, input.driver.transcriptEntriesThroughLabel),
-    { driver: input.driver.driver, model: input.driver.modelSelection.model },
+    {
+      driver: input.driver.driver,
+      model: input.driver.modelSelection.model,
+      plan: fixtureInput.interactionMode === "plan",
+    },
   );
-  const fixtureInput = input.buildInput();
   const workspace = yield* checkpointWorkspace(input.fixtureName, fixtureInput.workspaceFiles);
   const transcript = yield* input.harness.decodeTranscript(
     input.materializeWorkspace === undefined

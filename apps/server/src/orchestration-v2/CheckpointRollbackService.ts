@@ -4,6 +4,7 @@ import {
   type CommandId,
   latestProviderTurnForAttempt,
   type OrchestrationV2DomainEvent,
+  pendingInteractionModeRunStatuses,
   ProviderThreadId,
   repositoryRewindCheckpoint,
   ThreadId,
@@ -453,9 +454,37 @@ export const layer: Layer.Layer<
                 }) as Event,
             );
           const events: Array<OrchestrationV2DomainEvent> = [];
-          // First, so a client that sees the runs rolled back already knows what was left.
-          if (input.requestId !== undefined && unrestorable.length > 0) {
-            const thread = yield* projections.getThread(input.threadId);
+          const reopenedImplementation = context.planChanges?.some(
+            (plan) =>
+              plan.kind === "proposed_plan" &&
+              plan.status === "active" &&
+              runsToRollback.some((run) => run.id === plan.lastRevertedImplementationRunId),
+          );
+          const reportUnrestored = input.requestId !== undefined && unrestorable.length > 0;
+          let thread =
+            reopenedImplementation || reportUnrestored
+              ? yield* projections.getThread(input.threadId)
+              : context.thread;
+          if (
+            reopenedImplementation &&
+            thread.interactionMode !== "plan" &&
+            !(yield* projections.getThreadRecords(thread.id, ["runs"], {
+              runStatuses: pendingInteractionModeRunStatuses,
+            })).runs.length
+          ) {
+            thread = { ...thread, interactionMode: "plan", updatedAt: now };
+            events.push(
+              yield* makeEvent({
+                type: "thread.interaction-mode-updated",
+                threadId: input.threadId,
+                providerInstanceId: thread.providerInstanceId,
+                occurredAt: now,
+                payload: thread,
+              }),
+            );
+          }
+          // Report unrestored repositories before the rolled-back runs reach the client.
+          if (reportUnrestored) {
             events.push(
               yield* makeEvent({
                 type: "thread.metadata-updated",
@@ -489,6 +518,18 @@ export const layer: Layer.Layer<
               },
             }),
           );
+          for (const plan of context.planChanges ?? []) {
+            events.push(
+              yield* makeEvent({
+                type: "plan.updated",
+                threadId: input.threadId,
+                ...(plan.runId ? { runId: plan.runId } : {}),
+                nodeId: plan.nodeId,
+                occurredAt: now,
+                payload: plan,
+              }),
+            );
+          }
           for (const staleCheckpoint of staleCheckpoints) {
             events.push(
               yield* makeEvent({

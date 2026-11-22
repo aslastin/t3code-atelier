@@ -905,6 +905,18 @@ export const AcpProviderCapabilitiesV2 = {
   },
 } satisfies OrchestrationV2ProviderCapabilities;
 
+function offersNativePlanOption(option: EffectAcpSchema.SessionConfigOption) {
+  return (
+    option.type === "select" &&
+    (option.category === "mode" || option.category === "collaboration_mode") &&
+    option.options.some((entry) =>
+      "value" in entry
+        ? isAcpPlanModeId(entry.value)
+        : entry.options.some((choice) => isAcpPlanModeId(choice.value)),
+    )
+  );
+}
+
 function canSwitchModelInSession(
   configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
   models: EffectAcpSchema.SessionModelState | null | undefined,
@@ -1641,6 +1653,7 @@ interface ActiveTextStream {
 }
 
 interface AcpNativeBuildConfiguration {
+  readonly provisional: boolean;
   readonly modeId?: string;
   readonly configOptions: ReadonlyArray<{ readonly id: string; readonly value: string }>;
 }
@@ -2231,7 +2244,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             return command === undefined ? [] : [command];
           });
         // Client terminals run with server privileges; apply turn policy and prior user approvals.
-        const clientPolicyGrants = makeAcpClientPolicyGrants();
+        const clientPolicyGrants = {
+          default: makeAcpClientPolicyGrants(),
+          plan: makeAcpClientPolicyGrants(),
+        };
         let latestRuntimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy =
           input.runtimePolicy;
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
@@ -2281,7 +2297,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           readonly error: EffectAcpErrors.AcpError;
         } | null>(null);
         const activeSessionSetup =
-          yield* Ref.make<AcpSessionRuntime.AcpSessionRuntimeStartResult | null>(null);
+          yield* SubscriptionRef.make<AcpSessionRuntime.AcpSessionRuntimeStartResult | null>(null);
         const setActiveSessionSetup = Effect.fnUntraced(function* (
           setup: AcpSessionRuntime.AcpSessionRuntimeStartResult,
         ) {
@@ -2300,7 +2316,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           rootForegroundWork = undefined;
           agentRequests.clear();
           nativeChildren.clear();
-          yield* Ref.set(activeSessionSetup, setup);
+          yield* SubscriptionRef.set(activeSessionSetup, setup);
         });
         const activeSelection = yield* Ref.make<ModelSelection | null>(null);
         const activeInteractionMode = yield* Ref.make<ProviderInteractionMode | null>(null);
@@ -3069,7 +3085,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               runId: context.input.runId,
               nodeId,
               kind: "proposed_plan",
-              status: "completed",
+              status: "active",
               markdown,
             },
           });
@@ -4409,6 +4425,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const previous = context.tools.get(incoming.toolCallId);
           const merged = mergeToolCallState(previous, incoming);
           const normalized = flavor.normalizeToolCall?.(merged) ?? merged;
+          const planMarkdown = flavor.extractProposedPlanMarkdown?.(normalized);
+          if (planMarkdown) yield* captureProposedPlan({ planMarkdown });
           const backgroundTaskId = flavor.extractBackgroundTaskId?.(normalized);
           const backgroundCommandTaskId =
             flavor.isBackgroundCommandTool?.(normalized) === true
@@ -4982,7 +5000,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const existing = plans.get(update.nativePlanId);
           if (update.kind === "removed" && existing === undefined) return;
           const now = yield* DateTime.now;
-          let planState = existing;
+          const revisedProposal =
+            update.kind === "markdown" &&
+            existing?.origin.runId !== context.input.runId &&
+            (existing?.latest?.kind !== "proposed_plan" ||
+              existing.latest.markdown !== update.markdown);
+          let planState = revisedProposal ? undefined : existing;
           if (planState === undefined) {
             const nativeItemId = `${context.nativeTurnId}:plan:${encodeURIComponent(update.nativePlanId)}`;
             planState = {
@@ -7060,11 +7083,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 notification.update.sessionUpdate === "config_option_update" ||
                 notification.update.sessionUpdate === "current_mode_update"
               ) {
+                // The agent can leave native Plan between two planning turns.
+                if ((yield* Ref.get(activeInteractionMode)) === "plan") {
+                  yield* Ref.set(activeInteractionMode, null);
+                }
                 yield* (
                   flavor.onSessionConfigurationUpdate?.(
                     yield* runtime.getConfigOptions,
                     yield* runtime.getModeState,
-                    (yield* Ref.get(activeSessionSetup))?.sessionSetupResult.models,
+                    (yield* SubscriptionRef.get(activeSessionSetup))?.sessionSetupResult.models,
                   ) ?? Effect.void
                 );
               }
@@ -7122,7 +7149,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const disposition = acpClientExecuteDisposition(policy);
             if (
               disposition === "allow" ||
-              (disposition === "ask" && clientPolicyGrants.allowsExecute(turnKey))
+              (disposition === "ask" &&
+                clientPolicyGrants[policy.interactionMode].allowsExecute(turnKey))
             ) {
               return Effect.void;
             }
@@ -7177,11 +7205,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           result: AcpSessionRuntime.AcpSessionRuntimeStartResult,
           provisionalBuildSnapshot: AcpNativeBuildConfiguration | undefined,
         ) {
-          const current = yield* Ref.get(activeSessionSetup);
+          const current = yield* SubscriptionRef.get(activeSessionSetup);
           if (current === null || current.sessionId !== result.sessionId) {
             return;
           }
-          yield* Ref.set(activeSessionSetup, result);
+          yield* SubscriptionRef.set(activeSessionSetup, result);
           // The selection was configured against the provisional setup's
           // options, so the next turn re-applies it against the real ones.
           yield* Ref.set(activeSelection, null);
@@ -7190,7 +7218,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           // provisional state; one saved by a deferred openSession
           // configuration already read the adopted options and stays.
           if (
-            provisionalBuildSnapshot !== undefined &&
+            provisionalBuildSnapshot?.provisional === true &&
             nativeBuildConfigurationBySessionId.get(result.sessionId) === provisionalBuildSnapshot
           ) {
             nativeBuildConfigurationBySessionId.delete(result.sessionId);
@@ -7264,7 +7292,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             if (writeTextFile !== undefined) {
               yield* targetRuntime.handleWriteTextFile((request) =>
                 clientPolicyContext.pipe(
-                  Effect.flatMap(({ policy }) => writeTextFile(request, policy.cwd)),
+                  Effect.flatMap(({ policy }) =>
+                    policy.interactionMode === "plan"
+                      ? denyClientRequest("fs/write_text_file", "deny")
+                      : writeTextFile(request, policy.cwd),
+                  ),
                 ),
               );
             }
@@ -7433,7 +7465,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   ? "accept"
                   : answered;
               if (decision === "accept" || decision === "acceptForSession") {
-                clientPolicyGrants.recordApproval({
+                clientPolicyGrants[latestRuntimePolicy.interactionMode].recordApproval({
                   toolKind: parsedPermission.kind,
                   scope: decision === "acceptForSession" ? "session" : "turn",
                   turnKey: String(context.providerTurnId),
@@ -7499,6 +7531,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   }),
                 );
                 if (Option.isNone(mcpApprovalDisposition)) return yield* Effect.never;
+                if (mcpApprovalDisposition.value === "deny") return { action: "decline" } as const;
                 if (mcpApprovalDisposition.value === "allow") {
                   return { action: "accept", content: {} } as const;
                 }
@@ -8051,7 +8084,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           )
             return;
           const option = findModelConfigOption(yield* runtime.getConfigOptions);
-          const models = (yield* Ref.get(activeSessionSetup))?.sessionSetupResult.models;
+          const models = (yield* SubscriptionRef.get(activeSessionSetup))?.sessionSetupResult
+            .models;
           const available =
             option?.type === "select"
               ? flattenSelectChoices(option.options).some((choice) => choice.value === model)
@@ -8067,11 +8101,43 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         });
 
         const configureSession = Effect.fnUntraced(function* (
-          startResult: AcpSessionRuntime.AcpSessionRuntimeStartResult,
+          initialSetup: AcpSessionRuntime.AcpSessionRuntimeStartResult,
           modelSelection: ModelSelection,
           runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
           unsetOptionDefaults: NonNullable<ModelSelection["options"]> = [],
         ) {
+          let startResult = initialSetup;
+          if (
+            runtimePolicy.interactionMode === "plan" &&
+            lateSessionSetup.openSessionConfigured &&
+            AcpSessionRuntime.isProvisionalSessionSetup(initialSetup.sessionSetupResult)
+          ) {
+            const adopted = yield* Stream.merge(
+              SubscriptionRef.changes(activeSessionSetup).pipe(
+                Stream.filter(
+                  (setup) =>
+                    setup !== null &&
+                    setup.sessionId === initialSetup.sessionId &&
+                    !AcpSessionRuntime.isProvisionalSessionSetup(setup.sessionSetupResult),
+                ),
+              ),
+              runtime.configOptionChanges.pipe(
+                Stream.filter((options) => options.some(offersNativePlanOption)),
+                Stream.map(() => initialSetup),
+              ),
+            ).pipe(
+              Stream.runHead,
+              Effect.timeoutOption(AcpSessionRuntime.defaultSessionLoadTimeout),
+              Effect.map(Option.flatten),
+            );
+            if (Option.isNone(adopted) || adopted.value === null) {
+              return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                driver: flavor.driver,
+                detail: "Timed out waiting for the agent's Plan mode configuration",
+              });
+            }
+            startResult = adopted.value;
+          }
           yield* Ref.set(activeSelection, null);
           yield* validateModelSelection(modelSelection);
           const requestedModel = flavor.resolveModelId?.(modelSelection) ?? modelSelection.model;
@@ -8125,7 +8191,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }
           if (appliedModel !== undefined) {
             const applied = appliedModel;
-            yield* Ref.update(activeSessionSetup, (setup) => {
+            yield* SubscriptionRef.update(activeSessionSetup, (setup) => {
               if (setup === null) {
                 return setup;
               }
@@ -8274,8 +8340,27 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               (option.category === "mode" || option.category === "collaboration_mode"),
           );
           if (runtimePolicy.interactionMode === "plan") {
+            const planMode = effectiveModeState?.availableModes.find((mode) =>
+              isAcpPlanModeId(mode.id),
+            );
+            const hasPlanOption = planSensitiveOptions.some(offersNativePlanOption);
+            if (planMode === undefined && !hasPlanOption) {
+              if (
+                !lateSessionSetup.openSessionConfigured &&
+                AcpSessionRuntime.isProvisionalSessionSetup(startResult.sessionSetupResult)
+              )
+                return null;
+              return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                driver: flavor.driver,
+                detail:
+                  "This agent does not offer a native Plan mode. Select Build or choose a provider that supports Plan.",
+              });
+            }
             if (!nativeBuildConfigurationBySessionId.has(startResult.sessionId)) {
               nativeBuildConfigurationBySessionId.set(startResult.sessionId, {
+                provisional:
+                  !lateSessionSetup.openSessionConfigured &&
+                  AcpSessionRuntime.isProvisionalSessionSetup(startResult.sessionSetupResult),
                 ...(effectiveModeState === undefined
                   ? {}
                   : { modeId: effectiveModeState.currentModeId }),
@@ -8285,9 +8370,6 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 })),
               });
             }
-            const planMode = effectiveModeState?.availableModes.find((mode) =>
-              isAcpPlanModeId(mode.id),
-            );
             if (planMode !== undefined && effectiveModeState?.currentModeId !== planMode.id) {
               yield* runtime.setMode(planMode.id);
             }
@@ -8339,19 +8421,20 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             flavor.onSessionConfigurationUpdate?.(
               yield* runtime.getConfigOptions,
               yield* runtime.getModeState,
-              (yield* Ref.get(activeSessionSetup))?.sessionSetupResult.models,
+              (yield* SubscriptionRef.get(activeSessionSetup))?.sessionSetupResult.models,
             ) ?? Effect.void
           );
+          return runtimePolicy.interactionMode;
         });
 
-        yield* configureSession(
+        const initialInteractionMode = yield* configureSession(
           started,
           input.modelSelection,
           input.runtimePolicy,
           started.sessionId !== input.initialNativeThreadId ? unsetOptionDefaults : [],
         );
         yield* Ref.set(activeSelection, input.modelSelection);
-        yield* Ref.set(activeInteractionMode, input.runtimePolicy.interactionMode);
+        yield* Ref.set(activeInteractionMode, initialInteractionMode);
         const createdAt = yield* DateTime.now;
         let providerSession: OrchestrationV2ProviderSession = {
           id: input.providerSessionId,
@@ -8368,7 +8451,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 capabilities.sessions.supportsModelSwitchInSession ||
                 canSwitchModelInSession(
                   yield* runtime.getConfigOptions,
-                  (yield* Ref.get(activeSessionSetup))?.sessionSetupResult.models,
+                  (yield* SubscriptionRef.get(activeSessionSetup))?.sessionSetupResult.models,
                 ),
             },
           },
@@ -8386,7 +8469,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }
           const supportsModelSwitchInSession = canSwitchModelInSession(
             yield* runtime.getConfigOptions,
-            (yield* Ref.get(activeSessionSetup))?.sessionSetupResult.models,
+            (yield* SubscriptionRef.get(activeSessionSetup))?.sessionSetupResult.models,
           );
           if (!supportsModelSwitchInSession) {
             return;
@@ -8900,7 +8983,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             });
           }
           if (!flavor.buildAttachmentPrompt) return yield* imageAttachmentBlocks(attachments);
-          const setup = yield* Ref.get(activeSessionSetup);
+          const setup = yield* SubscriptionRef.get(activeSessionSetup);
           return yield* flavor
             .buildAttachmentPrompt({
               text: messageText,
@@ -8963,7 +9046,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               ? {}
               : { previousState: previousInstructionState }),
           });
-          const sessionSetup = yield* Ref.get(activeSessionSetup);
+          const sessionSetup = yield* SubscriptionRef.get(activeSessionSetup);
           const runtimeInstructions = buildRuntimeInstructions({
             harness: flavor.runtimeHarness ?? driver,
             model: turnInput.modelSelection.model,
@@ -9006,7 +9089,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           yield* restartAcpRuntime(threadId);
           yield* Ref.set(runtimeRestartRequired, false);
           yield* Ref.set(activeSessionId, null);
-          yield* Ref.set(activeSessionSetup, null);
+          yield* SubscriptionRef.set(activeSessionSetup, null);
           yield* Ref.set(activeSelection, null);
           yield* Ref.set(activeInteractionMode, null);
           // A failed prompt may have been dropped, so the fresh runtime sends T3's notes again.
@@ -9298,7 +9381,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 configuredInteractionMode !== turnInput.runtimePolicy.interactionMode ||
                 (yield* Ref.get(configuredRuntimeMode)) !== turnInput.runtimePolicy.runtimeMode
               ) {
-                const currentSessionSetup = yield* Ref.get(activeSessionSetup);
+                const currentSessionSetup = yield* SubscriptionRef.get(activeSessionSetup);
                 if (currentSessionSetup === null) {
                   return yield* new ProviderAdapter.ProviderAdapterProtocolError({
                     driver,
@@ -9315,7 +9398,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               }
             }
             // Checked after activation: a loaded session advertises its own commands.
-            const compactionSetup = yield* Ref.get(activeSessionSetup);
+            const compactionSetup = yield* SubscriptionRef.get(activeSessionSetup);
             const sessionCommandNames =
               flavor.compactViaAdvertisedCommand === true && isCompactionMessage(turnInput.message)
                 ? yield* SubscriptionRef.changes(advertisedCommandNames).pipe(
@@ -9409,7 +9492,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               completed,
               itemOrdinals: new Map(),
               outgoingPrompt:
-                (yield* Ref.get(activeSessionSetup))?.initializeResult.protocolVersion === 2
+                (yield* SubscriptionRef.get(activeSessionSetup))?.initializeResult
+                  .protocolVersion === 2
                   ? promptParts?.prompt
                   : undefined,
               user: { current: null, nextSegment: 0, closedNamedSegments: new Map() },
@@ -9834,7 +9918,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             ? {}
             : {
                 getModelContextWindow: (selection) => {
-                  const session = Ref.getUnsafe(activeSessionSetup);
+                  const session = SubscriptionRef.getUnsafe(activeSessionSetup);
                   return session === null
                     ? undefined
                     : flavor.getModelContextWindow?.(selection, session);

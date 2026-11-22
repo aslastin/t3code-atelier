@@ -2731,54 +2731,56 @@ describe("CursorAdapterV2", () => {
     ),
   );
 
-  it.live("honors the user's Cursor CLI attribution preferences", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-attribution-" });
-      yield* fileSystem.makeDirectory(path.join(home, ".cursor"));
-      yield* fileSystem.writeFileString(
-        path.join(home, ".cursor", "cli-config.json"),
-        JSON.stringify({
-          attribution: { attributeCommitsToAgent: false, attributePRsToAgent: false },
-        }),
-      );
-      const backend = yield* fakeCursorBackend;
-      // CURSOR_CONFIG_DIR outranks an ambient XDG_CONFIG_HOME; the home overrides keep the real ~/.cursor out.
-      yield* scopedProcessEnv({
-        HOME: home,
-        USERPROFILE: home,
-        CURSOR_CONFIG_DIR: path.join(home, ".cursor"),
-      });
-      const agent = yield* Effect.acquireRelease(
-        Effect.promise(() =>
-          Agent.create(
-            makeCursorAgentOptions({
-              apiKey: "synthetic-cursor-api-key",
-              modelSelection: {
-                instanceId: ProviderInstanceId.make("cursor"),
-                model: "composer-2",
-              },
-              runtimePolicy: {
-                runtimeMode: "full-access",
-                interactionMode: "default",
-                cwd: home,
-              },
-              threadId: ThreadId.make("cursor-attribution-thread"),
-              mcpSession: undefined,
-              platform: "linux",
-            }),
+  it.live.each(["default", "plan"] as const)(
+    "opens the SDK with Cursor CLI attribution preferences in %s",
+    (interactionMode) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-attribution-" });
+        yield* fileSystem.makeDirectory(path.join(home, ".cursor"));
+        yield* fileSystem.writeFileString(
+          path.join(home, ".cursor", "cli-config.json"),
+          JSON.stringify({
+            attribution: { attributeCommitsToAgent: false, attributePRsToAgent: false },
+          }),
+        );
+        const backend = yield* fakeCursorBackend;
+        // CURSOR_CONFIG_DIR outranks an ambient XDG_CONFIG_HOME; the home overrides keep the real ~/.cursor out.
+        yield* scopedProcessEnv({
+          HOME: home,
+          USERPROFILE: home,
+          CURSOR_CONFIG_DIR: path.join(home, ".cursor"),
+        });
+        const agent = yield* Effect.acquireRelease(
+          Effect.promise(() =>
+            Agent.create(
+              makeCursorAgentOptions({
+                apiKey: "synthetic-cursor-api-key",
+                modelSelection: {
+                  instanceId: ProviderInstanceId.make("cursor"),
+                  model: "composer-2",
+                },
+                runtimePolicy: {
+                  runtimeMode: "full-access",
+                  interactionMode,
+                  cwd: home,
+                },
+                threadId: ThreadId.make("cursor-attribution-thread"),
+                mcpSession: undefined,
+                platform: "linux",
+              }),
+            ),
           ),
-        ),
-        (agent) => Effect.sync(() => agent.close()),
-      );
-      yield* Effect.promise(() => agent.send("Commit hello.txt."));
+          (agent) => Effect.sync(() => agent.close()),
+        );
+        yield* Effect.promise(() => agent.send("Describe hello.txt."));
 
-      assert.deepEqual(yield* Deferred.await(backend.requestContext), {
-        commitAttributionMessage: undefined,
-        prAttributionMessage: undefined,
-      });
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+        assert.deepEqual(yield* Deferred.await(backend.requestContext), {
+          commitAttributionMessage: undefined,
+          prAttributionMessage: undefined,
+        });
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it.live("opens a model added to the account after its workspace already ran an agent", () =>
@@ -3039,6 +3041,14 @@ describe("CursorAdapterV2", () => {
         runtimeMode === "full-access",
       );
     }
+    const planning = makeCursorAgentOptions({
+      ...input,
+      runtimePolicy: { ...policy, runtimeMode: "full-access", interactionMode: "plan" },
+    });
+    assert.isDefined(planning.tools);
+    assert.include(planning.tools ?? [], "read");
+    for (const tool of ["edit", "delete", "shell", "mcp", "task"])
+      assert.notInclude(planning.tools ?? [], tool);
     const unrestrictedOverrides = makeCursorAgentOptions({
       ...input,
       runtimePolicy: {

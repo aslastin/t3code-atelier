@@ -270,6 +270,8 @@ it.effect.each([
   ["acts_as_caller", archivedBackground, {}, "parent_not_active"],
   ["acts_as_caller", unknownOwnerBackground, {}, "parent_not_active"],
 
+  ["writes", plan, {}, "capability_denied"],
+  ["writes_with_capability", plan, {}, "capability_denied"],
   ["writes", supervised, {}, "ran"],
   ["writes", ended, {}, "parent_not_active"],
   ["writes", background, {}, "ran"],
@@ -308,7 +310,7 @@ it.effect.each([
 
   ["starts_threads", supervised, {}, "approval-required/default"],
   ["starts_threads", supervised, { runtimeMode: "full-access" }, "runtime_mode_escalation_denied"],
-  ["starts_threads", plan, {}, "approval-required/plan"],
+  ["starts_threads", plan, {}, "capability_denied"],
   ["starts_threads", plan, { interactionMode: "default" }, "interaction_mode_escalation_denied"],
   ["starts_threads", fullAccess, { runtimeMode: "auto", interactionMode: "plan" }, "auto/plan"],
   ["starts_threads", ended, {}, "parent_not_active"],
@@ -429,7 +431,7 @@ it.effect.each([
     { environmentId: box, interactionMode: "default" },
     "interaction_mode_escalation_denied",
   ],
-  ["starts_threads", plan, { environmentId: box }, "starts_threads in environment-box"],
+  ["starts_threads", plan, { environmentId: box }, "capability_denied"],
   ["writes_environment", supervised, { environmentId: box }, "capability_denied"],
   [
     "writes_environment",

@@ -32,26 +32,32 @@ const handlers = {
       return yield* service.capabilities(scope, input);
     }),
   ),
-  delegate_task: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const scope = yield* McpInvocationContext.McpInvocationContext;
-      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.delegateTask(scope, input);
-    }),
+  delegate_task: McpToolAccess.actsAsCaller(
+    (input) =>
+      Effect.gen(function* () {
+        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        return yield* service.delegateTask(scope, input);
+      }),
+    { availableInPlan: true },
   ),
-  task_status: McpToolAccess.actsAsCaller(({ taskId }) =>
-    Effect.gen(function* () {
-      const scope = yield* McpInvocationContext.McpInvocationContext;
-      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.taskStatus(scope, taskId);
-    }),
+  task_status: McpToolAccess.actsAsCaller(
+    ({ taskId }) =>
+      Effect.gen(function* () {
+        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        return yield* service.taskStatus(scope, taskId);
+      }),
+    { availableInPlan: true },
   ),
-  task_cancel: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const scope = yield* McpInvocationContext.McpInvocationContext;
-      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.cancelTask(scope, input);
-    }),
+  task_cancel: McpToolAccess.actsAsCaller(
+    (input) =>
+      Effect.gen(function* () {
+        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        return yield* service.cancelTask(scope, input);
+      }),
+    { availableInPlan: true },
   ),
   t3_workflow_stop: McpToolAccess.writesThreads(
     (input) => [input.threadId],
@@ -149,12 +155,14 @@ const handlers = {
       return yield* service.deleteScheduledTask(scope, input);
     }),
   ),
-  request_secret: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const scope = yield* McpInvocationContext.McpInvocationContext;
-      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.requestSecret(scope, input);
-    }),
+  request_secret: McpToolAccess.actsAsCaller(
+    (input) =>
+      Effect.gen(function* () {
+        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        return yield* service.requestSecret(scope, input);
+      }),
+    { availableInPlan: true },
   ),
   create_threads: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {

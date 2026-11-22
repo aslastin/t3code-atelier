@@ -74,8 +74,10 @@ const cancelBackgroundOnlyTask = (
   {
     cancelAt = "settled",
     remote = false,
+    interactionMode = "default",
   }: {
     readonly remote?: boolean;
+    readonly interactionMode?: "default" | "plan";
     readonly cancelAt?:
       | "settled"
       | "checkpoint"
@@ -236,7 +238,11 @@ const cancelBackgroundOnlyTask = (
             }),
             Layer.mock(ProjectService.ProjectService)({}),
             Layer.mock(SecretRequests.SecretRequests)({}),
-            Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+            Layer.mock(RemoteDelegation.RemoteDelegation)({
+              runStatus: () => Effect.succeed(null),
+              cancel: (_scope, task) =>
+                Effect.succeed({ taskId: task.id, status: "cancel_requested" }),
+            }),
             ServerSettings.layerTest(),
             Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
             NodeServices.layer,
@@ -277,7 +283,7 @@ const cancelBackgroundOnlyTask = (
           title: "Parent",
           modelSelection,
           runtimeMode: "full-access",
-          interactionMode: "default",
+          interactionMode,
           branch: null,
           worktreePath: cwd,
           createdBy: "user",
@@ -309,7 +315,7 @@ const cancelBackgroundOnlyTask = (
           task: "Review the change",
           modelSelection,
           runtimeMode: "full-access",
-          interactionMode: "default",
+          interactionMode,
           completionWake: "always",
           createdBy: "agent",
           creationSource: "mcp",
@@ -605,6 +611,28 @@ const cancelBackgroundOnlyTask = (
           assert.isUndefined(after?.cancelledRunId);
           return undefined;
         }
+        if (remote && interactionMode === "plan") {
+          const remoteTask = () =>
+            orchestrator
+              .getThreadProjection(task.childThreadId!)
+              .pipe(
+                Effect.map((projection) =>
+                  projection.subagents.find((entry) => entry.remoteChild !== undefined)!,
+                ),
+              );
+          const childScope = {
+            ...scope,
+            thread: { ...scope.thread!, threadId: task.childThreadId! },
+          };
+          const direct = yield* service
+            .cancelTask(childScope, { taskId: (yield* remoteTask()).id })
+            .pipe(Effect.flip);
+          assert.equal(direct.code, "capability_denied");
+          yield* service.cancelTask(scope, { taskId: task.id });
+          assert.isNull((yield* remoteTask()).result);
+          assert.equal((yield* parentTask)?.cancelledRunId, child.turn.runId);
+          return undefined;
+        }
         // Settling the task ends the async question it left, after its own row.
         const settled = yield* watch(
           (event) =>
@@ -722,6 +750,10 @@ it.effect("a refused descendant stop does not settle or dispose its parent task"
 
 it.effect("task_cancel stops a remote descendant without reacquiring its parent lock", () =>
   cancelBackgroundOnlyTask("command", { remote: true }),
+);
+
+it.effect("a Plan caller can cancel local research without stopping a remote descendant", () =>
+  cancelBackgroundOnlyTask("command", { remote: true, interactionMode: "plan" }),
 );
 
 it.effect("a native background subagent delegates after its parent's run completes", () =>

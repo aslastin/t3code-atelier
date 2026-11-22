@@ -73,10 +73,12 @@ const supportedRuntimeModesByInstance = new Map<ProviderInstanceId, ReadonlyArra
   [grokInstanceId, ["approval-required", "auto", "full-access"]],
   [antigravityInstanceId, ["approval-required", "auto-accept-edits", "full-access"]],
 ]);
+const missingInstanceId = ProviderInstanceId.make("unavailable");
 const providerInstanceFor = (instanceId: ProviderInstanceId) =>
   ({
     snapshot: {
       getSnapshot: Effect.succeed({
+        showInteractionModeToggle: instanceId !== antigravityInstanceId,
         supportedRuntimeModes: supportedRuntimeModesByInstance.get(instanceId),
       } as ServerProvider),
     },
@@ -105,7 +107,10 @@ const layerWithPolicy = (
     Layer.provide(layerWorkspaceFolders),
     Layer.provide(
       Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
-        getInstance: (instanceId) => Effect.succeed(providerInstanceFor(instanceId)),
+        getInstance: (instanceId) =>
+          Effect.succeed(
+            instanceId === missingInstanceId ? undefined : providerInstanceFor(instanceId),
+          ),
         listInstances: Effect.succeed([]),
         listUnavailable: Effect.succeed([]),
         streamChanges: Stream.empty,
@@ -180,6 +185,23 @@ it.layer(layerTest)("RuntimePolicyV2", (it) => {
         toolCall: { toolCallId: "command-1", title: "Run command", kind: "execute" as const },
         options: [{ optionId: "allow", name: "Allow", kind: "allow_once" as const }],
       };
+      const plan = yield* Effect.result(
+        policy.resolve({
+          thread: { ...makeThread({ now, worktreePath: null }), interactionMode: "plan" },
+          modelSelection: { instanceId: antigravityInstanceId, model: "test-model" },
+        }),
+      );
+      assert.equal(plan._tag, "Failure");
+      const unavailable = yield* Effect.result(
+        policy.resolve({
+          thread: { ...makeThread({ now, worktreePath: null }), interactionMode: "plan" },
+          modelSelection: {
+            instanceId: missingInstanceId,
+            model: "test-model",
+          },
+        }),
+      );
+      assert.equal(unavailable._tag, "Failure");
       const auto = yield* resolve("auto");
       assert.equal(auto.runtimeMode, "approval-required");
       assert.equal(acpPermissionDisposition(auto, request), "ask");

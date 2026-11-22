@@ -26,6 +26,8 @@ describe("selectThreadRelationshipShells", () => {
       shell("subagent-child"),
       shell("workflow-member"),
       shell("transfer-source"),
+      shell("implementation"),
+      shell("discussion"),
       shell("unrelated"),
       shell("grandchild", "child"),
     ];
@@ -38,10 +40,12 @@ describe("selectThreadRelationshipShells", () => {
         },
         { childThreadId: null },
       ],
+      plans: [{ kind: "proposed_plan", implementationThreadId: "implementation" }],
+      runs: [{ ordinal: 1, sourcePlanRef: { threadId: "discussion" } }],
       contextTransfers: [{ sourceThreadId: "transfer-source", targetThreadId: "current" }],
     } as unknown as Pick<
       OrchestrationV2ThreadProjection,
-      "thread" | "subagents" | "contextTransfers"
+      "thread" | "subagents" | "contextTransfers" | "plans" | "runs"
     >;
 
     expect(
@@ -53,6 +57,8 @@ describe("selectThreadRelationshipShells", () => {
       "subagent-child",
       "workflow-member",
       "transfer-source",
+      "implementation",
+      "discussion",
     ]);
   });
 

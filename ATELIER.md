@@ -23,6 +23,30 @@ appears in the app version as `+atelier.<N>`.
    create, rename, reorder, and collapse them, drag threads in and out, and start a new thread in
    a topic. A collapsed topic shows a dot with its most urgent thread status. Agents can file
    threads under a topic too.
+3. **[Plan mode](#plan-mode).** Refine a proposal, then implement it in the current thread or a new thread in the same checkout.
+
+### Plan mode
+
+Enable **Settings → Labs → Plan mode** to plan with a supported provider. Select **Plan** and describe
+the task. The agent proposes a plan or asks for a decision it needs. Use **Refine** to revise
+the proposal, then **Implement** to build it in the current thread. **Implement in a new thread**
+starts a fresh conversation in the same checkout with only the final plan. Both actions send the
+full Markdown and keep the selected permissions. **Plan implementations** in the right panel
+keeps the links to threads started from earlier revisions. In each implementation thread,
+**Plan discussion** links back to the original conversation. See the [composer guide](./docs/user/composer.md#plan-mode).
+
+Plan keeps project files read-only for the agent and its research subagents, including in
+Auto and Full access. A local T3 research task inherits Plan and shares the checkout.
+The provider controls its native tools and T3 checks its own MCP calls. Claude can write
+its proposal to its own plans directory. Third-party ACP agents must honor their native
+Plan mode for operations they execute outside the ACP client.
+
+Local tests with Codex Luna and Claude Haiku covered proposing a plan, asking for missing
+information, and answering directly in Build. The web client was tested with Codex for
+refinement and implementation in the current thread, and with Replay for implementation in a new
+thread. Mobile coverage is limited to local tests of mode selection and queued messages. The
+desktop-to-mobile handoff remains unverified on iOS and Android. **Agent device access** is
+optional for acceptance.
 
 ## Build the macOS app
 

@@ -242,6 +242,34 @@ export function useSideChats(ref: ScopedThreadRef) {
 
 const NO_LINKED_ENVIRONMENTS: ReadonlyMap<EnvironmentId, string> = new Map();
 
+export function usePlanImplementationLinks(
+  environmentId: EnvironmentId | undefined,
+  threadIds: ReadonlyArray<ThreadId>,
+) {
+  const m = useMessages();
+  const refs =
+    environmentId === undefined ? [] : threadIds.map((id) => scopeThreadRef(environmentId, id));
+  const titles = useAtomValue(
+    refs.length
+      ? threadLinkTitlesAtom(JSON.stringify(refs.map(threadKey)))
+      : EMPTY_THREAD_LINK_TITLES_ATOM,
+  );
+  return refs.flatMap((ref) => {
+    const title = titles.get(threadKey(ref));
+    return title === undefined
+      ? []
+      : [
+          {
+            ref,
+            title:
+              typeof title === "string"
+                ? title
+                : m(msg("Thread", { $context: "fallback title of a linked thread" })),
+          },
+        ];
+  });
+}
+
 /** `linked` names the machines `environmentId` links to, whose threads open read-only. */
 export function useLiveThreadLinkLabels(
   markdown: string,

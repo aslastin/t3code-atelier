@@ -1,3 +1,4 @@
+import type { ProposedPlan } from "@t3tools/client-runtime/operations";
 import { ChildThreadApprovals } from "./ChildThreadApprovals";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { useOpenThreadInspector } from "./thread-inspector-navigation";
@@ -278,6 +279,7 @@ export interface ThreadDetailScreenProps {
   readonly connectionStateLabel: EnvironmentConnectionPhase;
   readonly historyControls?: ThreadFeedHistoryControls;
   readonly activeThreadBusy: boolean;
+  readonly pendingTurn?: boolean | undefined;
   readonly canStopThread: boolean;
   readonly queuedRunEdit: QueuedRunEdit | null;
   readonly composerDraftKey: string | null;
@@ -297,6 +299,9 @@ export interface ThreadDetailScreenProps {
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly onOpenConnectionEditor: () => void;
+  readonly proposedPlan?: ProposedPlan | undefined;
+  readonly onChangeInteractionMode?: ((mode: "default" | "plan") => void) | undefined;
+  readonly onImplementPlan?: ((newThread: boolean) => void) | undefined;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onPickDraftMedia: () => Promise<void>;
   readonly onPickDraftFiles: () => Promise<void>;
@@ -1951,6 +1956,7 @@ function ThreadDetailBody(
                         serverConfig={props.serverConfig}
                         queueCount={props.selectedThreadQueueCount}
                         activeThreadBusy={props.activeThreadBusy}
+                        pendingTurn={props.pendingTurn}
                         redirectsApproval={
                           props.activePendingApprovals.length > 0 &&
                           props.activePendingUserInput === null
@@ -1987,6 +1993,9 @@ function ThreadDetailBody(
                               }
                         }
                         bottomInset={composerBottomInset}
+                        onChangeInteractionMode={props.onChangeInteractionMode}
+                        proposedPlan={props.proposedPlan}
+                        onImplementPlan={props.onImplementPlan}
                         onChangeDraftMessage={props.onChangeDraftMessage}
                         onPickDraftMedia={props.onPickDraftMedia}
                         onPickDraftFiles={props.onPickDraftFiles}

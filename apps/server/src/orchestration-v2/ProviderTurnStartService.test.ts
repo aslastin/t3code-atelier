@@ -25,6 +25,7 @@ import {
   ScheduledTaskId,
   ThreadId,
   TurnItemId,
+  PlanId,
   ProjectId,
   EnvironmentId,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
@@ -457,6 +458,7 @@ it.each([
 
 function makeLocalCommandHarness(input: {
   readonly text: string;
+  readonly sourcePlanRef?: OrchestrationV2ThreadProjection["runs"][number]["sourcePlanRef"];
   readonly manualContinuation?: boolean;
   readonly nativeResumeUnsupported?: boolean;
   readonly steeringRestart?: boolean;
@@ -465,6 +467,7 @@ function makeLocalCommandHarness(input: {
   readonly exposesNativeTurnId?: boolean;
   readonly goalDriver?: "opencode" | "antigravity";
   readonly worktreePath?: string;
+  readonly checkedOutBranch?: string;
   readonly worktreesDir?: string;
   readonly workspaceRoot?: string;
   readonly gitWorkflow?: GitWorkflow.GitWorkflowService["Service"];
@@ -526,6 +529,7 @@ function makeLocalCommandHarness(input: {
   const checkpointScopeId = CheckpointScopeId.make("scope-native-account-command");
   const messageId = MessageId.make("message-native-account-command");
   const run: OrchestrationV2ThreadProjection["runs"][number] = {
+    ...(input.sourcePlanRef ? { sourcePlanRef: input.sourcePlanRef } : {}),
     ...(input.manualContinuation ? { manualContinuationOfRunId: RunId.make("stopped-run") } : {}),
     id: runId,
     threadId,
@@ -582,6 +586,7 @@ function makeLocalCommandHarness(input: {
       id: threadId,
       activeProviderThreadId: providerThreadId,
       projectId: ProjectId.make("project-native-account-command"),
+      runtimeMode: "full-access",
       branch: input.worktreePath === undefined ? null : "feature/restore",
       worktreePath: input.worktreePath ?? null,
       lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
@@ -1243,7 +1248,7 @@ function makeLocalCommandHarness(input: {
         ),
   );
   const writeIfRunCurrent = vi.fn<EventSink.EventSinkV2["Service"]["writeIfRunCurrent"]>(
-    ({ events: incoming, activeAttemptId, expectedStatus }) =>
+    ({ events: incoming, activeAttemptId, expectedStatus, expectedPlanContext }) =>
       "writeFailure" in input
         ? Effect.fail(
             new EventSink.EventSinkWriteError({
@@ -1257,6 +1262,13 @@ function makeLocalCommandHarness(input: {
               current !== undefined &&
               current.activeAttemptId === activeAttemptId &&
               current.status === expectedStatus;
+            if (
+              committed &&
+              expectedPlanContext &&
+              expectedPlanContext.runtimeMode !== projection.thread.runtimeMode
+            ) {
+              return { committed: false, planContextChanged: true, storedEvents: [] };
+            }
             if (committed) {
               for (const event of incoming) {
                 expect(isDomainEvent(event)).toBe(true);
@@ -1356,6 +1368,7 @@ function makeLocalCommandHarness(input: {
           : Layer.succeed(FileSystem.FileSystem, input.fileSystem),
         input.gitWorkflow === undefined
           ? Layer.mock(GitWorkflow.GitWorkflowService)({
+              currentBranch: () => Effect.succeed(input.checkedOutBranch ?? "feature/restore"),
               pruneWorktrees: () => Effect.void,
               listLocalBranchNames: () => Effect.succeed(["feature/restore"]),
               createWorktree,
@@ -2248,6 +2261,32 @@ it("finds abandoned turns in a long history reading each record a bounded number
   expect(reads).toBeLessThanOrEqual(4 * records);
 });
 
+effectIt.effect(
+  "asks the provider to plan the submitted task and keeps the user's original words in history",
+  () =>
+    Effect.gen(function* () {
+      const text = "Ask an agent to display the time with Python";
+      const harness = makeLocalCommandHarness({
+        text,
+        previousTurn: { runStatus: "completed", turnStatus: "completed" },
+      });
+      harness.resolveRuntimePolicy.mockReturnValue(
+        Effect.succeed({
+          interactionMode: "plan",
+          runtimeMode: "approval-required",
+          cwd: null,
+        } as never),
+      );
+      yield* harness.start;
+      const delivered = harness.startRootRun.mock.calls[0]?.[0].message.text;
+      expect(delivered).toContain(text);
+      expect(delivered).toContain("<proposed_plan>");
+      expect(harness.projection().messages.find((message) => message.text === text)?.text).toBe(
+        text,
+      );
+    }),
+);
+
 effectIt.effect("sends new steering text when restarting a manual continuation", () =>
   Effect.gen(function* () {
     const harness = makeLocalCommandHarness({
@@ -3075,6 +3114,75 @@ effectIt.effect("starts another provider in the same checkout while a turn is pe
     yield* Deferred.succeed(releaseTurn, undefined);
     yield* Fiber.join(pending);
   }),
+);
+
+effectIt.effect(
+  "checks the confirmed checkout on initial implementation and allows a later steering restart",
+  () =>
+    Effect.gen(function* () {
+      const input = {
+        text: "Implement this plan",
+        worktreePath: "/checkout",
+        failReadsAfterRunning: true,
+        sourcePlanRef: {
+          threadId: ThreadId.make("thread-native-account-command"),
+          planId: PlanId.make("confirmed-plan"),
+          expectedSource: {
+            projectId: ProjectId.make("project-native-account-command"),
+            runtimeMode: "full-access",
+            branch: "original-branch",
+            worktreePath: "/checkout",
+          },
+          implementationRuntimeMode: "full-access",
+        },
+      } as const;
+      const harness = makeLocalCommandHarness(input);
+      yield* harness.start;
+      expect(harness.open).not.toHaveBeenCalled();
+      expect(harness.startRootRun).not.toHaveBeenCalled();
+      expect(harness.projection().turnItems).toMatchObject([
+        {
+          type: "error",
+          failure: {
+            message: "The implementation checkout or access mode changed before the turn started.",
+          },
+        },
+      ]);
+      const confirmed = {
+        ...input,
+        sourcePlanRef: {
+          ...input.sourcePlanRef,
+          expectedSource: { ...input.sourcePlanRef.expectedSource, branch: "feature/restore" },
+        },
+      };
+      const switched = makeLocalCommandHarness({ ...confirmed, checkedOutBranch: "other-work" });
+      yield* switched.start;
+      expect(switched.startRootRun).not.toHaveBeenCalled();
+      expect(switched.projection().runs.at(-1)?.status).toBe("failed");
+      const legacyRef = {
+        threadId: input.sourcePlanRef.threadId,
+        planId: input.sourcePlanRef.planId,
+      };
+      for (const sourcePlanRef of [confirmed.sourcePlanRef, legacyRef]) {
+        const opening = makeLocalCommandHarness({ ...confirmed, sourcePlanRef });
+        const open = opening.open.getMockImplementation()!;
+        opening.open.mockImplementationOnce(() => {
+          const snapshot = opening.projection();
+          opening.setProjection({
+            ...snapshot,
+            thread: { ...snapshot.thread, runtimeMode: "approval-required" },
+          });
+          return open();
+        });
+        yield* opening.start;
+        expect(opening.startRootRun).not.toHaveBeenCalled();
+        expect(opening.projection().runs.at(-1)?.status).toBe("failed");
+      }
+
+      const restarted = makeLocalCommandHarness({ ...input, steeringRestart: true });
+      yield* restarted.start;
+      expect(restarted.startRootRun).toHaveBeenCalledOnce();
+    }),
 );
 
 effectIt.effect("fails a starting run when its recovery state cannot be read", () =>

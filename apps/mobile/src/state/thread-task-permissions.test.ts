@@ -253,6 +253,7 @@ import { abortComposerDraftOperations } from "./composerDraftOperations";
 const NO_SIDE_CHATS = { startSideChat: async () => false };
 
 beforeEach(() => {
+  state.thread.interactionMode = "default";
   state.grantedEnvironments = new Set(["primary"]);
   state.connectionState = "connected";
   state.draft = {
@@ -339,14 +340,18 @@ describe("mobile task permissions", () => {
   it("keeps an armed fresh session for the message after an approval redirect", async () => {
     state.grantedEnvironments.add("secondary");
     state.freshPending = true;
+    state.thread.interactionMode = "plan";
     const composer = useThreadComposerState(NO_SIDE_CHATS);
+    expect(composer.interactionMode).toBe("plan");
     expect(await composer.onSendMessage(undefined, async () => true)).toBe("message");
     expect(state.enqueue).toHaveBeenLastCalledWith(
       expect.not.objectContaining({ freshContext: true }),
     );
     expect(state.setFreshPending).not.toHaveBeenCalled();
     expect(await composer.onSendMessage()).toBe("message");
-    expect(state.enqueue).toHaveBeenLastCalledWith(expect.objectContaining({ freshContext: true }));
+    expect(state.enqueue).toHaveBeenLastCalledWith(
+      expect.objectContaining({ freshContext: true, interactionMode: "plan" }),
+    );
     expect(state.setFreshPending).toHaveBeenCalledWith("secondary:thread", false);
   });
 

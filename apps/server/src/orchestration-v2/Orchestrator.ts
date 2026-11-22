@@ -4,6 +4,7 @@ import type {
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
   OrchestrationV2ThreadHistoryPage,
+  PlanId,
   ProjectId,
 } from "@t3tools/contracts";
 import {
@@ -15,6 +16,7 @@ import {
 } from "@t3tools/shared/orchestrationV2ThreadError";
 import { threadIssueKeysEqual } from "@t3tools/contracts";
 import { canonicalizeGitCafePullRequestUrl } from "@t3tools/source-control-definitions/registry";
+import { failedUnsentPlan } from "@t3tools/shared/orchestrationV2ManualContinuation";
 import { threadPullRequestsOf } from "../sourceControl/threadPullRequests.ts";
 import {
   normalizeThreadPullRequestKey,
@@ -29,6 +31,8 @@ import {
   type GuestMessageId,
   isCompactionCommandMessage,
   isOrchestrationV2WorkActive,
+  pendingInteractionModeRunStatuses,
+  matchesPlanImplementationContext,
   isProviderNativeSubagentThread,
   MessageId,
   type NodeId,
@@ -83,6 +87,7 @@ import {
   TrimmedNonEmptyString,
   managedRuntimeModeCeilingMessage,
 } from "@t3tools/contracts";
+import { buildPlanImplementationPrompt } from "@t3tools/shared/proposedPlanText";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
@@ -1651,6 +1656,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const threadForkService = yield* ThreadForkServiceV2;
   const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
   const messageIntake = yield* KeyedLock.make<ThreadId>();
+  const planImplementation = yield* KeyedLock.make<PlanId>();
   // Read once: the policy is fixed for the server's life, and dispatch takes it as an input.
   const { managedPolicy } = serverSettings;
   const runtimeModeCeiling: RuntimeModeCeiling | undefined =
@@ -4331,6 +4337,36 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     return decided.success;
   });
 
+  const implementationLinkEvent = Effect.fn("Orchestrator.implementationLinkEvent")(function* (
+    command: Extract<
+      OrchestrationV2ServerCommand,
+      { type: "thread.archive" | "thread.unarchive" | "thread.delete" }
+    >,
+    ref: OrchestrationV2Run["sourcePlanRef"],
+    now: DateTime.Utc,
+  ) {
+    if (!ref || ref.threadId === command.threadId) return;
+    const source = yield* projectionStore
+      .getPlan(ref.threadId, ref.planId)
+      .pipe(mapDispatchError(command));
+    if (source?.kind !== "proposed_plan" || source.status !== "completed") return;
+    const { implementationThreadId, ...plan } = source;
+    const restore = command.type === "thread.unarchive";
+    if (
+      restore ? implementationThreadId !== undefined : implementationThreadId !== command.threadId
+    )
+      return;
+    return yield* makeEvent<Extract<OrchestrationV2DomainEvent, { type: "plan.updated" }>>(
+      command,
+      {
+        type: "plan.updated",
+        threadId: ref.threadId,
+        occurredAt: now,
+        payload: restore ? { ...plan, implementationThreadId: command.threadId } : plan,
+      },
+    );
+  });
+
   const dispatchThreadMutation = Effect.fn("orchestrationV2.dispatch.threadMutation")(function* (
     command: Extract<
       OrchestrationV2ServerCommand,
@@ -4368,7 +4404,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     >,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
-  ) {
+  ): Effect.fn.Return<void, OrchestratorV2Error> {
     const thread = yield* projectionStore.getThread(command.threadId).pipe(
       Effect.mapError(
         (cause) =>
@@ -4378,6 +4414,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }),
       ),
     );
+    if (
+      command.type === "thread.interaction-mode.set" &&
+      thread.interactionMode !== command.interactionMode
+    ) {
+      const pending = yield* projectionStore
+        .getThreadRecords(thread.id, ["runs"], {
+          runStatuses: pendingInteractionModeRunStatuses,
+        })
+        .pipe(mapDispatchError(command));
+      if (pending.runs.length > 0) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Finish or cancel pending turns before changing the thread mode.",
+        });
+      }
+    }
     if (thread.deletedAt !== null) {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
@@ -5704,6 +5757,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         now,
         cancelQueuedDelivery: false,
       });
+    }
+    if (command.type === "thread.archive" || command.type === "thread.unarchive") {
+      const { runs } = yield* projectionStore
+        .getThreadRecords(command.threadId, ["runs"], { planImplementationRunsOnly: true })
+        .pipe(mapDispatchError(command));
+      for (const run of runs) {
+        const link = yield* implementationLinkEvent(command, run.sourcePlanRef, now);
+        if (link) yield* Ref.update(events, (current) => [...current, link]);
+      }
     }
     if (command.type === "thread.archive" || command.type === "thread.settle") {
       yield* closePendingLinkRequests({ command, events, threadId: command.threadId, now });
@@ -7087,6 +7149,39 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) {
+    const planRef = command.sourcePlanRef;
+    if (planRef?.expectedSource && planRef.threadId === command.threadId) {
+      const source = yield* projectionStore
+        .getThread(command.threadId)
+        .pipe(mapDispatchError(command));
+      if (!matchesPlanImplementationContext(source, planRef.expectedSource)) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause:
+            "The source checkout or access mode changed. Review the thread before implementing the plan.",
+        });
+      }
+      if (
+        planRef.implementationRuntimeMode &&
+        source.runtimeMode !== planRef.implementationRuntimeMode
+      ) {
+        yield* refuseAboveDispatchModeLimit(command, source.id, {
+          runtimeMode: planRef.implementationRuntimeMode,
+          interactionMode: "default",
+        });
+        yield* dispatchThreadMutation(
+          {
+            type: "thread.runtime-mode.set",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            runtimeMode: planRef.implementationRuntimeMode,
+          },
+          events,
+          effects,
+        );
+      }
+    }
     // A compacted thread reads every run, but attempts, nodes, messages, provider turns and prompts
     // only for its recent runs and the runs this command names. An idle compaction reads in full:
     // its busy check below looks for a delegated result's message under any old run.
@@ -7109,6 +7204,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }
         : undefined,
     );
+    if (
+      command.expectedInteractionMode !== undefined &&
+      command.expectedInteractionMode !== projection.thread.interactionMode
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "The thread mode changed. Review the mode before sending this message.",
+      });
+    }
     if (command.steerFollowUpOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.steerFollowUpOfRunId);
       if (
@@ -7160,11 +7265,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     if (command.manualContinuationOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.manualContinuationOfRunId);
       const limited = latestRootProviderFailure(source ?? null, projection.turnItems);
+      const planToRetry = failedUnsentPlan(source, projection);
+      if (planToRetry) {
+        const latest = yield* projectionStore
+          .getLatestProposedPlan(planToRetry.threadId)
+          .pipe(mapDispatchError(command));
+        if (latest?.id !== planToRetry.planId || projection.thread.interactionMode !== "default") {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Review the latest plan and select Build before retrying the implementation.",
+          });
+        }
+      }
       if (
         command.dispatchMode.type !== "start_immediately" ||
         source === undefined ||
         (source.status !== "interrupted" &&
-          !(source.status === "failed" && limited?.class === "usage_limit")) ||
+          !(source.status === "failed" && (limited?.class === "usage_limit" || planToRetry))) ||
         latestExecutedRun(projection.runs)?.id !== source.id ||
         projection.thread.archivedAt !== null ||
         projection.thread.deletedAt !== null ||
@@ -7731,14 +7849,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       command.sourcePlanRef === undefined
         ? undefined
         : yield* projectionStore
-            .getPlan(command.sourcePlanRef.threadId, command.sourcePlanRef.planId)
+            .getLatestProposedPlan(command.sourcePlanRef.threadId)
             .pipe(mapDispatchError(command));
     const sourcePlan = sourcePlanArtifact?.kind === "proposed_plan" ? sourcePlanArtifact : null;
-    if (command.sourcePlanRef !== undefined && sourcePlan === null) {
+    if (
+      command.sourcePlanRef !== undefined &&
+      (sourcePlan === null ||
+        sourcePlan.id !== command.sourcePlanRef.planId ||
+        (sourcePlan.lastRevertedImplementationRunId !== undefined &&
+          (yield* projectionStore
+            .getMessagesById(command.threadId, [command.messageId])
+            .pipe(mapDispatchError(command))).has(command.messageId)) ||
+        command.text !== buildPlanImplementationPrompt(sourcePlan.markdown))
+    ) {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
         commandType: command.type,
-        cause: `Proposed plan ${command.sourcePlanRef.planId} does not exist on thread ${command.sourcePlanRef.threadId}.`,
+        cause: "The proposed plan changed. Review the latest plan before implementing it.",
       });
     }
     if (
@@ -7751,12 +7878,80 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Proposed plan ${command.sourcePlanRef?.planId} belongs to a different project.`,
       });
     }
+    if (
+      sourcePlanProjection &&
+      (sourcePlanProjection.thread.worktreePath !== projection.thread.worktreePath ||
+        sourcePlanProjection.thread.branch !== projection.thread.branch)
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "The source checkout changed. Review the thread before implementing the plan.",
+      });
+    }
     if (sourcePlan !== null && sourcePlan.status !== "active") {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
         commandType: command.type,
         cause: `Proposed plan ${sourcePlan.id} is not active.`,
       });
+    }
+    if (sourcePlan !== null && sourcePlanProjection !== null) {
+      const source = sourcePlanProjection.thread;
+      if (source.archivedAt !== null || source.deletedAt !== null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "The source thread is archived or deleted.",
+        });
+      }
+      if (
+        planRef?.expectedSource &&
+        ((source.id !== command.threadId &&
+          !matchesPlanImplementationContext(source, planRef.expectedSource)) ||
+          (planRef.implementationRuntimeMode !== undefined &&
+            projection.thread.runtimeMode !== planRef.implementationRuntimeMode))
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause:
+            "The source checkout or access mode changed. Review the thread before implementing the plan.",
+        });
+      }
+      if (
+        command.createdBy !== "user" ||
+        sourcePlanProjection.runs.some((run) =>
+          pendingInteractionModeRunStatuses.includes(run.status),
+        ) ||
+        projection.runs.some((run) => pendingInteractionModeRunStatuses.includes(run.status))
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Finish or cancel pending turns before implementing the plan.",
+        });
+      }
+      if (projection.thread.interactionMode !== "default") {
+        const now = yield* DateTime.now;
+        const thread = {
+          ...projection.thread,
+          interactionMode: "default" as const,
+          updatedAt: now,
+        };
+        yield* refuseAboveDispatchModeLimit(command, command.threadId, thread);
+        const event = yield* emit(
+          events,
+          command,
+        )({
+          type: "thread.interaction-mode-updated",
+          threadId: command.threadId,
+          providerInstanceId: thread.providerInstanceId,
+          occurredAt: now,
+          payload: thread,
+        });
+        projection = applyToProjection(projection, event);
+      }
     }
     const completeSourcePlan = (occurredAt: DateTime.Utc) =>
       sourcePlan === null
@@ -7770,7 +7965,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...(sourcePlan.runId === null ? {} : { runId: sourcePlan.runId }),
             nodeId: sourcePlan.nodeId,
             occurredAt,
-            payload: { ...sourcePlan, status: "completed" },
+            payload: {
+              ...sourcePlan,
+              status: "completed",
+              implementationThreadId: command.threadId,
+            },
           });
 
     let steerWhenReadyRunId: RunId | undefined;
@@ -15650,7 +15849,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 (cause) => new OrchestratorProjectionError({ threadId: deletion.threadId, cause }),
               ),
             );
-          return yield* mapDispatchError(command)(
+          const deleted = yield* mapDispatchError(command)(
             planThreadDeletion({
               command: deletion,
               projection,
@@ -15661,6 +15860,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               idAllocator,
             }),
           );
+          const removedLinks: OrchestrationV2DomainEvent[] = [];
+          for (const run of projection.runs) {
+            const link = yield* implementationLinkEvent(deletion, run.sourcePlanRef, now);
+            if (link) removedLinks.push(link);
+          }
+          return { ...deleted, events: [...deleted.events, ...removedLinks] };
         });
         // Checked under the thread lock: a message sent since the client looked keeps the thread.
         if (command.onlyIfUnused === true) {
@@ -16370,6 +16575,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       commandThreadId(command),
       dispatchWithReceiptEffect(command),
     );
+    if (command.type === "thread.create" && command.initialMessage?.sourcePlanRef) {
+      const sourcePlan = command.initialMessage.sourcePlanRef;
+      return yield* messageIntake.withLock(
+        sourcePlan.threadId,
+        planImplementation.withLock(
+          sourcePlan.planId,
+          Effect.gen(function* () {
+            const newDestination =
+              sourcePlan.threadId !== command.threadId &&
+              (yield* findThread(command.threadId)) === null &&
+              (yield* findThread(sourcePlan.threadId)) !== null;
+            return yield* newDestination
+              ? threadDispatch.withLock(sourcePlan.threadId, dispatch)
+              : dispatch;
+          }),
+        ),
+      );
+    }
     // A fork holds its source's lock, so a source deletion and its fork never interleave. A
     // parent's lock comes before its side chats' locks. A side chat fork from a side chat or a
     // fork onto an existing thread would invert that order; dispatch rejects both, so they skip it.
@@ -16408,13 +16631,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // place ahead of later messages to the same thread.
     const message =
       command.type === "thread.metadata.update" ? metadataUpdateContinuation(command) : command;
-    if (message?.type === "message.dispatch")
+    if (message?.type === "message.dispatch") {
+      const followup = mayStartSubagentFollowup(message)
+        ? withSubagentParentLock(message.threadId, dispatch)
+        : dispatch;
       return yield* messageIntake.withLock(
         message.threadId,
-        mayStartSubagentFollowup(message)
-          ? withSubagentParentLock(message.threadId, dispatch)
-          : dispatch,
+        message.sourcePlanRef
+          ? planImplementation.withLock(message.sourcePlanRef.planId, followup)
+          : followup,
       );
+    }
     // Answering a message-mode question can also start a follow-up.
     return yield* command.type === "runtime-request.respond"
       ? withSubagentParentLock(command.threadId, dispatch)

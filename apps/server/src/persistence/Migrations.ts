@@ -6,6 +6,12 @@ import {
   DATABASE_MIGRATIONS_FINISHED_MESSAGE,
   DATABASE_MIGRATIONS_STARTED_MESSAGE,
 } from "@t3tools/shared/databaseMigrationLog";
+import {
+  adoptPlanPreviewMigrations,
+  hasPendingPlanHistory,
+  isAtelierPreviewMigration,
+  repairAtelierPlanHistory,
+} from "./atelierPlanHistory.ts";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -288,14 +294,16 @@ export const hasPendingMigrations = Effect.fn("hasPendingMigrations")(function* 
     SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
   `;
   if (tables.length === 0) return true;
-  const rows = yield* sql<{ readonly latestId: number | null; readonly previewRows: number }>`
-    SELECT
-      MAX(migration_id) AS latestId,
-      SUM(name = 'OrchestrationV2' AND migration_id IN (53, 54)) AS previewRows
-    FROM effect_sql_migrations
+  const rows = yield* sql<{ readonly id: number; readonly name: string }>`
+    SELECT migration_id AS id, name FROM effect_sql_migrations
+    WHERE migration_id >= ${latestMigrationId} OR migration_id IN (53, 54) OR migration_id BETWEEN 106 AND 108
   `;
-  const row = rows[0];
-  return (row?.latestId ?? 0) < latestMigrationId || (row?.previewRows ?? 0) > 0;
+  return (
+    !rows.some(({ id }) => id >= latestMigrationId) ||
+    rows.some(({ id, name }) => (id === 53 || id === 54) && name === "OrchestrationV2") ||
+    rows.some(isAtelierPreviewMigration) ||
+    (yield* hasPendingPlanHistory)
+  );
 });
 
 const run = Migrator.make({});
@@ -312,6 +320,7 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   if (hasPending) yield* Effect.log(DATABASE_MIGRATIONS_STARTED_MESSAGE);
   const includesV2 =
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
+  if (hasPending && toMigrationInclusive === undefined) yield* adoptPlanPreviewMigrations();
   // The reconcile takes the write lock; CLI startup must not contend with the server for a no-op.
   const previewMigrations = includesV2 && hasPending ? yield* reconcileV2PreviewMigration() : [];
   if (includesV2) {
@@ -346,8 +355,22 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     }
     executedMigrations.push(...(yield* run({ loader: makeMigrationLoader(id) })));
   }
+  const repairPlanHistory = toMigrationInclusive === undefined && (yield* hasPendingPlanHistory);
+  if (repairPlanHistory) {
+    yield* repairAtelierPlanHistory().pipe(
+      Effect.mapError((cause) =>
+        cause._tag === "SqlError"
+          ? cause
+          : new Migrator.MigrationError({
+              kind: "Failed",
+              message: "Could not restore Atelier plan history.",
+              cause,
+            }),
+      ),
+    );
+  }
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
-  yield* migrations.length === 0
+  yield* migrations.length === 0 && !repairPlanHistory
     ? Effect.logDebug("Database schema is current")
     : Effect.log(DATABASE_MIGRATIONS_FINISHED_MESSAGE).pipe(Effect.annotateLogs({ migrations }));
 
