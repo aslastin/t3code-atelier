@@ -23,6 +23,7 @@ appears in the app version as `+atelier.<N>`.
    create, rename, reorder, and collapse them, drag threads in and out, and start a new thread in
    a topic. A collapsed topic shows a dot with its most urgent thread status. Agents can file
    threads under a topic too.
+3. **[Plan mode](#plan-mode).** Refine a proposal, then implement it in the current thread or a new thread in the same checkout.
 
 ### Plan mode
 
