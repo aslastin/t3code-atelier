@@ -104,14 +104,8 @@ export function useSidebarTopicLayout(enabled: boolean) {
     setProjectExpanded(sidebarTopicExpansionKey(topicKey), isCollapsed(topicKey));
   });
   const arrange = active
-    ? (threads: readonly EnvironmentThreadShell[], routeThreadKey: string | null) =>
-        arrangeFolderTopics({
-          threads,
-          indexes,
-          isCollapsed,
-          routeThreadKey,
-          threadKey: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        })
+    ? (threads: readonly EnvironmentThreadShell[]) =>
+        arrangeFolderTopics({ threads, indexes, isCollapsed })
     : null;
   return { arrange, toggleTopic };
 }

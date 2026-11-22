@@ -55,18 +55,11 @@ const snapshot: ThreadTopicsSnapshot = {
   ],
 };
 
-const threadKey = (value: Thread) => `${value.environmentId}:${value.id}`;
-
-const arrange = (
-  threads: readonly Thread[],
-  options: { collapsed?: ReadonlySet<string>; routeThreadKey?: string } = {},
-) =>
+const arrange = (threads: readonly Thread[], options: { collapsed?: ReadonlySet<string> } = {}) =>
   arrangeFolderTopics({
     threads,
     indexes: new Map([[env, indexThreadTopics(snapshot)]]),
     isCollapsed: (key) => options.collapsed?.has(key) ?? false,
-    routeThreadKey: options.routeThreadKey ?? null,
-    threadKey,
   });
 
 const ids = (threads: readonly Thread[]) => threads.map((value) => value.id);
@@ -86,16 +79,15 @@ describe("arrangeFolderTopics", () => {
     expect(ids(arranged.threads)).toEqual(["t4", "t1", "t3", "t2", "moved"]);
   });
 
-  it("keeps only the open thread of a closed topic", () => {
+  it("hides every thread of a closed topic", () => {
     const arranged = arrange([thread("t1"), thread("t2"), thread("t3")], {
       collapsed: new Set([sidebarTopicKey(env, "later")]),
-      routeThreadKey: "env-1:t3",
     });
     const [later] = arranged.topics;
     expect(later!.collapsed).toBe(true);
-    expect(ids(later!.threads)).toEqual(["t3"]);
-    expect(ids(later!.hiddenThreads)).toEqual(["t1"]);
-    expect(ids(arranged.threads)).toEqual(["t3", "t2"]);
+    expect(ids(later!.threads)).toEqual([]);
+    expect(ids(later!.hiddenThreads)).toEqual(["t1", "t3"]);
+    expect(ids(arranged.threads)).toEqual(["t2"]);
   });
 
   it("keys the drawn layout by topic order and membership, not just the thread count", () => {
@@ -105,8 +97,6 @@ describe("arrangeFolderTopics", () => {
         threads,
         indexes: new Map([[env, indexThreadTopics(value)]]),
         isCollapsed: () => false,
-        routeThreadKey: null,
-        threadKey,
       });
       return sidebarFolderTopicsLayoutKey({ threads: topics.threads, topics });
     };

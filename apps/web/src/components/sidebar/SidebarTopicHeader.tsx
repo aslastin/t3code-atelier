@@ -2,7 +2,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/model
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { type ContextMenuSource, THREAD_TOPIC_TITLE_MAX_LENGTH } from "@t3tools/contracts";
 import { ChevronDownIcon, HashIcon, SquarePenIcon } from "lucide-react";
-import { msg, T, useGT, useMessages, Var } from "gt-react";
+import { msg, useGT, useMessages } from "gt-react";
 import {
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -209,11 +209,7 @@ export const SidebarTopicHeader = memo(function SidebarTopicHeader(props: {
             >
               <SquarePenIcon aria-hidden />
             </TooltipTrigger>
-            <TooltipPopup>
-              <T>
-                New thread in <Var>{title}</Var>
-              </T>
-            </TooltipPopup>
+            <TooltipPopup>{m(msg("New thread in topic"))}</TooltipPopup>
           </Tooltip>
         </span>
       )}

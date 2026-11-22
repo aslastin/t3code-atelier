@@ -556,10 +556,7 @@ function useSidebarThreads(input: {
             projectExpandedById,
             sidebarFolderExpansionKeys(folder.group),
           );
-          const topics =
-            collapsed || arrangeTopics === null
-              ? null
-              : arrangeTopics(folder.threads, routeRowThreadKey);
+          const topics = collapsed || arrangeTopics === null ? null : arrangeTopics(folder.threads);
           return {
             group: folder.group,
             collapsed,

@@ -44,7 +44,7 @@ export interface SidebarTopicBlock<TThread> {
   readonly environmentId: EnvironmentId;
   readonly topic: ThreadTopic;
   readonly collapsed: boolean;
-  /** Rows to draw: all threads while open, only the open thread while closed. */
+  /** Rows to draw: none while closed, the open thread included. */
   readonly threads: readonly TThread[];
   /** What a closed topic hides, for its count and status dot. */
   readonly hiddenThreads: readonly TThread[];
@@ -66,10 +66,8 @@ export function arrangeFolderTopics<TThread extends TopicThread>(input: {
   readonly threads: readonly TThread[];
   readonly indexes: ReadonlyMap<EnvironmentId, ThreadTopicIndex>;
   readonly isCollapsed: (topicKey: string) => boolean;
-  readonly routeThreadKey: string | null;
-  readonly threadKey: (thread: TThread) => string;
 }): ArrangedFolderTopics<TThread> {
-  const { threads, indexes, isCollapsed, routeThreadKey, threadKey } = input;
+  const { threads, indexes, isCollapsed } = input;
   if (indexes.size === 0) return { topics: [], looseThreads: threads, threads };
   const blocks = new Map<
     string,
@@ -98,12 +96,8 @@ export function arrangeFolderTopics<TThread extends TopicThread>(input: {
         environmentId: block.environmentId,
         topic: block.topic,
         collapsed,
-        threads: collapsed
-          ? block.threads.filter((thread) => threadKey(thread) === routeThreadKey)
-          : block.threads,
-        hiddenThreads: collapsed
-          ? block.threads.filter((thread) => threadKey(thread) !== routeThreadKey)
-          : [],
+        threads: collapsed ? [] : block.threads,
+        hiddenThreads: collapsed ? block.threads : [],
       };
     });
   return {
