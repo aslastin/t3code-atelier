@@ -48,6 +48,7 @@ import {
   CircleDotDashedIcon,
   ClockIcon,
   GitBranchIcon,
+  HashIcon,
   MessageCircleQuestionIcon,
   PinIcon,
   PinOffIcon,
@@ -256,6 +257,7 @@ function SidebarThreadTooltip({
   thread,
   project,
   projectDisplayName,
+  topicTitle,
   environmentLabel,
   environmentMachine,
   providerEntry,
@@ -270,6 +272,7 @@ function SidebarThreadTooltip({
   thread: SidebarThreadSummary;
   project: ProjectFaviconProject | null;
   projectDisplayName: string | null;
+  topicTitle: string | null;
   environmentLabel: string | null;
   environmentMachine: EnvironmentMachineKind;
   providerEntry: SidebarProviderEntry | null;
@@ -307,6 +310,13 @@ function SidebarThreadTooltip({
           <div className="flex min-w-0 items-center gap-2">
             {project ? <ProjectFavicon project={project} className="size-3 shrink-0" /> : null}
             <div className="min-w-0 truncate text-foreground/75">{projectDisplayName}</div>
+          </div>
+        ) : null}
+        {/* Atelier fork: the whole topic name, which the row may truncate. */}
+        {topicTitle ? (
+          <div className="flex min-w-0 items-start gap-2">
+            <HashIcon className="mt-0.5 size-3 shrink-0 stroke-muted-foreground" />
+            <div className="min-w-0 wrap-break-word text-foreground/75">{topicTitle}</div>
           </div>
         ) : null}
         {environmentLabel ? (
@@ -606,6 +616,8 @@ type SidebarThreadRowProps = {
   scratchMachineLabel: string | null;
   project: EnvironmentProject | null;
   projectDisplayName: string | null;
+  // Atelier fork: the thread's topic, on cards of the ungrouped sidebar.
+  topicTitle?: string | null;
   providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;
   timestampFormat: TimestampFormat;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
@@ -873,6 +885,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       thread={checkoutThread}
       project={props.project}
       projectDisplayName={props.projectDisplayName}
+      topicTitle={props.topicTitle ?? null}
       environmentLabel={props.environmentLabel}
       environmentMachine={props.environmentMachine}
       providerEntry={providerEntry}
@@ -1580,7 +1593,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {/* Left of the status slot, the pin would slide when hover swaps the
                 label for the wider row controls. */}
               {pinIndicator}
-              {props.projectDisplayName ? (
+              {props.projectDisplayName && props.topicTitle ? (
+                // Atelier fork: a long project name leaves room for the topic's start.
+                <span className="flex min-w-0 flex-1 items-center gap-1 font-normal text-secondary-label text-xs">
+                  <span className="max-w-[45%] shrink-0 truncate">{props.projectDisplayName}</span>
+                  <span aria-hidden className="shrink-0">
+                    ·
+                  </span>
+                  <span className="min-w-0 truncate">{props.topicTitle}</span>
+                </span>
+              ) : props.projectDisplayName ? (
                 <span
                   className={cn("min-w-0 flex-1 truncate font-normal text-secondary-label text-xs")}
                 >
@@ -1966,6 +1988,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
           thread={checkoutThread}
           project={props.project}
           projectDisplayName={props.projectDisplayName}
+          topicTitle={null}
           environmentLabel={props.environmentLabel}
           environmentMachine={props.environmentMachine}
           providerEntry={providerEntry}

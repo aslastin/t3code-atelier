@@ -3788,6 +3788,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               environmentMachineById.get(thread.environmentId) ?? "server"
                             }
                             scratchMachineLabel={scratchMachineLabelFor(thread)}
+                            topicTitle={
+                              boringSidebarEnabled || !isCard
+                                ? null
+                                : (() => {
+                                    const index = topicIndexes.get(thread.environmentId);
+                                    return index
+                                      ? (threadTopicOf(index, thread)?.title ?? null)
+                                      : null;
+                                  })()
+                            }
                             project={
                               projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
                               null
