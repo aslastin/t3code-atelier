@@ -279,7 +279,6 @@ import {
 } from "./sidebar/SidebarProjectFolderHeader";
 import { SidebarTopicHeader } from "./sidebar/SidebarTopicHeader";
 import { useSidebarTopicDrag } from "./sidebar/useSidebarTopicDrag";
-import { clearDraftTopic } from "../lib/threadTopicActions";
 import {
   isTopicMenuId,
   useSidebarTopicActions,
@@ -1278,9 +1277,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
   const startThreadInProjectFolder = useStableCallback((group: SidebarProjectSnapshot) => {
     if (isMobile) setOpenMobile(false);
-    void handleNewThread(scopeProjectRef(group.environmentId, group.id)).then((draft) => {
-      if (draft) clearDraftTopic(scopeThreadRef(group.environmentId, draft.threadId));
-    });
+    void handleNewThread(scopeProjectRef(group.environmentId, group.id));
   });
   const handleProjectFolderContextMenu = useStableCallback(
     (
@@ -1706,9 +1703,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       const coSettlingKeys = new Set(refs.map(scopedThreadKey));
       for (const ref of refs) attemptSettle(ref, { coSettlingKeys });
     },
-    startThread: (projectRef) => {
+    startThread: (projectRef, draftSlot) => {
       if (isMobile) setOpenMobile(false);
-      return handleNewThread(projectRef);
+      return handleNewThread(projectRef, { draftSlot });
     },
   });
   const attemptUnsettle = (threadRef: ScopedThreadRef) => {

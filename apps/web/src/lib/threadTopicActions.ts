@@ -1,5 +1,4 @@
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   runAtomCommand,
@@ -19,7 +18,7 @@ import {
 import { msg } from "gt-react";
 
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
-import { sharedTopicProject } from "../components/Sidebar.topics.logic";
+import { draftTopicId, sharedTopicProject } from "../components/Sidebar.topics.logic";
 import { showThreadUndoNotice } from "../hooks/showThreadUndoNotice";
 import { m } from "../i18n/messages";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -132,59 +131,13 @@ export async function disbandTopic(block: {
   });
 }
 
-// A thread started from a topic exists only once its first message is sent, so its topic waits
-// here, keyed by the draft's thread, until then.
-const DRAFT_TOPICS_STORAGE_KEY = "t3code:atelier:draft-topics:v1";
-const MAX_DRAFT_TOPICS = 50;
-
-function readDraftTopics(): Record<string, string> {
-  try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(DRAFT_TOPICS_STORAGE_KEY) ?? "{}");
-    return parsed !== null && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeDraftTopics(topics: Record<string, string>) {
-  try {
-    const entries = Object.entries(topics).slice(-MAX_DRAFT_TOPICS);
-    localStorage.setItem(DRAFT_TOPICS_STORAGE_KEY, JSON.stringify(Object.fromEntries(entries)));
-  } catch {
-    // Storage is full or blocked; the thread then starts outside the topic.
-  }
-}
-
-export function setDraftTopic(threadRef: ScopedThreadRef, topicId: ThreadTopicId | null) {
-  const topics = readDraftTopics();
-  const key = scopedThreadKey(threadRef);
-  if (topicId === null) {
-    if (!(key in topics)) return;
-    delete topics[key];
-  } else {
-    delete topics[key];
-    topics[key] = topicId;
-  }
-  writeDraftTopics(topics);
-}
-
-/** Forgets a draft's topic, as when the folder's own New thread reuses the draft. */
-export function clearDraftTopic(threadRef: ScopedThreadRef) {
-  setDraftTopic(threadRef, null);
-}
-
-/** Files a just-created thread under the topic its draft was started from. */
-export function assignDraftTopic(threadRef: ScopedThreadRef) {
-  const topicId = readDraftTopics()[scopedThreadKey(threadRef)];
-  if (topicId === undefined) return;
-  setDraftTopic(threadRef, null);
+/** Files a just-created thread under the topic its draft was started in. */
+export function assignDraftTopic(threadRef: ScopedThreadRef, logicalProjectKey: string) {
+  const topicId = draftTopicId(logicalProjectKey);
+  if (topicId === null) return;
   void mutateTopics(
     threadRef.environmentId,
-    {
-      type: "topic.assign",
-      threadIds: [threadRef.threadId],
-      topicId: ThreadTopicId.make(topicId),
-    },
+    { type: "topic.assign", threadIds: [threadRef.threadId], topicId },
     m(msg("Could not add the thread to its topic")),
   );
 }

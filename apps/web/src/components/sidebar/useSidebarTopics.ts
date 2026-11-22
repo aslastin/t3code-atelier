@@ -25,7 +25,6 @@ import {
   disbandTopic,
   mutateTopics,
   reorderTopic,
-  setDraftTopic,
 } from "../../lib/threadTopicActions";
 import { randomUUID } from "../../lib/utils";
 import { readLocalApi } from "../../localApi";
@@ -38,6 +37,7 @@ import {
   planTopicReorder,
   sharedTopicProject,
   sidebarTopicExpansionKey,
+  topicDraftSlot,
 } from "../Sidebar.topics.logic";
 import { requestTopicName } from "../TopicNameDialog";
 import { type SidebarTopicHeaderBlock, useSidebarTopicRename } from "./SidebarTopicHeader";
@@ -122,22 +122,19 @@ export function useSidebarTopicActions(input: {
   readonly enabled: boolean;
   /** Settles threads together, including ones a closed topic does not draw. */
   readonly settleThreads: (threads: readonly ScopedThreadRef[]) => void;
-  readonly startThread: (
-    projectRef: ScopedProjectRef,
-  ) => Promise<{ readonly threadId: ThreadId } | null>;
+  /** Opens the project's draft for `draftSlot`, kept apart from its other drafts. */
+  readonly startThread: (projectRef: ScopedProjectRef, draftSlot: string) => Promise<unknown>;
 }) {
   const indexes = useThreadTopicIndexes();
   const enabled = input.enabled && indexes.size > 0;
 
   const startThreadInTopic = useStableCallback((block: SidebarTopicHeaderBlock) => {
-    void (async () => {
-      const result = await settlePromise(() =>
-        input.startThread(scopeProjectRef(block.environmentId, block.topic.projectId)),
-      );
-      if (result._tag === "Success" && result.value !== null) {
-        setDraftTopic(scopeThreadRef(block.environmentId, result.value.threadId), block.topic.id);
-      }
-    })();
+    void settlePromise(() =>
+      input.startThread(
+        scopeProjectRef(block.environmentId, block.topic.projectId),
+        topicDraftSlot(block.topic.id),
+      ),
+    );
   });
 
   const renameTopic = useStableCallback((block: SidebarTopicHeaderBlock, title: string) => {

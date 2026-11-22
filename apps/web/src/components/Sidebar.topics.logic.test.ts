@@ -10,11 +10,13 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   arrangeFolderTopics,
+  draftTopicId,
   planTopicReorder,
   planTopicThreadDrop,
   sharedTopicProject,
   sidebarTopicKey,
   sidebarTopicRowId,
+  topicDraftSlot,
 } from "./Sidebar.topics.logic";
 
 const env = EnvironmentId.make("env-1");
@@ -181,5 +183,13 @@ describe("planTopicReorder", () => {
     expect(plan("b", "a", true)).toBeNull();
     expect(plan("b", "c", false)).toBeNull();
     expect(plan("z", "a", false)).toBeNull();
+  });
+});
+
+describe("draftTopicId", () => {
+  it("reads the topic back from a topic draft's slot key, and nothing from a project's", () => {
+    const projectKey = "github.com/acme/app";
+    expect(draftTopicId(`${projectKey}#${topicDraftSlot(ThreadTopicId.make("t-1"))}`)).toBe("t-1");
+    expect(draftTopicId(projectKey)).toBeNull();
   });
 });

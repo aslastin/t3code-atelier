@@ -1539,7 +1539,9 @@ export function useComposerSend(input: ComposerSendInput) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
-        if (sentDraftThreadRef) assignDraftTopic(sentDraftThreadRef);
+        if (sentDraftThreadRef && draftThread) {
+          assignDraftTopic(sentDraftThreadRef, draftThread.logicalProjectKey);
+        }
         if (checkoutPullRequestUrl) {
           linkCheckoutPullRequest(
             scopeThreadRef(environmentId, threadIdForSend),

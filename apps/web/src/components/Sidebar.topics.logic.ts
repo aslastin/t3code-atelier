@@ -210,3 +210,20 @@ export function planTopicReorder(input: {
   const currentIndex = order.indexOf(movedId);
   return (order[currentIndex - 1] ?? null) === afterTopicId ? null : { afterTopicId };
 }
+
+// A topic's drafts live in their own slot of the project's drafts; the slot names the topic,
+// which the thread joins once its first message creates it.
+const TOPIC_DRAFT_SLOT_PREFIX = "atelier-topic:";
+
+export function topicDraftSlot(topicId: ThreadTopicId): string {
+  return `${TOPIC_DRAFT_SLOT_PREFIX}${topicId}`;
+}
+
+/** The topic a draft was started in, read from its slot key (`<project key>#<slot>`). */
+export function draftTopicId(logicalProjectKey: string): ThreadTopicId | null {
+  const marker = `#${TOPIC_DRAFT_SLOT_PREFIX}`;
+  const index = logicalProjectKey.lastIndexOf(marker);
+  if (index === -1) return null;
+  const topicId = logicalProjectKey.slice(index + marker.length);
+  return topicId.length === 0 ? null : ThreadTopicId.make(topicId);
+}
