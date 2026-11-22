@@ -3500,6 +3500,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         );
                       }}
                     </ComboboxList>
+                    <p className="shrink-0 border-t px-3 py-1.5 text-muted-foreground text-xs">
+                      <T>Shift-click or Shift+Enter to select several</T>
+                    </p>
                   </ComboboxPopup>
                 </Combobox>
               }
