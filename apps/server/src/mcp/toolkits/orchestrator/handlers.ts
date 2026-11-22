@@ -1,5 +1,6 @@
-import { OrchestratorMcpFailure } from "@t3tools/contracts";
+import { OrchestratorMcpFailure, type ThreadId } from "@t3tools/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
@@ -11,6 +12,17 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
+import * as TopicService from "../../../topics/TopicService.ts";
+
+// Atelier fork: topic titles for agent-facing thread output. A failed read leaves them out.
+const topicTitles = (threadIds: ReadonlyArray<ThreadId>) =>
+  TopicService.TopicService.pipe(
+    Effect.flatMap((topics) => topics.titlesByThread(threadIds)),
+    Effect.orElseSucceed((): ReadonlyMap<ThreadId, string> => new Map()),
+  );
+
+const withTopic = <T extends object>(thread: T, topic: string | undefined): T =>
+  topic === undefined ? thread : { ...thread, topic };
 
 const handlers = {
   orchestrator_capabilities: McpToolAccess.reads((input) =>
@@ -148,21 +160,46 @@ const handlers = {
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.createThreads(scope, input);
+      // A retried call replays threads made earlier, which keep wherever they were filed since.
+      const startedAt = DateTime.formatIso(yield* DateTime.now);
+      const result = yield* service.createThreads(scope, input);
+      // Atelier fork. The threads exist by now, so a topic that cannot be saved is logged.
+      const topics = yield* TopicService.TopicService;
+      yield* Effect.forEach(
+        result.threads,
+        (thread, index) =>
+          topics
+            .placeLaunchedThread({
+              threadId: thread.threadId,
+              topic: input.threads[index]?.topic,
+              sourceThreadId: scope.thread?.threadId,
+              createdSince: startedAt,
+            })
+            .pipe(Effect.ignoreCause({ log: true })),
+        { discard: true },
+      );
+      return result;
     }),
   ),
   t3_thread_list: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.listThreads(scope, input);
+      const result = yield* service.listThreads(scope, input);
+      const titles = yield* topicTitles(result.threads.map((thread) => thread.threadId));
+      return {
+        ...result,
+        threads: result.threads.map((thread) => withTopic(thread, titles.get(thread.threadId))),
+      };
     }),
   ),
   t3_thread_read: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.readThread(scope, input);
+      const result = yield* service.readThread(scope, input);
+      const titles = yield* topicTitles([result.thread.threadId]);
+      return { ...result, thread: withTopic(result.thread, titles.get(result.thread.threadId)) };
     }),
   ),
   t3_thread_update: McpToolAccess.writesThreads(
@@ -170,8 +207,27 @@ const handlers = {
     (input) =>
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
+        const { action, topic, ...update } = input;
+        if (action === "set_topic") {
+          const threadId = input.threadId ?? scope.thread?.threadId;
+          if (threadId === undefined)
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "Pass threadId: set_topic outside a thread needs one.",
+            });
+          const topics = yield* TopicService.TopicService;
+          yield* topics
+            .assignByTitle({ threadId, title: topic ?? null })
+            .pipe(
+              Effect.mapError(
+                (error) =>
+                  new OrchestratorMcpFailure({ code: "invalid_request", message: error.message }),
+              ),
+            );
+          return { threadId, action, topic: topic ?? null };
+        }
         const service = yield* ThreadMetadataMcpService.ThreadMetadataMcpService;
-        return yield* service.update(scope, input);
+        return yield* service.update(scope, { ...update, action });
       }),
   ),
   t3_thread_send: McpToolAccess.afterForwarding(

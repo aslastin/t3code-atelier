@@ -17,6 +17,8 @@ import {
   RunId,
   RuntimeRequestId,
   ServerConfig,
+  type ThreadTopicMutation,
+  type ThreadTopicsSnapshot,
   ThreadId,
   TurnItemId,
   WS_METHODS,
@@ -607,14 +609,20 @@ export function installFakeEnvironment(
     /** Commands left unanswered even when accepting, until `rejectPendingCommand`. */
     readonly holdCommand?: (command: OrchestrationV2Command) => boolean;
     readonly providers?: ReadonlyArray<unknown>;
+    readonly capabilities?: Partial<ServerConfig["environment"]["capabilities"]>;
   },
 ): Disposable {
   threads = fixtures;
+  const config = makeServerConfig(
+    options?.providers ?? [CODEX_PROVIDER],
+    fixtures.some((thread) => (thread.issues?.length ?? 0) > 0),
+  );
   baseServerConfig = {
-    ...makeServerConfig(
-      options?.providers ?? [CODEX_PROVIDER],
-      fixtures.some((thread) => (thread.issues?.length ?? 0) > 0),
-    ),
+    ...config,
+    environment: {
+      ...config.environment,
+      capabilities: { ...config.environment.capabilities, ...options?.capabilities },
+    },
     keybindings: options?.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS,
   };
   dispatched = [];
@@ -706,6 +714,26 @@ export function answerRpc(method: string, handler: (input: never) => unknown): D
     [Symbol.dispose]: () => {
       if (previous) handlers[method] = previous;
       else delete handlers[method];
+    },
+  };
+}
+
+/** Atelier fork: serves thread topics pushed with `emit` and records topic changes. */
+export function answerThreadTopics() {
+  const queue = Effect.runSync(Queue.unbounded<ThreadTopicsSnapshot>());
+  const mutations: ThreadTopicMutation[] = [];
+  const subscription = answerRpc(WS_METHODS.subscribeThreadTopics, () => Stream.fromQueue(queue));
+  const mutate = answerRpc(WS_METHODS.threadTopicsMutate, (mutation: ThreadTopicMutation) =>
+    Effect.sync(() => {
+      mutations.push(mutation);
+    }),
+  );
+  return {
+    mutations,
+    emit: (snapshot: ThreadTopicsSnapshot) => Effect.runPromise(Queue.offer(queue, snapshot)),
+    [Symbol.dispose]: () => {
+      subscription[Symbol.dispose]();
+      mutate[Symbol.dispose]();
     },
   };
 }
