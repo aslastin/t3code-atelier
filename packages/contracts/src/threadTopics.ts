@@ -17,6 +17,12 @@ export const ThreadTopicTitle = TrimmedNonEmptyString.check(
 );
 export type ThreadTopicTitle = typeof ThreadTopicTitle.Type;
 
+/** An agent names a topic by its exact title in the thread's project. */
+export const ThreadTopicMcpInput = Schema.NullOr(ThreadTopicTitle).annotate({
+  description:
+    "Sidebar topic in the project, by exact name; created if missing. Default: your thread's topic. null: none.",
+});
+
 export const ThreadTopic = Schema.Struct({
   id: ThreadTopicId,
   projectId: ProjectId,

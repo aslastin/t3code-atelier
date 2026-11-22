@@ -34,8 +34,11 @@ import {
   OrchestratorMcpThreadSendResult,
   OrchestratorMcpThreadWaitInput,
   OrchestratorMcpThreadWaitResult,
+  ThreadId,
+  ThreadMetadataMcpAction,
   ThreadMetadataMcpUpdateInput,
   ThreadMetadataMcpUpdateResult,
+  ThreadTopicTitle,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import { McpSchema, Tool, Toolkit } from "effect/ai";
@@ -50,6 +53,7 @@ import * as RemoteDelegation from "../../../peer/RemoteDelegation.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
+import * as TopicService from "../../../topics/TopicService.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -66,6 +70,8 @@ const linkingDependencies = [
 ];
 /** A send there may record a follow-up to a remote task. */
 const sendDependencies = [...dependencies, RemoteDelegation.RemoteDelegation];
+/** Atelier fork: tools that read or place threads in topics. */
+const topicDependencies = [...dependencies, TopicService.TopicService];
 const threadMetadataDependencies = [
   McpInvocationContext.McpInvocationContext,
   ThreadManagementService.ThreadManagementService,
@@ -228,7 +234,7 @@ const CreateThreadsTool = Tool.make("create_threads", {
   success: OrchestratorMcpCreateThreadsResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
-  dependencies,
+  dependencies: topicDependencies,
 })
   .annotate(Tool.Title, "Create T3 threads")
   .annotate(Tool.Destructive, true)
@@ -242,7 +248,7 @@ const ThreadListTool = Tool.make("t3_thread_list", {
   success: OrchestratorMcpThreadListResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
-  dependencies,
+  dependencies: topicDependencies,
 })
   .annotate(Tool.Title, "List T3 threads")
   .annotate(Tool.Readonly, true)
@@ -256,7 +262,7 @@ const ThreadReadTool = Tool.make("t3_thread_read", {
   success: OrchestratorMcpThreadReadResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
-  dependencies,
+  dependencies: topicDependencies,
 })
   .annotate(Tool.Title, "Read a T3 thread")
   .annotate(Tool.Strict, true)
@@ -266,16 +272,36 @@ const ThreadReadTool = Tool.make("t3_thread_read", {
 
 const ThreadUpdateTool = Tool.make("t3_thread_update", {
   description:
-    "Rename a thread (`action:'rename'` with `title`) or regenerate its title. Omit `threadId` for this thread. Workspace and branch cannot change here.",
+    "Rename a thread (`action:'rename'` with `title`), regenerate its title, or file it under a sidebar topic (`action:'set_topic'` with `topic`). Omit `threadId` for this thread. Workspace and branch cannot change here.",
   // Keeps the input's action/field check, which rebuilding the struct would drop.
   parameters: ThreadMetadataMcpUpdateInput.mapFields(
-    Struct.assign({ environmentId: OrchestratorMcpEnvironmentTarget }),
+    Struct.assign({
+      environmentId: OrchestratorMcpEnvironmentTarget,
+      // Atelier fork: topics live beside the thread's metadata.
+      action: Schema.Literals([...ThreadMetadataMcpAction.literals, "set_topic"]),
+      topic: Schema.optional(
+        Schema.NullOr(ThreadTopicTitle).annotate({ description: "Topic name; null removes it." }),
+      ),
+    }),
     { unsafePreserveChecks: true },
+  ).check(
+    Schema.makeFilter((input) =>
+      (input.action === "set_topic") === (input.topic !== undefined)
+        ? true
+        : "set_topic requires topic; other actions do not accept one.",
+    ),
   ),
-  success: ThreadMetadataMcpUpdateResult,
+  success: Schema.Union([
+    ThreadMetadataMcpUpdateResult,
+    Schema.Struct({
+      threadId: ThreadId,
+      action: Schema.Literal("set_topic"),
+      topic: Schema.NullOr(Schema.String),
+    }),
+  ]),
   failure: OrchestratorMcpFailure,
   failureMode: "return",
-  dependencies: threadMetadataDependencies,
+  dependencies: [...threadMetadataDependencies, TopicService.TopicService],
 })
   .annotate(Tool.Title, "Update T3 thread metadata")
   .annotate(Tool.Destructive, true)

@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 import { OrchestratorRuntimeModeAboveCeilingError } from "../../../orchestration-v2/Orchestrator.ts";
 import { outputRequestProblem } from "../../../orchestration-v2/runOutput.ts";
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
+import * as TopicService from "../../../topics/TopicService.ts";
 import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageIntake.ts";
 import * as Claims from "../../../orchestration-v2/AttachmentClaims.ts";
 import * as Project from "../../../project/ProjectService.ts";
@@ -432,6 +433,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             )?.supportedRuntimeModes,
           });
         }
+        const topics = yield* TopicService.TopicService;
         const result = yield* ThreadMessageIntake.launchThread({
           commandId,
           threadId,
@@ -483,6 +485,14 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           }),
         );
         const thread = result.projection.thread;
+        // Atelier fork. The thread exists by now, so a topic that cannot be saved is logged.
+        yield* topics
+          .placeLaunchedThread({
+            threadId: thread.id,
+            topic: input.topic,
+            sourceThreadId: caller?.id,
+          })
+          .pipe(Effect.ignoreCause({ log: true }));
         const run = result.projection.runs.find((run) => run.userMessageId === messageId);
         return {
           threadId: thread.id,

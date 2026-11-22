@@ -20,6 +20,7 @@ import {
   TrimmedNonEmptyString,
   TurnItemId,
 } from "./baseSchemas.ts";
+import { ThreadTopicMcpInput } from "./threadTopics.ts";
 import {
   ScheduledTaskRunStatus,
   ScheduledTaskSchedule,
@@ -281,6 +282,8 @@ export const OrchestratorMcpCreateThreadRequest = Schema.Struct({
   target: Schema.optional(OrchestratorMcpTarget),
   runtimeMode: Schema.optional(OrchestratorMcpRuntimeMode),
   interactionMode: Schema.optional(OrchestratorMcpInteractionMode),
+  /** Atelier fork. */
+  topic: Schema.optional(ThreadTopicMcpInput),
 });
 export type OrchestratorMcpCreateThreadRequest = typeof OrchestratorMcpCreateThreadRequest.Type;
 
@@ -399,6 +402,8 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   title: Schema.String,
+  /** Atelier fork: the thread's sidebar topic, when it has one. */
+  topic: Schema.optional(Schema.String),
   link: Schema.optional(Schema.String),
   createdBy: OrchestrationV2Actor,
   creationSource: OrchestrationV2CreationSource,
@@ -463,6 +468,8 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   title: Schema.String,
+  /** Atelier fork: the thread's sidebar topic, when it has one. */
+  topic: Schema.optional(Schema.String),
   link: Schema.optional(Schema.String),
   createdBy: OrchestrationV2Actor,
   creationSource: OrchestrationV2CreationSource,
