@@ -1837,17 +1837,22 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         ? current
         : { ...current, contextDrag },
     );
+    const threads = contextDragThreads();
+    const showGhost = () => {
+      const threadRef = parseScopedThreadKey(contextDragKeyRef.current ?? "");
+      const title = (threadRef && readThreadShell(threadRef)?.title.trim()) || gt("Thread");
+      moveThreadContextDragGhost(point, { title, count: threads.length });
+    };
     if (!contextDrag) {
-      endThreadContextDrag();
-      topicDrag.move(point, contextDragThreads());
+      // Atelier fork: rows hold still in folders, so the ghost shows the drag onto a topic.
+      if (topicDrag.active) showGhost();
+      else endThreadContextDrag();
+      topicDrag.move(point, threads);
       return false;
     }
     topicDrag.clear();
     restoreDragScroll();
-    const threads = contextDragThreads();
-    const threadRef = parseScopedThreadKey(contextDragKeyRef.current ?? "");
-    const title = (threadRef && readThreadShell(threadRef)?.title.trim()) || gt("Thread");
-    moveThreadContextDragGhost(point, { title, count: threads.length });
+    showGhost();
     return true;
   };
   const dropThreadContextDrag = (point: { x: number; y: number }) => {

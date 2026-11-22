@@ -73,5 +73,5 @@ export function useSidebarTopicDrag(input: {
     return true;
   };
 
-  return { move, drop, clear };
+  return { active: folders !== null, move, drop, clear };
 }
