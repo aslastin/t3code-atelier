@@ -1,4 +1,5 @@
 import {
+  parseScopedThreadKey,
   scopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
@@ -17,6 +18,7 @@ import {
   ThreadTopicId,
 } from "@t3tools/contracts";
 import { msg } from "gt-react";
+import { useEffect } from "react";
 
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { m } from "../../i18n/messages";
@@ -37,6 +39,7 @@ import {
   planTopicReorder,
   sharedTopicProject,
   sidebarTopicExpansionKey,
+  sidebarTopicKey,
   topicDraftSlot,
 } from "../Sidebar.topics.logic";
 import { requestTopicName } from "../TopicNameDialog";
@@ -92,11 +95,28 @@ async function createTopicFromThreads(threads: readonly TopicThread[]) {
 }
 
 /** Topic blocks for boring sidebar folders; null while topics do not apply. */
-export function useSidebarTopicLayout(enabled: boolean) {
+export function useSidebarTopicLayout(enabled: boolean, routeThreadKey: string | null) {
   const indexes = useThreadTopicIndexes();
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const setProjectExpanded = useUiStateStore((store) => store.setProjectExpanded);
   const active = enabled && indexes.size > 0;
+  const routeRef = active && routeThreadKey !== null ? parseScopedThreadKey(routeThreadKey) : null;
+  const routeTopicId =
+    routeRef === null
+      ? undefined
+      : indexes.get(routeRef.environmentId)?.topicIdByThreadId.get(routeRef.threadId);
+  const routeTopicKey =
+    routeRef === null || routeTopicId === undefined
+      ? null
+      : sidebarTopicKey(routeRef.environmentId, routeTopicId);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opening a thread, or filing the open one, opens its topic in the persisted expansion state
+  useEffect(() => {
+    if (routeTopicKey === null) return;
+    const key = sidebarTopicExpansionKey(routeTopicKey);
+    if (useUiStateStore.getState().projectExpandedById[key] === false) {
+      setProjectExpanded(key, true);
+    }
+  }, [routeTopicKey, setProjectExpanded]);
   // Topics open by default, whatever the legacy folder default says.
   const isCollapsed = (topicKey: string) =>
     projectExpandedById[sidebarTopicExpansionKey(topicKey)] === false;

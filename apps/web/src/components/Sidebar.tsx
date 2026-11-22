@@ -1327,7 +1327,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   );
 
-  const topicLayout = useSidebarTopicLayout(boringSidebarEnabled);
+  const topicLayout = useSidebarTopicLayout(boringSidebarEnabled, routeRowThreadKey);
   const {
     workingShelfEnabled,
     pinnedThreads,
