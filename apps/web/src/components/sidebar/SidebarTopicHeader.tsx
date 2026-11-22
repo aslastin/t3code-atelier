@@ -166,7 +166,8 @@ export const SidebarTopicHeader = memo(function SidebarTopicHeader(props: {
           className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-(--control-radius) ps-9 pe-(--sidebar-row-content-inset) text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         >
           <HashIcon aria-hidden className="size-3 shrink-0 text-sidebar-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate text-xs font-medium text-sidebar-foreground/80">
+          {/* Leaves room for the New thread button, so it never covers the ellipsis. */}
+          <span className="min-w-0 flex-1 truncate text-xs font-medium text-sidebar-foreground/80 group-hover/topic:pe-5 group-has-[[data-sidebar-action-for]:focus]/topic:pe-5 pointer-coarse:pe-5">
             {title}
           </span>
           {dot ? (
