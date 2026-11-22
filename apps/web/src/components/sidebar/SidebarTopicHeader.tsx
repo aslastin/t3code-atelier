@@ -170,7 +170,12 @@ export const SidebarTopicHeader = memo(function SidebarTopicHeader(props: {
             {title}
           </span>
           {dot ? (
-            <span className={cn("size-1.5 shrink-0 rounded-full", TOPIC_DOT_CLASS_NAME[dot])}>
+            <span
+              className={cn(
+                "size-1.5 shrink-0 rounded-full group-hover/topic:invisible group-has-[[data-sidebar-action-for]:focus]/topic:invisible pointer-coarse:invisible",
+                TOPIC_DOT_CLASS_NAME[dot],
+              )}
+            >
               <span className="sr-only">{m(TOPIC_DOT_LABEL[dot])}</span>
             </span>
           ) : null}
