@@ -7,7 +7,7 @@ import { IsoDateTime, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseS
 export const ThreadTopicId = TrimmedNonEmptyString.pipe(Schema.brand("ThreadTopicId"));
 export type ThreadTopicId = typeof ThreadTopicId.Type;
 
-const THREAD_TOPIC_TITLE_MAX_LENGTH = 64;
+export const THREAD_TOPIC_TITLE_MAX_LENGTH = 64;
 
 export const ThreadTopicTitle = TrimmedNonEmptyString.check(
   Schema.isMaxLength(THREAD_TOPIC_TITLE_MAX_LENGTH),

@@ -277,6 +277,15 @@ import {
   SidebarProjectFolderHeader,
   sidebarFolderRowId,
 } from "./sidebar/SidebarProjectFolderHeader";
+import { SidebarTopicHeader } from "./sidebar/SidebarTopicHeader";
+import { clearDraftTopic } from "../lib/threadTopicActions";
+import {
+  isTopicMenuId,
+  useSidebarTopicActions,
+  useSidebarTopicLayout,
+  withTopicMenuItems,
+} from "./sidebar/useSidebarTopics";
+import { isSidebarTopicRowId, sidebarTopicRowId } from "./Sidebar.topics.logic";
 import {
   SidebarDragBoundary,
   SidebarSectionHeader,
@@ -435,6 +444,8 @@ function useSidebarThreads(input: {
   readonly folderGroups: readonly SidebarProjectSnapshot[] | null;
   // Keeps folders with no active threads, so a project the user filtered to or pinned can start one.
   readonly keepEmptyFolders: (group: SidebarProjectSnapshot) => boolean;
+  // Atelier fork: splits an open folder's threads into topics; null without topics.
+  readonly arrangeTopics: ReturnType<typeof useSidebarTopicLayout>["arrange"];
 }) {
   const {
     projectScopeKey,
@@ -447,6 +458,7 @@ function useSidebarThreads(input: {
     routeRowThreadKey,
     folderGroups,
     keepEmptyFolders: keepEmpty,
+    arrangeTopics,
   } = input;
   // Folders already separate the work, so boring mode has no Working shelf.
   const workingShelfEnabled =
@@ -540,13 +552,18 @@ function useSidebarThreads(input: {
             projectExpandedById,
             sidebarFolderExpansionKeys(folder.group),
           );
+          const topics =
+            collapsed || arrangeTopics === null
+              ? null
+              : arrangeTopics(folder.threads, routeRowThreadKey);
           return {
             group: folder.group,
             collapsed,
+            topics,
             // A closed folder still shows the open thread, and hints at the rest.
             threads: collapsed
               ? routeThreadOnly(folder.threads, routeRowThreadKey)
-              : folder.threads,
+              : (topics?.threads ?? folder.threads),
             hiddenThreads: collapsed
               ? folder.threads.filter((thread) => threadShellKey(thread) !== routeRowThreadKey)
               : EMPTY_THREADS,
@@ -1260,7 +1277,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
   const startThreadInProjectFolder = useStableCallback((group: SidebarProjectSnapshot) => {
     if (isMobile) setOpenMobile(false);
-    void handleNewThread(scopeProjectRef(group.environmentId, group.id));
+    void handleNewThread(scopeProjectRef(group.environmentId, group.id)).then((draft) => {
+      if (draft) clearDraftTopic(scopeThreadRef(group.environmentId, draft.threadId));
+    });
   });
   const handleProjectFolderContextMenu = useStableCallback(
     (
@@ -1309,6 +1328,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   );
 
+  const topicLayout = useSidebarTopicLayout(boringSidebarEnabled);
   const {
     workingShelfEnabled,
     pinnedThreads,
@@ -1362,6 +1382,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       : null,
     keepEmptyFolders: (group) =>
       scopedProjectGroups.length > 0 || (group.pinned && !group.archived),
+    arrangeTopics: topicLayout.arrange,
   });
 
   // Ranked across environments as the palette ranks them, so one
@@ -1678,6 +1699,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       attemptSettle(scopeThreadRef(thread.environmentId, thread.id), { coSettlingKeys });
     }
   };
+  const topicActions = useSidebarTopicActions({
+    enabled: boringSidebarEnabled,
+    settleThreads,
+    startThread: (projectRef) => {
+      if (isMobile) setOpenMobile(false);
+      return handleNewThread(projectRef);
+    },
+  });
   const attemptUnsettle = (threadRef: ScopedThreadRef) => {
     void (async () => {
       const result = await unsettleThread(threadRef);
@@ -2357,61 +2386,70 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       );
       const clicked = await settlePromise(() =>
         api.contextMenu.show(
-          [
-            ...(unpinMenuItem
-              ? [{ ...unpinMenuItem, disabled: !canOperateThreads(pinnedSelectedThreads) }]
-              : []),
-            {
-              id: "settle",
-              label: gt("Settle ({count})", { count }),
-              disabled: settlingThreads.length === 0 || !canOperateThreads(settlingThreads),
-            },
-            ...(canSnoozeSelection
-              ? [
-                  {
-                    id: "snooze",
-                    label: gt("Snooze ({count})", { count }),
-                    disabled: !canOperateThreads(selectedThreads),
-                    children: [
-                      ...snoozePresets.map((preset) => ({
-                        id: `snooze:${preset.id}`,
-                        label: preset.label,
-                        detail: preset.whenLabel,
-                        disabled: !canOperateThreads(selectedThreads),
-                      })),
-                      {
-                        id: "snooze:custom",
-                        label: gt("Custom…"),
-                        separatorBefore: snoozePresets.length > 0,
-                        disabled: !canOperateThreads(selectedThreads),
-                      },
-                    ],
-                  },
-                ]
-              : []),
-            ...(titleRegenerationMenuItem
-              ? [
-                  {
-                    ...titleRegenerationMenuItem,
-                    disabled:
-                      titleRegenerationMenuItem.disabled ||
-                      !canOperateThreads(regeneratableTitleThreads),
-                  },
-                ]
-              : []),
-            { id: "mark-unread", label: gt("Mark unread ({count})", { count }) },
-            {
-              id: "delete",
-              label: gt("Delete ({count})", { count }),
-              destructive: true,
-              disabled: !canOperateThreads(selectedThreads),
-            },
-          ],
+          withTopicMenuItems(
+            [
+              ...(unpinMenuItem
+                ? [{ ...unpinMenuItem, disabled: !canOperateThreads(pinnedSelectedThreads) }]
+                : []),
+              {
+                id: "settle",
+                label: gt("Settle ({count})", { count }),
+                disabled: settlingThreads.length === 0 || !canOperateThreads(settlingThreads),
+              },
+              ...(canSnoozeSelection
+                ? [
+                    {
+                      id: "snooze",
+                      label: gt("Snooze ({count})", { count }),
+                      disabled: !canOperateThreads(selectedThreads),
+                      children: [
+                        ...snoozePresets.map((preset) => ({
+                          id: `snooze:${preset.id}`,
+                          label: preset.label,
+                          detail: preset.whenLabel,
+                          disabled: !canOperateThreads(selectedThreads),
+                        })),
+                        {
+                          id: "snooze:custom",
+                          label: gt("Custom…"),
+                          separatorBefore: snoozePresets.length > 0,
+                          disabled: !canOperateThreads(selectedThreads),
+                        },
+                      ],
+                    },
+                  ]
+                : []),
+              ...(titleRegenerationMenuItem
+                ? [
+                    {
+                      ...titleRegenerationMenuItem,
+                      disabled:
+                        titleRegenerationMenuItem.disabled ||
+                        !canOperateThreads(regeneratableTitleThreads),
+                    },
+                  ]
+                : []),
+              { id: "mark-unread", label: gt("Mark unread ({count})", { count }) },
+              {
+                id: "delete",
+                label: gt("Delete ({count})", { count }),
+                destructive: true,
+                disabled: !canOperateThreads(selectedThreads),
+              },
+            ],
+            topicActions.buildThreadMenuItems(selectedThreads),
+            "mark-unread",
+          ),
           position,
           source,
         ),
       );
       if (clicked._tag === "Failure" || clicked.value === null) return;
+      if (isTopicMenuId(clicked.value)) {
+        clearSelection();
+        await topicActions.handleThreadMenuClick(clicked.value, selectedThreads);
+        return;
+      }
       const actionTargets =
         clicked.value === "unpin"
           ? pinnedSelectedThreads
@@ -2670,46 +2708,54 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ) ?? null;
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
-            buildThreadActionMenuItems({
-              canOperate: readEnvironmentScope(
-                threadRef.environmentId,
-                AuthOrchestrationOperateScope,
-              ),
-              branch: thread.branch ?? null,
-              // An archived project is not a filter choice.
-              projectFilter:
-                threadProjectGroup && !threadProjectGroup.archived
-                  ? {
-                      label: threadProjectGroup.displayName,
-                      isActive: projectScopeKeys.includes(threadProjectGroup.projectKey),
-                    }
-                  : null,
-              isPinned,
-              isSettled,
-              autoSettleEnabled: thread.autoSettleDisabledAt == null,
-              isSnoozed,
-              canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
-              isRegeneratingTitle,
-              isRunning: !threadRuntimeCanArchive(thread.runtime),
-              canShareWithGuest: appAtomRegistry.get(
-                canShareWithGuestAtom(threadRef.environmentId),
-              ),
-              canTurnIntoProject: canTurnThreadIntoProject(threadRef),
-              canRename: !fromSearch,
-              supports: {
-                settlement: configLoaded,
-                autoSettleOptOut: supportsAutoSettleOptOut,
-                snooze: configLoaded,
-                pinning: configLoaded,
-                titleRegeneration: configLoaded,
-              },
-              snoozePresets,
-            }),
+            withTopicMenuItems(
+              buildThreadActionMenuItems({
+                canOperate: readEnvironmentScope(
+                  threadRef.environmentId,
+                  AuthOrchestrationOperateScope,
+                ),
+                branch: thread.branch ?? null,
+                // An archived project is not a filter choice.
+                projectFilter:
+                  threadProjectGroup && !threadProjectGroup.archived
+                    ? {
+                        label: threadProjectGroup.displayName,
+                        isActive: projectScopeKeys.includes(threadProjectGroup.projectKey),
+                      }
+                    : null,
+                isPinned,
+                isSettled,
+                autoSettleEnabled: thread.autoSettleDisabledAt == null,
+                isSnoozed,
+                canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
+                isRegeneratingTitle,
+                isRunning: !threadRuntimeCanArchive(thread.runtime),
+                canShareWithGuest: appAtomRegistry.get(
+                  canShareWithGuestAtom(threadRef.environmentId),
+                ),
+                canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+                canRename: !fromSearch,
+                supports: {
+                  settlement: configLoaded,
+                  autoSettleOptOut: supportsAutoSettleOptOut,
+                  snooze: configLoaded,
+                  pinning: configLoaded,
+                  titleRegeneration: configLoaded,
+                },
+                snoozePresets,
+              }),
+              topicActions.buildThreadMenuItems([thread]),
+              "rename",
+            ),
             position,
             source,
           ),
         );
         if (clicked._tag === "Failure" || clicked.value === null) return;
+        if (isTopicMenuId(clicked.value)) {
+          await topicActions.handleThreadMenuClick(clicked.value, [thread]);
+          return;
+        }
         if (threadActionRequiresOperate(clicked.value) && !checkThreadOperations([thread])) return;
         if (clicked.value?.startsWith("snooze:")) {
           const preset =
@@ -3474,6 +3520,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             }
                             thread={thread}
                             variant={rowVariant}
+                            inTopic={isSidebarTopicRowId(folderRow)}
                             navigationParent={
                               folderRow ??
                               (section === "working" ||
@@ -3599,14 +3646,27 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 onContextMenu={handleProjectFolderContextMenu}
                               />,
                             );
-                            for (const thread of folder.threads) {
+                            const folderRowId = sidebarFolderRowId(folder.group.projectKey);
+                            for (const block of folder.topics?.topics ?? []) {
                               items.push(
-                                renderThreadRow(
-                                  thread,
-                                  "active",
-                                  sidebarFolderRowId(folder.group.projectKey),
-                                ),
+                                <SidebarTopicHeader
+                                  key={`topic:${block.key}`}
+                                  block={block}
+                                  folderRowId={folderRowId}
+                                  onToggle={topicLayout.toggleTopic}
+                                  onNewThread={topicActions.startThreadInTopic}
+                                  onRename={topicActions.renameTopic}
+                                  onContextMenu={topicActions.showTopicContextMenu}
+                                />,
                               );
+                              for (const thread of block.threads) {
+                                items.push(
+                                  renderThreadRow(thread, "active", sidebarTopicRowId(block.key)),
+                                );
+                              }
+                            }
+                            for (const thread of folder.topics?.looseThreads ?? folder.threads) {
+                              items.push(renderThreadRow(thread, "active", folderRowId));
                             }
                           }
                           continue;
