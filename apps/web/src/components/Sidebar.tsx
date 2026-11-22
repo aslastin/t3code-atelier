@@ -1702,7 +1702,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   };
   const topicActions = useSidebarTopicActions({
     enabled: boringSidebarEnabled,
-    settleThreads,
+    settleThreads: (refs) => {
+      const coSettlingKeys = new Set(refs.map(scopedThreadKey));
+      for (const ref of refs) attemptSettle(ref, { coSettlingKeys });
+    },
     startThread: (projectRef) => {
       if (isMobile) setOpenMobile(false);
       return handleNewThread(projectRef);

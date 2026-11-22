@@ -12,6 +12,7 @@ import {
   type EnvironmentId,
   type ProjectId,
   type ScopedProjectRef,
+  type ScopedThreadRef,
   type ThreadId,
   ThreadTopicId,
 } from "@t3tools/contracts";
@@ -119,7 +120,8 @@ export function useSidebarTopicLayout(enabled: boolean) {
 
 export function useSidebarTopicActions(input: {
   readonly enabled: boolean;
-  readonly settleThreads: (threadKeys: readonly string[]) => void;
+  /** Settles threads together, including ones a closed topic does not draw. */
+  readonly settleThreads: (threads: readonly ScopedThreadRef[]) => void;
   readonly startThread: (
     projectRef: ScopedProjectRef,
   ) => Promise<{ readonly threadId: ThreadId } | null>;
@@ -190,7 +192,7 @@ export function useSidebarTopicActions(input: {
           case "settle":
             input.settleThreads(
               [...block.threads, ...block.hiddenThreads].map((thread) =>
-                scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                scopeThreadRef(thread.environmentId, thread.id),
               ),
             );
             return;
