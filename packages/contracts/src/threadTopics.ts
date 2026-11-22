@@ -57,6 +57,8 @@ export const ThreadTopicMutation = Schema.Union([
     threadIds: Schema.Array(ThreadId),
     /** Restores a disbanded topic in its old place; new topics go last. */
     orderKey: Schema.optional(Schema.String),
+    /** Undo of a disband: threads filed under another topic since stay there. */
+    restore: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("topic.rename"),

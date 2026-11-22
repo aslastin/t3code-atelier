@@ -28,6 +28,7 @@ import {
 } from "../../lib/threadTopicActions";
 import { randomUUID } from "../../lib/utils";
 import { readLocalApi } from "../../localApi";
+import { readThreadShell } from "../../state/entities";
 import { readEnvironmentScope } from "../../state/session";
 import { readThreadTopicIndexes, useThreadTopicIndexes } from "../../state/threadTopics";
 import { useUiStateStore } from "../../uiStateStore";
@@ -191,8 +192,13 @@ export function useSidebarTopicActions(input: {
             const members = [...(index?.topicIdByThreadId ?? [])].flatMap(([threadId, topicId]) =>
               topicId === block.topic.id ? [scopeThreadRef(block.environmentId, threadId)] : [],
             );
+            // A thread that left the project keeps a stale membership until the next snapshot.
             input.settleThreads(
-              members.filter((ref) => input.isActiveThread(scopedThreadKey(ref))),
+              members.filter(
+                (ref) =>
+                  input.isActiveThread(scopedThreadKey(ref)) &&
+                  readThreadShell(ref)?.projectId === block.topic.projectId,
+              ),
             );
             return;
           }

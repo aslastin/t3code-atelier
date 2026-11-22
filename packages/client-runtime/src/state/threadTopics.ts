@@ -44,6 +44,7 @@ export interface ThreadTopicIndex {
   readonly topicsByProjectId: ReadonlyMap<ProjectId, readonly ThreadTopic[]>;
 }
 
+/** Stands for an environment whose first snapshot has not arrived; a snapshot always indexes anew. */
 export const EMPTY_THREAD_TOPIC_INDEX: ThreadTopicIndex = {
   topicById: new Map(),
   topicIdByThreadId: new Map(),

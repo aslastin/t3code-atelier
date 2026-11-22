@@ -14,10 +14,13 @@ import {
   planTopicReorder,
   planTopicThreadDrop,
   sharedTopicProject,
+  sidebarFolderTopicsLayoutKey,
   sidebarTopicKey,
   sidebarTopicRowId,
   topicDraftSlot,
 } from "./Sidebar.topics.logic";
+
+import { draftSlotKey } from "../lib/draftSlots";
 
 const env = EnvironmentId.make("env-1");
 const otherEnv = EnvironmentId.make("env-2");
@@ -93,6 +96,25 @@ describe("arrangeFolderTopics", () => {
     expect(ids(later!.threads)).toEqual(["t3"]);
     expect(ids(later!.hiddenThreads)).toEqual(["t1"]);
     expect(ids(arranged.threads)).toEqual(["t3", "t2"]);
+  });
+
+  it("keys the drawn layout by topic order and membership, not just the thread count", () => {
+    const threads = [thread("t1"), thread("t2"), thread("t4")];
+    const key = (value: ThreadTopicsSnapshot) => {
+      const topics = arrangeFolderTopics({
+        threads,
+        indexes: new Map([[env, indexThreadTopics(value)]]),
+        isCollapsed: () => false,
+        routeThreadKey: null,
+        threadKey,
+      });
+      return sidebarFolderTopicsLayoutKey({ threads: topics.threads, topics });
+    };
+    const reordered: ThreadTopicsSnapshot = {
+      ...snapshot,
+      topics: [topic("later", "a"), topic("first", "c")],
+    };
+    expect(key(reordered)).not.toBe(key(snapshot));
   });
 
   it("leaves threads of environments without topics alone", () => {
@@ -190,8 +212,12 @@ describe("planTopicReorder", () => {
 
 describe("draftTopicId", () => {
   it("reads the topic back from a topic draft's slot key, and nothing from a project's", () => {
-    const projectKey = "github.com/acme/app";
-    expect(draftTopicId(`${projectKey}#${topicDraftSlot(ThreadTopicId.make("t-1"))}`)).toBe("t-1");
+    const projectKey = "/work/app";
+    const topicSlot = topicDraftSlot(ThreadTopicId.make("t-1"));
+    expect(draftTopicId(draftSlotKey(projectKey, topicSlot))).toBe("t-1");
     expect(draftTopicId(projectKey)).toBeNull();
+    // A project whose path reads like a topic slot keeps a plain draft of its own.
+    expect(draftTopicId(`${projectKey}#${topicSlot}`)).toBeNull();
+    expect(draftSlotKey(projectKey, topicSlot)).not.toBe(`${projectKey}#${topicSlot}`);
   });
 });

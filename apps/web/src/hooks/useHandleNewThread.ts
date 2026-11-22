@@ -54,6 +54,7 @@ import { useThreadRouteTarget } from "./useThreadRouteTarget";
 import { readUnloadedThreadCount } from "../state/olderSettledShelf";
 import { resolveProjectDefaultProviderModelSelection } from "../providerInstances";
 import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
+import { draftSlotKey } from "../lib/draftSlots";
 
 export const LAST_USED_PROJECT_STORAGE_KEY = "t3code:last-used-project:v1";
 export const lastUsedProjectKeySchema = Schema.NullOr(Schema.String);
@@ -237,10 +238,7 @@ export function createNewThreadHandler(router: AnyRouter) {
     const projectDraftKey = project
       ? deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings)
       : scopedProjectKey(projectRef);
-    const logicalProjectKey =
-      options?.draftSlot === undefined
-        ? projectDraftKey
-        : `${projectDraftKey}#${options.draftSlot}`;
+    const logicalProjectKey = draftSlotKey(projectDraftKey, options?.draftSlot);
     // Another opener (home's own first-project draft) may have reached this project's draft first.
     // Matches lag the location during a navigation, so compare against the location.
     const resultIfAbandoned = () => {

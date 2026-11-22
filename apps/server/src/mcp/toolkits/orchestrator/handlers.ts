@@ -1,5 +1,6 @@
 import { OrchestratorMcpFailure, type ThreadId } from "@t3tools/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
@@ -159,6 +160,8 @@ const handlers = {
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      // A retried call replays threads made earlier, which keep wherever they were filed since.
+      const startedAt = DateTime.formatIso(yield* DateTime.now);
       const result = yield* service.createThreads(scope, input);
       // Atelier fork. The threads exist by now, so a topic that cannot be saved is logged.
       const topics = yield* TopicService.TopicService;
@@ -170,6 +173,7 @@ const handlers = {
               threadId: thread.threadId,
               topic: input.threads[index]?.topic,
               sourceThreadId: scope.thread?.threadId,
+              createdSince: startedAt,
             })
             .pipe(Effect.ignoreCause({ log: true })),
         { discard: true },

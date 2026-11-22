@@ -285,7 +285,11 @@ import {
   useSidebarTopicLayout,
   withTopicMenuItems,
 } from "./sidebar/useSidebarTopics";
-import { isSidebarTopicRowId, sidebarTopicRowId } from "./Sidebar.topics.logic";
+import {
+  isSidebarTopicRowId,
+  sidebarFolderTopicsLayoutKey,
+  sidebarTopicRowId,
+} from "./Sidebar.topics.logic";
 import {
   SidebarDragBoundary,
   SidebarSectionHeader,
@@ -2068,7 +2072,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const listMotionLayoutKey = [
     sidebarListItemsKey,
     projectFolders
-      ?.map((folder) => `${folder.group.projectKey}:${folder.threads.length}`)
+      ?.map((folder) => `${folder.group.projectKey}:${sidebarFolderTopicsLayoutKey(folder)}`)
       .join("\n") ?? "",
     visibleDraftSessionCount,
     routeDraftIdForRows ?? "",

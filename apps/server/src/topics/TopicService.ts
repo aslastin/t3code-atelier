@@ -52,6 +52,8 @@ export class TopicService extends Context.Service<
       readonly threadId: ThreadId;
       readonly topic?: string | null | undefined;
       readonly sourceThreadId?: ThreadId | null | undefined;
+      /** A thread created before this ISO time is a replay of an earlier call, and stays put. */
+      readonly createdSince?: string | undefined;
     }) => Effect.Effect<void, ThreadTopicError>;
   }
 >()("t3/topics/TopicService") {}
@@ -235,7 +237,8 @@ const make = Effect.gen(function* () {
     pinOrderKeyBetween(topics.at(-1)?.orderKey ?? null, null) ?? `${topics.length + 1}`;
 
   // A key that leaves no room after it would push later topics before it.
-  const isUsableOrderKey = (key: string) => pinOrderKeyBetween(key, null) !== null;
+  const isUsableOrderKey = (key: string) =>
+    key.length > 0 && pinOrderKeyBetween(key, null) !== null;
 
   // Agents name topics by title, so a project never holds two topics of one name.
   const requireFreeTitle = Effect.fn("TopicService.requireFreeTitle")(function* (
@@ -252,6 +255,17 @@ const make = Effect.gen(function* () {
       });
     }
     return topics;
+  });
+
+  const unfiledThreadIds = Effect.fn("TopicService.unfiledThreadIds")(function* (
+    threadIds: ReadonlyArray<ThreadId>,
+  ) {
+    const filed = new Set(
+      (yield* listTitles(threadIds).pipe(Effect.mapError(failed("Could not read topics.")))).map(
+        (row) => row.threadId,
+      ),
+    );
+    return threadIds.filter((threadId) => !filed.has(threadId));
   });
 
   // Threads deleted meanwhile drop out, as when Undo restores a disbanded topic.
@@ -272,8 +286,14 @@ const make = Effect.gen(function* () {
     readonly title: string;
     readonly threadIds: ReadonlyArray<ThreadId>;
     readonly orderKey?: string | undefined;
+    readonly restore?: boolean | undefined;
   }) {
-    const threadIds = yield* existingThreadIds(input.threadIds);
+    const existingIds = yield* existingThreadIds(input.threadIds);
+    // Decided here, not from the client's possibly older snapshot.
+    const threadIds =
+      input.restore === true && existingIds.length > 0
+        ? yield* unfiledThreadIds(existingIds)
+        : existingIds;
     if (threadIds.length === 0) {
       return yield* new ThreadTopicError({ message: "A topic needs at least one thread." });
     }
@@ -459,8 +479,15 @@ const make = Effect.gen(function* () {
 
   const placeLaunchedThread: TopicService["Service"]["placeLaunchedThread"] = Effect.fn(
     "TopicService.placeLaunchedThread",
-  )(function* ({ threadId, topic, sourceThreadId }) {
+  )(function* ({ threadId, topic, sourceThreadId, createdSince }) {
     if (topic === null) return;
+    if (createdSince !== undefined) {
+      const fresh = yield* sql<{ readonly threadId: string }>`
+        SELECT thread_id AS "threadId" FROM orchestration_v2_projection_threads
+        WHERE thread_id = ${threadId} AND julianday(created_at) >= julianday(${createdSince})
+      `.pipe(Effect.mapError(failed("Could not read threads.")));
+      if (fresh.length === 0) return;
+    }
     // A retried launch replays a thread that may have moved since; its topic stays.
     const [current] = yield* listTitles([threadId]).pipe(
       Effect.mapError(failed("Could not read topics.")),

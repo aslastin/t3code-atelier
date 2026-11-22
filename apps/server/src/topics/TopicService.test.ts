@@ -143,6 +143,45 @@ describe("TopicService", () => {
           });
           snapshot = yield* topics.snapshot;
           assert.deepStrictEqual(titlesInOrder(snapshot, projectA), ["Login", "Ops", "Billing"]);
+
+          // An empty key would sort before every other; it goes last instead.
+          yield* insertThread("a5", projectA);
+          yield* topics.mutate({
+            type: "topic.create",
+            topicId: topicId("t4"),
+            projectId: projectA,
+            title: "Infra",
+            threadIds: [thread("a5")],
+            orderKey: "",
+          });
+          snapshot = yield* topics.snapshot;
+          assert.deepStrictEqual(titlesInOrder(snapshot, projectA), [
+            "Login",
+            "Ops",
+            "Billing",
+            "Infra",
+          ]);
+
+          // Undo of a disband leaves a thread filed under another topic since where it is,
+          // whatever the client last saw.
+          yield* topics.mutate({ type: "topic.disband", topicId: topicId("t4") });
+          yield* topics.mutate({
+            type: "topic.assign",
+            threadIds: [thread("a5")],
+            topicId: topicId("t3"),
+          });
+          yield* insertThread("a6", projectA);
+          yield* topics.mutate({
+            type: "topic.create",
+            topicId: topicId("t4"),
+            projectId: projectA,
+            title: "Infra",
+            threadIds: [thread("a5"), thread("a6")],
+            restore: true,
+          });
+          snapshot = yield* topics.snapshot;
+          assert.deepStrictEqual(membersOf(snapshot, "t4"), ["a6"]);
+          assert.deepStrictEqual(membersOf(snapshot, "t3"), ["a1", "a5"]);
         }),
       ),
     ),
@@ -317,6 +356,24 @@ describe("TopicService", () => {
             sourceThreadId: thread("a1"),
           });
           assert.isFalse((yield* topics.titlesByThread([thread("a4")])).has(thread("a4")));
+
+          // A thread made before the call is a replay, which keeps where it was filed since,
+          // including out of every topic.
+          yield* topics.placeLaunchedThread({
+            threadId: thread("a4"),
+            topic: "Auth",
+            createdSince: "2026-06-01T00:00:00.000Z",
+          });
+          assert.isFalse((yield* topics.titlesByThread([thread("a4")])).has(thread("a4")));
+          yield* topics.placeLaunchedThread({
+            threadId: thread("a4"),
+            topic: "Auth",
+            createdSince: "2025-12-31T00:00:00.000Z",
+          });
+          assert.strictEqual(
+            (yield* topics.titlesByThread([thread("a4")])).get(thread("a4")),
+            "Auth",
+          );
         }),
       ),
     ),

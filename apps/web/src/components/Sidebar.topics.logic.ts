@@ -11,6 +11,8 @@ import {
   ThreadTopicId,
 } from "@t3tools/contracts";
 
+import { draftSlotOf } from "../lib/draftSlots";
+
 // Atelier fork: topics inside the boring sidebar's project folders.
 
 interface TopicThread {
@@ -109,6 +111,20 @@ export function arrangeFolderTopics<TThread extends TopicThread>(input: {
     looseThreads,
     threads: [...topics.flatMap((block) => block.threads), ...looseThreads],
   };
+}
+
+/**
+ * What a folder draws, for list motion and the shift guard: topic order and membership move rows
+ * even when the folder's thread count and its active-thread order stay the same.
+ */
+export function sidebarFolderTopicsLayoutKey(folder: {
+  readonly threads: readonly TopicThread[];
+  readonly topics: ArrangedFolderTopics<TopicThread> | null;
+}): string {
+  const rows = folder.threads.map((thread) => `${thread.environmentId}:${thread.id}`).join(",");
+  const headers =
+    folder.topics?.topics.map((block) => `${block.key}/${block.threads.length}`).join(",") ?? "";
+  return `${headers}|${rows}`;
 }
 
 /** The one project and environment every thread shares, which topic actions need. */
@@ -221,11 +237,10 @@ export function topicDraftSlot(topicId: ThreadTopicId): string {
   return `${TOPIC_DRAFT_SLOT_PREFIX}${topicId}`;
 }
 
-/** The topic a draft was started in, read from its slot key (`<project key>#<slot>`). */
-export function draftTopicId(logicalProjectKey: string): ThreadTopicId | null {
-  const marker = `#${TOPIC_DRAFT_SLOT_PREFIX}`;
-  const index = logicalProjectKey.lastIndexOf(marker);
-  if (index === -1) return null;
-  const topicId = logicalProjectKey.slice(index + marker.length);
+/** The topic a draft was started in, read from its draft key's slot. */
+export function draftTopicId(draftKey: string): ThreadTopicId | null {
+  const slot = draftSlotOf(draftKey);
+  if (slot === null || !slot.startsWith(TOPIC_DRAFT_SLOT_PREFIX)) return null;
+  const topicId = slot.slice(TOPIC_DRAFT_SLOT_PREFIX.length);
   return topicId.length === 0 ? null : ThreadTopicId.make(topicId);
 }

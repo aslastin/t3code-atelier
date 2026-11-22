@@ -5,7 +5,10 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
-import type { ThreadTopicIndex } from "@t3tools/client-runtime/state/thread-topics";
+import {
+  EMPTY_THREAD_TOPIC_INDEX,
+  type ThreadTopicIndex,
+} from "@t3tools/client-runtime/state/thread-topics";
 import {
   type EnvironmentId,
   type ProjectId,
@@ -111,10 +114,9 @@ export async function disbandTopic(block: {
     action: "Disbanded",
     claim,
     failureTitle: m(msg("Failed to undo disband")),
-    // Threads filed under another topic since stay there.
-    undo: () => {
-      const index = readThreadTopicIndexes().get(environmentId);
-      return runAtomCommand(
+    // The server keeps threads filed under another topic since where they are.
+    undo: () =>
+      runAtomCommand(
         appAtomRegistry,
         threadTopicEnvironment.mutate,
         {
@@ -124,13 +126,13 @@ export async function disbandTopic(block: {
             topicId: topic.id,
             projectId: topic.projectId,
             title: topic.title,
-            threadIds: members.filter((threadId) => !index?.topicIdByThreadId.has(threadId)),
+            threadIds: members,
             orderKey: topic.orderKey,
+            restore: true,
           },
         },
         { reportFailure: false },
-      );
-    },
+      ),
   });
 }
 
@@ -145,8 +147,13 @@ export function assignDraftTopic(
 ) {
   const topicId = draftTopicId(draft.logicalProjectKey);
   if (topicId === null) return;
-  const topic = readThreadTopicIndexes().get(threadRef.environmentId)?.topicById.get(topicId);
-  if (topic === undefined || topic.projectId !== draft.projectId) return;
+  const index = readThreadTopicIndexes().get(threadRef.environmentId);
+  if (index === undefined) return;
+  // Before the first snapshot arrives the server decides, refusing a topic it lacks.
+  if (index !== EMPTY_THREAD_TOPIC_INDEX) {
+    const topic = index.topicById.get(topicId);
+    if (topic === undefined || topic.projectId !== draft.projectId) return;
+  }
   void mutateTopics(
     threadRef.environmentId,
     { type: "topic.assign", threadIds: [threadRef.threadId], topicId },
