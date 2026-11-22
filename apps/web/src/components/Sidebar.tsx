@@ -1287,7 +1287,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     shownValues: new Set(filteredProjectScopeItems.map((item) => item.value)),
     query: projectScopeMenuState.query,
   });
-  const scopeMenuItemByValue = new Map(scopeMenuItems.map((item) => [item.value, item] as const));
+  // Search lists topics of projects outside the filter; the full list must hold them too.
+  const scopeMenuItemByValue = new Map(
+    [...scopeMenuItems, ...filteredScopeMenuItems].map((item) => [item.value, item] as const),
+  );
+  const allScopeMenuItems = [...scopeMenuItemByValue.values()];
   const selectedProjectScopeItem =
     scopeKeys.length > 1
       ? null
@@ -3260,7 +3264,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               hasProjects={projectGroups.length > 0}
               projectScope={
                 <Combobox
-                  items={scopeMenuItems}
+                  items={allScopeMenuItems}
                   filteredItems={filteredScopeMenuItems}
                   autoHighlight
                   itemToStringLabel={(item) => item.label}
