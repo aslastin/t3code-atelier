@@ -155,6 +155,8 @@ export function planTopicThreadDrop(input: {
   const project = sharedTopicProject(threads);
   const index = project === null ? undefined : indexes.get(project.environmentId);
   if (project === null || index === undefined || row === null) return null;
+  // A row keeps its place while dragged, and its parent can be the folder even in a topic.
+  if (threads.some((thread) => `${thread.environmentId}:${thread.id}` === row.rowId)) return null;
   const threadIds = threads.map((thread) => thread.id);
   const topicRowId = [row.rowId, row.parentId].find(isSidebarTopicRowId);
   if (topicRowId !== undefined) {

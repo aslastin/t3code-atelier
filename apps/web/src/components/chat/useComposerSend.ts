@@ -1316,6 +1316,9 @@ export function useComposerSend(input: ComposerSendInput) {
         buildOutgoingMessageContext,
         isCurrentSend: () => composerSendGenerationRef.current === sendGeneration,
         draftChangedDuringPreparation,
+        onThreadStarted: (threadId) => {
+          if (draftThread) assignDraftTopic(scopeThreadRef(environmentId, threadId), draftThread);
+        },
       });
       return;
     }
@@ -1539,9 +1542,7 @@ export function useComposerSend(input: ComposerSendInput) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
-        if (sentDraftThreadRef && draftThread) {
-          assignDraftTopic(sentDraftThreadRef, draftThread.logicalProjectKey);
-        }
+        if (sentDraftThreadRef && draftThread) assignDraftTopic(sentDraftThreadRef, draftThread);
         if (checkoutPullRequestUrl) {
           linkCheckoutPullRequest(
             scopeThreadRef(environmentId, threadIdForSend),

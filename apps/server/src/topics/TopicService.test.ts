@@ -91,6 +91,11 @@ describe("TopicService", () => {
           });
           snapshot = yield* topics.snapshot;
           assert.deepStrictEqual(titlesInOrder(snapshot, projectA), ["Billing", "Login"]);
+          // Agents find topics by name, so one project never has two of a name.
+          const duplicate = yield* Effect.exit(
+            topics.mutate({ type: "topic.rename", topicId: topicId("t2"), title: "Login" }),
+          );
+          assert.isTrue(Exit.isFailure(duplicate));
 
           yield* topics.mutate({
             type: "topic.assign",
@@ -108,7 +113,8 @@ describe("TopicService", () => {
           assert.deepStrictEqual(titlesInOrder(snapshot, projectA), ["Login"]);
           assert.deepStrictEqual(snapshot.memberships, []);
 
-          // Undo of a disband recreates the topic in its old place.
+          // Undo of a disband recreates the topic in its old place, without threads deleted since.
+          yield* deleteThread("a3");
           yield* topics.mutate({
             type: "topic.create",
             topicId: topicId("t2"),
@@ -119,7 +125,24 @@ describe("TopicService", () => {
           });
           snapshot = yield* topics.snapshot;
           assert.deepStrictEqual(titlesInOrder(snapshot, projectA), ["Billing", "Login"]);
-          assert.deepStrictEqual(membersOf(snapshot, "t2"), ["a2", "a3"]);
+          assert.deepStrictEqual(membersOf(snapshot, "t2"), ["a2"]);
+
+          // A key that leaves no room after it is not taken; the topic goes last.
+          yield* topics.mutate({
+            type: "topic.create",
+            topicId: topicId("t3"),
+            projectId: projectA,
+            title: "Ops",
+            threadIds: [thread("a1")],
+            orderKey: "z!",
+          });
+          yield* topics.mutate({
+            type: "topic.reorder",
+            topicId: topicId("t2"),
+            afterTopicId: topicId("t3"),
+          });
+          snapshot = yield* topics.snapshot;
+          assert.deepStrictEqual(titlesInOrder(snapshot, projectA), ["Login", "Ops", "Billing"]);
         }),
       ),
     ),
@@ -159,6 +182,21 @@ describe("TopicService", () => {
           );
           assert.isTrue(Exit.isFailure(moved));
           assert.deepStrictEqual(membersOf(yield* topics.snapshot, "t1"), ["a1"]);
+
+          const empty = yield* Effect.exit(
+            topics.mutate({
+              type: "topic.create",
+              topicId: topicId("t2"),
+              projectId: projectA,
+              title: "Empty",
+              threadIds: [],
+            }),
+          );
+          assert.isTrue(Exit.isFailure(empty));
+          const missing = yield* Effect.exit(
+            topics.assignByTitle({ threadId: thread("nope"), title: null }),
+          );
+          assert.isTrue(Exit.isFailure(missing));
         }),
       ),
     ),
@@ -185,12 +223,26 @@ describe("TopicService", () => {
               title: "Gone",
               threadIds: [thread("a3")],
             });
+            yield* insertThread("a4", projectA);
+            yield* topics.mutate({
+              type: "topic.create",
+              topicId: topicId("t3"),
+              projectId: projectA,
+              title: "Emptied",
+              threadIds: [thread("a4")],
+            });
+            yield* topics.mutate({
+              type: "topic.assign",
+              threadIds: [thread("a4")],
+              topicId: null,
+            });
             yield* deleteThread("a1");
             yield* deleteThread("a3");
             assert.deepStrictEqual(membersOf(yield* topics.snapshot, "t1"), ["a2"]);
           }),
         );
-        // The next start removes the rows and the topic they emptied.
+        // The next start removes the rows and the topic they emptied; a topic the user
+        // emptied stays, since an open topic draft may still name it.
         yield* withService(Effect.void);
         const sql = yield* SqlClient.SqlClient;
         const members = yield* sql<{ readonly threadId: string }>`
@@ -201,10 +253,7 @@ describe("TopicService", () => {
           ["a2"],
         );
         const topicRows = yield* sql<{ readonly id: string }>`SELECT id FROM atelier_thread_topics`;
-        assert.deepStrictEqual(
-          topicRows.map((row) => row.id),
-          ["t1"],
-        );
+        assert.deepStrictEqual(topicRows.map((row) => row.id).toSorted(), ["t1", "t3"]);
       }),
     ),
   );
@@ -248,6 +297,26 @@ describe("TopicService", () => {
 
           const titles = yield* topics.titlesByThread([thread("a1"), thread("b1")]);
           assert.deepStrictEqual([...titles], [[thread("a1"), "Auth"]]);
+
+          // A replayed launch leaves a thread that was filed elsewhere since where it is.
+          yield* topics.placeLaunchedThread({ threadId: thread("a3"), topic: "Billing" });
+          assert.deepStrictEqual(
+            (yield* topics.titlesByThread([thread("a3")])).get(thread("a3")),
+            "Auth",
+          );
+
+          // A launcher that moved to another project no longer passes on its old topic.
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`
+            UPDATE orchestration_v2_projection_threads SET project_id = ${projectB}
+            WHERE thread_id = 'a1'
+          `;
+          yield* insertThread("a4", projectA);
+          yield* topics.placeLaunchedThread({
+            threadId: thread("a4"),
+            sourceThreadId: thread("a1"),
+          });
+          assert.isFalse((yield* topics.titlesByThread([thread("a4")])).has(thread("a4")));
         }),
       ),
     ),

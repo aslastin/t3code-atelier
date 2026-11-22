@@ -1699,6 +1699,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   };
   const topicActions = useSidebarTopicActions({
     enabled: boringSidebarEnabled,
+    isActiveThread: (threadKey) => sectionByThreadKeyRef.current.get(threadKey) === "active",
     settleThreads: (refs) => {
       const coSettlingKeys = new Set(refs.map(scopedThreadKey));
       for (const ref of refs) attemptSettle(ref, { coSettlingKeys });

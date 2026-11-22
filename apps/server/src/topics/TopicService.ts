@@ -78,7 +78,8 @@ const make = Effect.gen(function* () {
   yield* ensureTopicTables().pipe(Effect.mapError(failed("Could not create topic tables.")));
   // A deleted thread never returns, and a thread that left its topic's project no longer
   // belongs to it; reads skip both, and this drops what they left behind.
-  yield* sql`
+  // Only topics this emptied go too: one the user emptied may still name an open topic draft.
+  const pruned = yield* sql<{ readonly topicId: string }>`
     DELETE FROM atelier_thread_topic_members
     WHERE thread_id NOT IN (
       SELECT member.thread_id
@@ -89,11 +90,16 @@ const make = Effect.gen(function* () {
         AND thread.project_id = topic.project_id
         AND thread.deleted_at IS NULL
     )
+    RETURNING topic_id AS "topicId"
   `.pipe(Effect.mapError(failed("Could not prune topic memberships.")));
-  yield* sql`
-    DELETE FROM atelier_thread_topics
-    WHERE id NOT IN (SELECT topic_id FROM atelier_thread_topic_members)
-  `.pipe(Effect.mapError(failed("Could not prune empty topics.")));
+  const emptiedTopicIds = [...new Set(pruned.map((row) => row.topicId))];
+  if (emptiedTopicIds.length > 0) {
+    yield* sql`
+      DELETE FROM atelier_thread_topics
+      WHERE ${sql.in("id", emptiedTopicIds)}
+        AND id NOT IN (SELECT topic_id FROM atelier_thread_topic_members)
+    `.pipe(Effect.mapError(failed("Could not prune empty topics.")));
+  }
 
   const changes = yield* PubSub.unbounded<ThreadTopicsSnapshot>();
   const lock = yield* Semaphore.make(1);
@@ -169,10 +175,15 @@ const make = Effect.gen(function* () {
     `,
   });
 
-  const readSnapshot: Effect.Effect<ThreadTopicsSnapshot, ThreadTopicError> = Effect.all({
-    topics: listTopics(undefined),
-    memberships: listMemberships(undefined),
-  }).pipe(Effect.mapError(failed("Could not read topics.")));
+  // One transaction, so a membership never names a topic the same snapshot lacks.
+  const readSnapshot: Effect.Effect<ThreadTopicsSnapshot, ThreadTopicError> = sql
+    .withTransaction(
+      Effect.all({
+        topics: listTopics(undefined),
+        memberships: listMemberships(undefined),
+      }),
+    )
+    .pipe(Effect.mapError(failed("Could not read topics.")));
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -223,6 +234,38 @@ const make = Effect.gen(function* () {
   const lastOrderKey = (topics: ReadonlyArray<typeof TopicRow.Type>) =>
     pinOrderKeyBetween(topics.at(-1)?.orderKey ?? null, null) ?? `${topics.length + 1}`;
 
+  // A key that leaves no room after it would push later topics before it.
+  const isUsableOrderKey = (key: string) => pinOrderKeyBetween(key, null) !== null;
+
+  // Agents name topics by title, so a project never holds two topics of one name.
+  const requireFreeTitle = Effect.fn("TopicService.requireFreeTitle")(function* (
+    projectId: ProjectId,
+    title: string,
+    exceptTopicId: ThreadTopicId,
+  ) {
+    const topics = yield* listProjectTopics(projectId).pipe(
+      Effect.mapError(failed("Could not read topics.")),
+    );
+    if (topics.some((topic) => topic.title === title && topic.id !== exceptTopicId)) {
+      return yield* new ThreadTopicError({
+        message: `This project already has a topic named "${title}".`,
+      });
+    }
+    return topics;
+  });
+
+  // Threads deleted meanwhile drop out, as when Undo restores a disbanded topic.
+  const existingThreadIds = Effect.fn("TopicService.existingThreadIds")(function* (
+    threadIds: ReadonlyArray<ThreadId>,
+  ) {
+    if (threadIds.length === 0) return [];
+    const rows = yield* findThreads(threadIds).pipe(
+      Effect.mapError(failed("Could not read threads.")),
+    );
+    const existing = new Set(rows.map((row) => row.threadId));
+    return threadIds.filter((threadId) => existing.has(threadId));
+  });
+
   const createTopic = Effect.fn("TopicService.createTopic")(function* (input: {
     readonly topicId: ThreadTopicId;
     readonly projectId: ProjectId;
@@ -230,7 +273,11 @@ const make = Effect.gen(function* () {
     readonly threadIds: ReadonlyArray<ThreadId>;
     readonly orderKey?: string | undefined;
   }) {
-    yield* requireProjectThreads(input.threadIds, input.projectId);
+    const threadIds = yield* existingThreadIds(input.threadIds);
+    if (threadIds.length === 0) {
+      return yield* new ThreadTopicError({ message: "A topic needs at least one thread." });
+    }
+    yield* requireProjectThreads(threadIds, input.projectId);
     const [existing] = yield* findTopic(input.topicId).pipe(
       Effect.mapError(failed("Could not read topic.")),
     );
@@ -239,19 +286,17 @@ const make = Effect.gen(function* () {
     }
     const now = yield* nowIso;
     if (existing === undefined) {
+      const topics = yield* requireFreeTitle(input.projectId, input.title, input.topicId);
       const orderKey =
-        input.orderKey ??
-        lastOrderKey(
-          yield* listProjectTopics(input.projectId).pipe(
-            Effect.mapError(failed("Could not read topics.")),
-          ),
-        );
+        input.orderKey !== undefined && isUsableOrderKey(input.orderKey)
+          ? input.orderKey
+          : lastOrderKey(topics);
       yield* sql`
         INSERT INTO atelier_thread_topics (id, project_id, title, order_key, created_at, updated_at)
         VALUES (${input.topicId}, ${input.projectId}, ${input.title}, ${orderKey}, ${now}, ${now})
       `;
     }
-    yield* addMembers(input.topicId, input.threadIds);
+    yield* addMembers(input.topicId, threadIds);
   });
 
   const reorderTopic = Effect.fn("TopicService.reorderTopic")(function* (
@@ -299,7 +344,8 @@ const make = Effect.gen(function* () {
       case "topic.create":
         return yield* createTopic(mutation);
       case "topic.rename": {
-        yield* requireTopic(mutation.topicId);
+        const topic = yield* requireTopic(mutation.topicId);
+        yield* requireFreeTitle(topic.projectId, mutation.title, topic.id);
         const now = yield* nowIso;
         yield* sql`
           UPDATE atelier_thread_topics SET title = ${mutation.title}, updated_at = ${now}
@@ -331,6 +377,7 @@ const make = Effect.gen(function* () {
   });
 
   const isTopicError = Schema.is(ThreadTopicError);
+  // Uninterruptible: a caller that disconnects after the commit must not skip the publish.
   const commit = <A, E>(effect: Effect.Effect<A, E>) =>
     lock.withPermits(1)(
       Effect.gen(function* () {
@@ -345,7 +392,7 @@ const make = Effect.gen(function* () {
           );
         yield* PubSub.publish(changes, yield* readSnapshot);
         return result;
-      }),
+      }).pipe(Effect.uninterruptible),
     );
 
   const mutate: TopicService["Service"]["mutate"] = Effect.fn("TopicService.mutate")(
@@ -368,6 +415,12 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     rawTitle: string | null,
   ) {
+    const [thread] = yield* findThreads([threadId]).pipe(
+      Effect.mapError(failed("Could not read threads.")),
+    );
+    if (thread === undefined) {
+      return yield* new ThreadTopicError({ message: `Thread ${threadId} does not exist.` });
+    }
     if (rawTitle === null) {
       yield* sql`DELETE FROM atelier_thread_topic_members WHERE thread_id = ${threadId}`;
       return;
@@ -380,12 +433,6 @@ const make = Effect.gen(function* () {
           }),
       ),
     );
-    const [thread] = yield* findThreads([threadId]).pipe(
-      Effect.mapError(failed("Could not read threads.")),
-    );
-    if (thread === undefined) {
-      return yield* new ThreadTopicError({ message: `Thread ${threadId} does not exist.` });
-    }
     const topics = yield* listProjectTopics(thread.projectId).pipe(
       Effect.mapError(failed("Could not read topics.")),
     );
@@ -414,14 +461,24 @@ const make = Effect.gen(function* () {
     "TopicService.placeLaunchedThread",
   )(function* ({ threadId, topic, sourceThreadId }) {
     if (topic === null) return;
+    // A retried launch replays a thread that may have moved since; its topic stays.
+    const [current] = yield* listTitles([threadId]).pipe(
+      Effect.mapError(failed("Could not read topics.")),
+    );
+    if (current !== undefined) return;
     if (topic !== undefined) return yield* assignByTitle({ threadId, title: topic });
     if (sourceThreadId == null || sourceThreadId === threadId) return;
     yield* commit(
       Effect.gen(function* () {
+        // The launcher's topic counts only while the launcher is still in its project.
         const [sourceTopic] = yield* sql<{ readonly topicId: string; readonly projectId: string }>`
           SELECT member.topic_id AS "topicId", topic.project_id AS "projectId"
           FROM atelier_thread_topic_members AS member
           JOIN atelier_thread_topics AS topic ON topic.id = member.topic_id
+          JOIN orchestration_v2_projection_threads AS thread
+            ON thread.thread_id = member.thread_id
+            AND thread.project_id = topic.project_id
+            AND thread.deleted_at IS NULL
           WHERE member.thread_id = ${sourceThreadId}
         `;
         if (sourceTopic === undefined) return;

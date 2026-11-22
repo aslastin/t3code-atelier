@@ -158,6 +158,8 @@ describe("planTopicThreadDrop", () => {
     expect(plan([thread("t2"), thread("x", otherProject)], { rowId: laterRow })).toBeNull();
     expect(plan([thread("t1", project)], { rowId: "folder:other" })).toBeNull();
     expect(plan([thread("t1")], null)).toBeNull();
+    // A dragged row stays put; releasing over it, even with the folder as its parent, is no drop.
+    expect(plan([thread("t1")], { rowId: "env-1:t1", parentId: folderRow })).toBeNull();
   });
 });
 

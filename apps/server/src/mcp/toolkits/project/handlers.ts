@@ -486,13 +486,15 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
         );
         const thread = result.projection.thread;
         // Atelier fork. The thread exists by now, so a topic that cannot be saved is logged.
-        yield* topics
-          .placeLaunchedThread({
-            threadId: thread.id,
-            topic: input.topic,
-            sourceThreadId: caller?.id,
-          })
-          .pipe(Effect.ignoreCause({ log: true }));
+        // A replayed launch keeps wherever the thread was filed since.
+        if (!replaying)
+          yield* topics
+            .placeLaunchedThread({
+              threadId: thread.id,
+              topic: input.topic,
+              sourceThreadId: caller?.id,
+            })
+            .pipe(Effect.ignoreCause({ log: true }));
         const run = result.projection.runs.find((run) => run.userMessageId === messageId);
         return {
           threadId: thread.id,

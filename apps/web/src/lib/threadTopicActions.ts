@@ -111,8 +111,10 @@ export async function disbandTopic(block: {
     action: "Disbanded",
     claim,
     failureTitle: m(msg("Failed to undo disband")),
-    undo: () =>
-      runAtomCommand(
+    // Threads filed under another topic since stay there.
+    undo: () => {
+      const index = readThreadTopicIndexes().get(environmentId);
+      return runAtomCommand(
         appAtomRegistry,
         threadTopicEnvironment.mutate,
         {
@@ -122,19 +124,29 @@ export async function disbandTopic(block: {
             topicId: topic.id,
             projectId: topic.projectId,
             title: topic.title,
-            threadIds: members,
+            threadIds: members.filter((threadId) => !index?.topicIdByThreadId.has(threadId)),
             orderKey: topic.orderKey,
           },
         },
         { reportFailure: false },
-      ),
+      );
+    },
   });
 }
 
-/** Files a just-created thread under the topic its draft was started in. */
-export function assignDraftTopic(threadRef: ScopedThreadRef, logicalProjectKey: string) {
-  const topicId = draftTopicId(logicalProjectKey);
+/**
+ * Files a just-created thread under the topic its draft was started in. A draft that moved to
+ * another environment or project, or a project key that only looks like a topic slot, names no
+ * topic of the thread's project there, and the thread stays out of topics.
+ */
+export function assignDraftTopic(
+  threadRef: ScopedThreadRef,
+  draft: { readonly logicalProjectKey: string; readonly projectId: ProjectId },
+) {
+  const topicId = draftTopicId(draft.logicalProjectKey);
   if (topicId === null) return;
+  const topic = readThreadTopicIndexes().get(threadRef.environmentId)?.topicById.get(topicId);
+  if (topic === undefined || topic.projectId !== draft.projectId) return;
   void mutateTopics(
     threadRef.environmentId,
     { type: "topic.assign", threadIds: [threadRef.threadId], topicId },

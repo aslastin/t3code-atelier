@@ -29,10 +29,9 @@ import {
 import { randomUUID } from "../../lib/utils";
 import { readLocalApi } from "../../localApi";
 import { readEnvironmentScope } from "../../state/session";
-import { useThreadTopicIndexes } from "../../state/threadTopics";
-import { resolveProjectExpanded, useUiStateStore } from "../../uiStateStore";
+import { readThreadTopicIndexes, useThreadTopicIndexes } from "../../state/threadTopics";
+import { useUiStateStore } from "../../uiStateStore";
 import {
-  type ArrangedFolderTopics,
   arrangeFolderTopics,
   planTopicReorder,
   sharedTopicProject,
@@ -97,20 +96,18 @@ export function useSidebarTopicLayout(enabled: boolean) {
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const setProjectExpanded = useUiStateStore((store) => store.setProjectExpanded);
   const active = enabled && indexes.size > 0;
+  // Topics open by default, whatever the legacy folder default says.
+  const isCollapsed = (topicKey: string) =>
+    projectExpandedById[sidebarTopicExpansionKey(topicKey)] === false;
   const toggleTopic = useStableCallback((topicKey: string) => {
-    const key = sidebarTopicExpansionKey(topicKey);
-    setProjectExpanded(key, !resolveProjectExpanded(projectExpandedById, [key]));
+    setProjectExpanded(sidebarTopicExpansionKey(topicKey), isCollapsed(topicKey));
   });
   const arrange = active
-    ? <TThread extends EnvironmentThreadShell>(
-        threads: readonly TThread[],
-        routeThreadKey: string | null,
-      ): ArrangedFolderTopics<TThread> =>
+    ? (threads: readonly EnvironmentThreadShell[], routeThreadKey: string | null) =>
         arrangeFolderTopics({
           threads,
           indexes,
-          isCollapsed: (topicKey) =>
-            projectExpandedById[sidebarTopicExpansionKey(topicKey)] === false,
+          isCollapsed,
           routeThreadKey,
           threadKey: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
         })
@@ -122,6 +119,8 @@ export function useSidebarTopicActions(input: {
   readonly enabled: boolean;
   /** Settles threads together, including ones a closed topic does not draw. */
   readonly settleThreads: (threads: readonly ScopedThreadRef[]) => void;
+  /** Whether the thread is in the active list now, read when a menu choice runs. */
+  readonly isActiveThread: (threadKey: string) => boolean;
   /** Opens the project's draft for `draftSlot`, kept apart from its other drafts. */
   readonly startThread: (projectRef: ScopedProjectRef, draftSlot: string) => Promise<unknown>;
 }) {
@@ -186,13 +185,17 @@ export function useSidebarTopicActions(input: {
           case "rename":
             useSidebarTopicRename.setState({ renamingKey: block.key });
             return;
-          case "settle":
+          case "settle": {
+            // Membership can change while the menu is open, here or on another client.
+            const index = readThreadTopicIndexes().get(block.environmentId);
+            const members = [...(index?.topicIdByThreadId ?? [])].flatMap(([threadId, topicId]) =>
+              topicId === block.topic.id ? [scopeThreadRef(block.environmentId, threadId)] : [],
+            );
             input.settleThreads(
-              [...block.threads, ...block.hiddenThreads].map((thread) =>
-                scopeThreadRef(thread.environmentId, thread.id),
-              ),
+              members.filter((ref) => input.isActiveThread(scopedThreadKey(ref))),
             );
             return;
+          }
           case "disband":
             await disbandTopic(block);
             return;
