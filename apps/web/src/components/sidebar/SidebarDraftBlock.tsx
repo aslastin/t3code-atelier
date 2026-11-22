@@ -15,6 +15,8 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "~/lib/utils";
 import { resolveSidebarRowAccessibility } from "../Sidebar.logic";
+import type { SidebarTopicScopeMatcher } from "../Sidebar.topicScope.logic";
+import { draftTopicId } from "../Sidebar.topics.logic";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -174,6 +176,8 @@ function listedDraftComposer(draftId: string | null): ComposerThreadDraftState |
 export function useSidebarDrafts(
   scopedProjectKeys: ReadonlySet<string> | null,
   routeDraftId: string | null,
+  // Atelier fork: the project filter's picked topics.
+  matchesTopicScope: SidebarTopicScopeMatcher["matchesDraft"] | null = null,
 ): { draftIds: readonly DraftId[]; routeDraftComposer: ComposerThreadDraftState | null } {
   const [frozenRoute, setFrozenRoute] = useState<{
     routeDraftId: string | null;
@@ -192,6 +196,12 @@ export function useSidebarDrafts(
         if (
           scopedProjectKeys !== null &&
           !scopedProjectKeys.has(`${session.environmentId}:${session.projectId}`)
+        ) {
+          continue;
+        }
+        if (
+          matchesTopicScope !== null &&
+          !matchesTopicScope({ ...session, topicId: draftTopicId(session.logicalProjectKey) })
         ) {
           continue;
         }
