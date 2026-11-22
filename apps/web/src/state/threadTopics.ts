@@ -38,6 +38,20 @@ const threadTopicIndexesAtom = Atom.make((get): ReadonlyMap<EnvironmentId, Threa
   return indexes.size === 0 ? EMPTY_INDEXES : indexes;
 }).pipe(Atom.withLabel("web-thread-topics"));
 
+/** Whether every environment that serves topics has sent its first snapshot. */
+const threadTopicSnapshotsReadyAtom = Atom.make((get): boolean => {
+  for (const [environmentId, config] of get(environmentServerConfigsAtom)) {
+    if (config.environment.capabilities.threadTopics !== true) continue;
+    const result = get(threadTopicEnvironment.snapshot({ environmentId, input: {} }));
+    if (AsyncResult.getOrElse(result, () => null) === null) return false;
+  }
+  return true;
+}).pipe(Atom.withLabel("web-thread-topics:ready"));
+
+export function useThreadTopicSnapshotsReady(): boolean {
+  return useAtomValue(threadTopicSnapshotsReadyAtom);
+}
+
 export function useThreadTopicIndexes(): ReadonlyMap<EnvironmentId, ThreadTopicIndex> {
   return useAtomValue(threadTopicIndexesAtom);
 }

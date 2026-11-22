@@ -464,6 +464,7 @@ function useSidebarThreads(input: {
   readonly projectScopeKey: string | null;
   readonly scopedProjectKeys: ReadonlySet<string> | null;
   readonly matchesTopicScope: ((thread: EnvironmentThreadShell) => boolean) | null;
+  readonly topicNarrowedProjectKeys: ReadonlySet<string> | null;
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
   readonly connectedEnvironmentIds: readonly EnvironmentId[];
   readonly optimisticDrop: SidebarOptimisticDrop | null;
@@ -481,6 +482,7 @@ function useSidebarThreads(input: {
     projectScopeKey,
     scopedProjectKeys,
     matchesTopicScope,
+    topicNarrowedProjectKeys,
     serverConfigs,
     connectedEnvironmentIds,
     optimisticDrop,
@@ -546,16 +548,18 @@ function useSidebarThreads(input: {
     partition;
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
   const olderSettledShelf = useOlderSettledShelf({
-    scopes: olderSettledScopes([...serverConfigs.keys()], scopedProjectKeys),
+    scopes: olderSettledScopes(
+      [...serverConfigs.keys()],
+      scopedProjectKeys,
+      topicNarrowedProjectKeys,
+    ),
     expanded: settledShelfExpanded,
     visibleCount: settledVisibleCount,
   });
   const listedSettledThreads = settledThreads.filter(olderSettledShelf.isListed);
   useOlderSettledShelfGrowth(olderSettledShelf, listedSettledThreads);
-  // Older settled counts come per project; within picked topics only loaded threads are known.
   const settledCount =
-    settledThreads.length +
-    (matchesTopicScope === null ? olderSettledShelf.unloadedCount(partition.visibleThreads) : 0);
+    settledThreads.length + olderSettledShelf.unloadedCount(partition.visibleThreads);
   const visibleSettledThreads = (() => {
     const visible = listedSettledThreads.slice(0, settledVisibleCount);
     if (
@@ -780,6 +784,9 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
 function olderSettledScopes(
   environmentIds: ReadonlyArray<EnvironmentId>,
   scopedProjectKeys: ReadonlySet<string> | null,
+  // Atelier fork: older pages and counts come per project, not per topic, so projects narrowed
+  // to topics list only the settled threads already loaded.
+  topicNarrowedProjectKeys: ReadonlySet<string> | null = null,
 ): ReadonlyArray<OlderSettledScope> {
   if (scopedProjectKeys === null) {
     return environmentIds.map((environmentId) => ({ environmentId, projectIds: null }));
@@ -787,7 +794,9 @@ function olderSettledScopes(
   return environmentIds.flatMap((environmentId) => {
     const prefix = `${environmentId}:`;
     const projectIds = [...scopedProjectKeys].flatMap((key) =>
-      key.startsWith(prefix) ? [ProjectId.make(key.slice(prefix.length))] : [],
+      key.startsWith(prefix) && topicNarrowedProjectKeys?.has(key) !== true
+        ? [ProjectId.make(key.slice(prefix.length))]
+        : [],
     );
     return projectIds.length === 0 ? [] : [{ environmentId, projectIds }];
   });
@@ -1166,6 +1175,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     indexes: topicIndexes,
     scope: chosenTopicScope,
     matcher: chosenTopicMatcher,
+    pending: topicScopePending,
     setTopicKeys: setPersistedTopicScopeKeys,
   } = useSidebarTopicScope({ groups: scopeGroups, projectKeys: chosenProjectScopeKeys });
   const chosenProjectGroups = scopeGroups.filter((project) =>
@@ -1209,7 +1219,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     routeKey: routeRowThreadKey,
     routeKeyInPlace,
     isSearching: isSearchingThreads,
-    scopedProjectKeys: chosenScopeProjectKeys,
+    // A stored topic still loading would look missing and widen a scope that holds the thread.
+    scopedProjectKeys: topicScopePending ? null : chosenScopeProjectKeys,
     delegatedUnderParent,
     findThread: (key) => threads.find((candidate) => threadShellKey(candidate) === key),
     matchesTopicScope:
@@ -1467,6 +1478,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     projectScopeKey,
     scopedProjectKeys,
     matchesTopicScope: topicMatcher?.matchesThread ?? null,
+    topicNarrowedProjectKeys: topicMatcher?.narrowedRefKeys ?? null,
     serverConfigs,
     connectedEnvironmentIds,
     optimisticDrop,

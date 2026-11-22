@@ -1,11 +1,13 @@
 import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { type EnvironmentId, type ProjectId, ThreadTopicId } from "@t3tools/contracts";
 import { CircleDashedIcon, HashIcon } from "lucide-react";
 
-import { useThreadTopicIndexes } from "../../state/threadTopics";
+import { useComposerDraftStore } from "../../composerDraftStore";
+import { useThreadTopicIndexes, useThreadTopicSnapshotsReady } from "../../state/threadTopics";
 import { useUiStateStore } from "../../uiStateStore";
 import { filterSidebarV2VisibleThreads } from "../Sidebar.logic";
+import { draftTopicId } from "../Sidebar.topics.logic";
 import {
   collectSidebarTopicKeys,
   createSidebarTopicScopeMatcher,
@@ -29,16 +31,40 @@ export function useSidebarTopicScope(input: {
   readonly projectKeys: readonly string[];
 }) {
   const indexes = useThreadTopicIndexes();
+  const snapshotsReady = useThreadTopicSnapshotsReady();
   const topicKeys = useUiStateStore((store) => store.sidebarTopicScopeKeys);
   const setTopicKeys = useUiStateStore((store) => store.setSidebarTopicScopeKeys);
+  // A string, so the selector stays stable while drafts change elsewhere.
+  const draftTopics = useComposerDraftStore((store) =>
+    Object.values(store.draftThreadsByThreadKey)
+      .flatMap((session) => {
+        const topicId = draftTopicId(session.logicalProjectKey);
+        return topicId === null ? [] : [`${session.environmentId}:${session.threadId}\n${topicId}`];
+      })
+      .join("\n\n"),
+  );
   const scope = resolveSidebarTopicScope({
     groups: input.groups,
     projectKeys: input.projectKeys,
     topicKeys,
     indexes,
   });
-  const matcher = createSidebarTopicScopeMatcher({ scope, groups: input.groups, indexes });
-  return { indexes, scope, matcher, setTopicKeys };
+  const matcher = createSidebarTopicScopeMatcher({
+    scope,
+    groups: input.groups,
+    indexes,
+    draftTopicIdByThread: new Map(
+      draftTopics === ""
+        ? []
+        : draftTopics.split("\n\n").map((entry) => {
+            const [threadKey = "", topicId = ""] = entry.split("\n");
+            return [threadKey, ThreadTopicId.make(topicId)] as const;
+          }),
+    ),
+  });
+  // Until every snapshot arrives, a stored topic may only look missing.
+  const pending = !snapshotsReady && scope.unresolvedTopicKeys.length > 0;
+  return { indexes, scope, matcher, pending, setTopicKeys };
 }
 
 /** Topics a folder would show: those with an active thread, as in the boring sidebar. */

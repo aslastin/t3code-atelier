@@ -137,6 +137,23 @@ describe("sidebar topic scope", () => {
     // A topic of another project does not file the draft.
     expect(matcher.matchesDraft(draft("styles"))).toBe(false);
   });
+
+  it("keeps a thread sent from a topic's draft in the topic until it joins one", () => {
+    const scope = resolve({ projectKeys: [], topicKeys: [payments] });
+    const matcher = createSidebarTopicScopeMatcher({
+      scope,
+      groups,
+      indexes,
+      draftTopicIdByThread: new Map([
+        [`${env}:just-sent`, ThreadTopicId.make("payments")],
+        [`${env}:auth-1`, ThreadTopicId.make("payments")],
+      ]),
+    })!;
+    expect(matcher.matchesThread(thread("just-sent", app))).toBe(true);
+    // Membership, once it lands, decides.
+    expect(matcher.matchesThread(thread("auth-1", app))).toBe(false);
+    expect(matcher.narrowedRefKeys).toEqual(new Set([`${env}:${app}`]));
+  });
 });
 
 describe("sidebar scope picks", () => {
@@ -174,11 +191,17 @@ describe("sidebar scope picks", () => {
     ).toEqual({ projectKeys: [], topicKeys: [] });
   });
 
-  it("forgets ignored keys on the next pick", () => {
+  it("keeps ignored keys through Shift picks, so a returning topic is picked again", () => {
     const gone = topicScopeKey(env, ThreadTopicId.make("disbanded"));
-    expect(
-      toggleSidebarScopeItem(resolve({ projectKeys: [], topicKeys: [gone] }), pickPayments),
-    ).toEqual({ projectKeys: [], topicKeys: [payments] });
+    const scope = resolve({ projectKeys: [], topicKeys: [gone] });
+    expect(toggleSidebarScopeItem(scope, pickPayments)).toEqual({
+      projectKeys: [],
+      topicKeys: [gone, payments],
+    });
+    expect(toggleSidebarScopeItem(scope, pickApp)).toEqual({
+      projectKeys: ["app"],
+      topicKeys: [gone],
+    });
   });
 });
 
@@ -234,6 +257,20 @@ describe("buildSidebarScopeMenuItems", () => {
       "web",
       "legacy",
     ]);
+    // No topic stays while the project has topics, though none has an active thread.
+    expect(
+      buildSidebarScopeMenuItems({
+        projectItems,
+        shownValues: new Set(projectItems.map((item) => item.value)),
+        groupByKey: new Map(groups.map((group) => [group.projectKey, group])),
+        scope: resolve({ projectKeys: ["app"], topicKeys: [] }),
+        indexes,
+        listedTopicKeys: new Set(),
+        query: "",
+        matches,
+        noTopicLabel: "No topic",
+      }).map((item) => item.label),
+    ).toEqual(["All projects", "app", "No topic", "web", "legacy"]);
     // A project in an environment without topics never lists any.
     expect(build({ projectKeys: ["legacy"], topicKeys: [] })).toEqual([
       "All projects",

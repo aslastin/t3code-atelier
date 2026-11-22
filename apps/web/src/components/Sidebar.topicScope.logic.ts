@@ -70,6 +70,8 @@ export interface SidebarTopicScope {
   readonly projectKeys: readonly string[];
   /** Picked topics by key; "No topic" keys are not here. */
   readonly topicByKey: ReadonlyMap<string, SidebarScopeTopic>;
+  /** Stored keys that match no current topic; picks keep them for when it returns. */
+  readonly unresolvedTopicKeys: readonly string[];
 }
 
 export const EMPTY_SIDEBAR_TOPIC_SCOPE: SidebarTopicScope = {
@@ -78,6 +80,7 @@ export const EMPTY_SIDEBAR_TOPIC_SCOPE: SidebarTopicScope = {
   topicKeysByProject: new Map(),
   projectKeys: [],
   topicByKey: new Map(),
+  unresolvedTopicKeys: [],
 };
 
 /**
@@ -108,7 +111,8 @@ export function resolveSidebarTopicScope(input: {
       for (const topic of topics) topicByKey.set(topic.key, topic);
     }
   }
-  const topicKeys = [...new Set(input.topicKeys)].filter((key) => projectOfKey.has(key));
+  const storedTopicKeys = [...new Set(input.topicKeys)];
+  const topicKeys = storedTopicKeys.filter((key) => projectOfKey.has(key));
   const topicKeysByProject = new Map<string, string[]>();
   for (const key of topicKeys) {
     const projectKey = projectOfKey.get(key)!;
@@ -129,10 +133,13 @@ export function resolveSidebarTopicScope(input: {
         return topic ? [[key, topic] as const] : [];
       }),
     ),
+    unresolvedTopicKeys: storedTopicKeys.filter((key) => !projectOfKey.has(key)),
   };
 }
 
 export interface SidebarTopicScopeMatcher {
+  /** `environmentId:projectId` of every project the scope narrows. */
+  readonly narrowedRefKeys: ReadonlySet<string>;
   readonly matchesThread: (thread: {
     readonly environmentId: EnvironmentId;
     readonly id: ThreadId;
@@ -154,6 +161,11 @@ export function createSidebarTopicScopeMatcher(input: {
   readonly scope: SidebarTopicScope;
   readonly groups: readonly ScopeGroup[];
   readonly indexes: ReadonlyMap<EnvironmentId, ThreadTopicIndex>;
+  /**
+   * Topics of threads sent from a topic's draft, by `environmentId:threadId`. The thread can
+   * reach the list before it joins the topic, and must not leave the filter meanwhile.
+   */
+  readonly draftTopicIdByThread?: ReadonlyMap<string, ThreadTopicId>;
 }): SidebarTopicScopeMatcher | null {
   const { scope, indexes } = input;
   if (scope.topicKeysByProject.size === 0) return null;
@@ -179,21 +191,34 @@ export function createSidebarTopicScopeMatcher(input: {
         : topicScopeKey(environmentId, topicId),
     );
   };
+  // A draft whose topic is gone, or belongs elsewhere, files its thread without one.
+  const draftTopicOf = (
+    environmentId: EnvironmentId,
+    projectId: ProjectId,
+    topicId: ThreadTopicId | null | undefined,
+  ) => {
+    const topic = topicId == null ? undefined : indexes.get(environmentId)?.topicById.get(topicId);
+    return topic !== undefined && topic.projectId === projectId ? topic.id : null;
+  };
   return {
+    narrowedRefKeys: new Set(narrowedByRef.keys()),
     matchesThread: (thread) => {
       const index = indexes.get(thread.environmentId);
-      const topic = index ? threadTopicOf(index, thread) : null;
-      return matches(thread.environmentId, thread.projectId, topic?.id ?? null);
+      const topicId =
+        (index ? threadTopicOf(index, thread)?.id : undefined) ??
+        draftTopicOf(
+          thread.environmentId,
+          thread.projectId,
+          input.draftTopicIdByThread?.get(`${thread.environmentId}:${thread.id}`),
+        );
+      return matches(thread.environmentId, thread.projectId, topicId);
     },
-    matchesDraft: (draft) => {
-      const topic =
-        draft.topicId === null
-          ? undefined
-          : indexes.get(draft.environmentId)?.topicById.get(draft.topicId);
-      // A draft whose topic is gone, or belongs elsewhere, files its thread without one.
-      const topicId = topic !== undefined && topic.projectId === draft.projectId ? topic.id : null;
-      return matches(draft.environmentId, draft.projectId, topicId);
-    },
+    matchesDraft: (draft) =>
+      matches(
+        draft.environmentId,
+        draft.projectId,
+        draftTopicOf(draft.environmentId, draft.projectId, draft.topicId),
+      ),
   };
 }
 
@@ -219,6 +244,14 @@ export function pickSidebarScopeItem(pick: SidebarScopePick): SidebarScopeSelect
  * the filter.
  */
 export function toggleSidebarScopeItem(
+  scope: SidebarTopicScope,
+  pick: SidebarScopePick,
+): SidebarScopeSelection {
+  const { projectKeys, topicKeys } = toggleResolvedSidebarScopeItem(scope, pick);
+  return { projectKeys, topicKeys: [...scope.unresolvedTopicKeys, ...topicKeys] };
+}
+
+function toggleResolvedSidebarScopeItem(
   scope: SidebarTopicScope,
   pick: SidebarScopePick,
 ): SidebarScopeSelection {
@@ -298,7 +331,8 @@ export function buildSidebarScopeMenuItems(input: {
       items.push({ kind: "project", value: item.value, label: item.label, projectKey: item.value });
     }
     if (query.length === 0 && !input.scope.projectKeys.includes(group.projectKey)) continue;
-    const topics = (sidebarScopeTopicsOf(group, input.indexes) ?? []).filter(
+    const projectTopics = sidebarScopeTopicsOf(group, input.indexes) ?? [];
+    const topics = projectTopics.filter(
       (topic) =>
         (input.listedTopicKeys.has(topic.key) || picked.has(topic.key)) &&
         (query.length === 0 || input.matches(topic.topic.title, query)),
@@ -315,7 +349,8 @@ export function buildSidebarScopeMenuItems(input: {
       });
     }
     const noTopicKey = noTopicScopeKey(group.projectKey);
-    if (query.length === 0 && (topics.length > 0 || picked.has(noTopicKey))) {
+    // Shown while the project has topics, even ones without active threads to list.
+    if (query.length === 0 && (projectTopics.length > 0 || picked.has(noTopicKey))) {
       items.push({
         kind: "topic",
         value: noTopicKey,

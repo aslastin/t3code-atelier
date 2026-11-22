@@ -185,7 +185,8 @@ another thread in that topic.
 To show only some topics, pick a project in the thread filter: its topics with active threads
 appear under it, with **No topic** for its other threads. Pick topics there, or search the filter
 for a topic by name. A project with picked topics shows only those, in both sidebar modes and in
-Pinned, Snoozed, and Settled; other picked projects still show in full. A thread's menu also
+Pinned, Snoozed, and Settled; other picked projects still show in full. For picked topics,
+Settled lists only recently settled threads; search finds older ones. A thread's menu also
 offers **Filter by** its topic. While the filter holds a single topic, the ungrouped sidebar's
 **New thread** button starts the thread in it. Choose **All projects** to clear the filter.
 
