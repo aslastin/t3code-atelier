@@ -44,6 +44,7 @@ import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
 import { useClientSettings } from "../../hooks/useSettings";
 import { GuestShareIndicator } from "./GuestShareControls";
+import { ChatHeaderTopicCrumb } from "./ChatHeaderTopicCrumb";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -293,6 +294,12 @@ export const ChatHeader = memo(function ChatHeader({
             <WorkspaceBreadcrumbSeparator>
               <WorkspaceBreadcrumbText>/</WorkspaceBreadcrumbText>
             </WorkspaceBreadcrumbSeparator>
+            <ChatHeaderTopicCrumb
+              environmentId={activeThreadEnvironmentId}
+              threadId={activeThreadId}
+              projectId={activeProject.id}
+              isServerThread={isServerThread}
+            />
           </>
         ) : null}
         {parentThreadLink ? (

@@ -602,6 +602,8 @@ export function filterSidebarV2VisibleThreads<
   threads: readonly T[],
   scopedProjectKeys: ReadonlySet<string> | null,
   delegatedUnderParent: ReadonlySet<string>,
+  // Atelier fork: the project filter's picked topics.
+  matchesTopicScope: ((thread: T) => boolean) | null = null,
 ): T[] {
   return threads.filter(
     (thread) =>
@@ -612,7 +614,8 @@ export function filterSidebarV2VisibleThreads<
         delegatedUnderParent,
       ) &&
       (scopedProjectKeys === null ||
-        scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
+        scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)) &&
+      (matchesTopicScope === null || matchesTopicScope(thread)),
   );
 }
 

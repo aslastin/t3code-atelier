@@ -239,6 +239,9 @@ export function createNewThreadHandler(router: AnyRouter) {
       ? deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings)
       : scopedProjectKey(projectRef);
     const logicalProjectKey = draftSlotKey(projectDraftKey, options?.draftSlot);
+    // Atelier fork: a slot's topic lives in this environment, so load balancing must not move it.
+    const slotEnvironment =
+      options?.draftSlot === undefined ? {} : { environmentSelection: "manual" as const };
     // Another opener (home's own first-project draft) may have reached this project's draft first.
     // Matches lag the location during a navigation, so compare against the location.
     const resultIfAbandoned = () => {
@@ -351,6 +354,7 @@ export function createNewThreadHandler(router: AnyRouter) {
           {
             threadId: emptyStoredDraftThread.threadId,
             ...workspaceContext,
+            ...slotEnvironment,
             ...(!isDraftAlreadyOpen ? { runtimeMode: defaultRuntimeMode } : {}),
             ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
           },
@@ -397,6 +401,7 @@ export function createNewThreadHandler(router: AnyRouter) {
         runtimeMode: latestActiveDraftThread.runtimeMode,
         interactionMode: latestActiveDraftThread.interactionMode,
         ...pickExplicitWorkspaceOptions(options),
+        ...slotEnvironment,
       });
       seedPrompt(currentRouteTarget.draftId);
       return Promise.resolve({
@@ -426,6 +431,7 @@ export function createNewThreadHandler(router: AnyRouter) {
           runtimeMode: racedDraft.runtimeMode,
           interactionMode: racedDraft.interactionMode,
           ...pickExplicitWorkspaceOptions(options),
+          ...slotEnvironment,
         });
         seedPrompt(racedDraft.draftId);
         await router.navigate({
@@ -449,6 +455,7 @@ export function createNewThreadHandler(router: AnyRouter) {
           }),
         runtimeMode: defaultRuntimeMode,
         ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
+        ...slotEnvironment,
       });
       applyStickyState(draftId);
       const modelSelectionOverride = resolveModelSelectionOverride(draftId);

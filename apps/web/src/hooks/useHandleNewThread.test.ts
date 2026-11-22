@@ -387,6 +387,19 @@ describe("useNewThreadHandler", () => {
     );
   });
 
+  it("pins a topic's draft to its environment, so load balancing keeps it with its topic", async () => {
+    testState.reset(null, { envMode: null, startFromOrigin: false });
+    testState.disconnect("environment-ssh");
+    const projectRef = { environmentId: "environment-ssh", projectId: "project-remote" } as never;
+
+    await useNewThreadHandler()(projectRef, { draftSlot: "atelier-topic:topic-1" });
+    await useNewThreadHandler()(projectRef);
+
+    const [topicCall, projectCall] = testState.draftStore.setLogicalProjectDraftThreadId.mock.calls;
+    expect(topicCall?.[3]).toMatchObject({ environmentSelection: "manual" });
+    expect(projectCall?.[3]).not.toHaveProperty("environmentSelection");
+  });
+
   it("opens the draft without waiting on a project file from an offline machine", async () => {
     testState.reset(null, { envMode: null, startFromOrigin: false });
     testState.disconnect("environment-ssh");

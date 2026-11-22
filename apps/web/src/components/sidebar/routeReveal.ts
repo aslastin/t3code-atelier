@@ -82,6 +82,8 @@ export function resolveSidebarRouteReveal<T extends RevealableThread>(input: {
   readonly scopedProjectKeys: ReadonlySet<string> | null;
   readonly delegatedUnderParent: ReadonlySet<string>;
   readonly findThread: (key: string) => T | undefined;
+  // Atelier fork: the project filter's picked topics.
+  readonly matchesTopicScope?: ((thread: T) => boolean) | null;
 }): { readonly pendingKey: string | null; readonly widensScope: boolean } {
   const { reveal, routeKey, isSearching, scopedProjectKeys, delegatedUnderParent, findThread } =
     input;
@@ -91,7 +93,12 @@ export function resolveSidebarRouteReveal<T extends RevealableThread>(input: {
   const widensScope =
     thread !== undefined &&
     scopedProjectKeys !== null &&
-    filterSidebarV2VisibleThreads([thread], scopedProjectKeys, delegatedUnderParent).length === 0 &&
+    filterSidebarV2VisibleThreads(
+      [thread],
+      scopedProjectKeys,
+      delegatedUnderParent,
+      input.matchesTopicScope ?? null,
+    ).length === 0 &&
     filterSidebarV2VisibleThreads([thread], null, delegatedUnderParent).length === 1;
   return { pendingKey, widensScope };
 }

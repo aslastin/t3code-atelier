@@ -76,6 +76,19 @@ export function withTopicMenuItems<T extends string>(
   return [...items.slice(0, index), ...topicItems, ...items.slice(index)];
 }
 
+/** Inserts topic items after the item with `afterId`, or at the end. */
+export function withTopicMenuItemsAfter<T extends string>(
+  items: ReadonlyArray<ContextMenuItem<T>>,
+  topicItems: ReadonlyArray<ContextMenuItem<TopicMenuId>>,
+  afterId: T,
+): ReadonlyArray<ContextMenuItem<T | TopicMenuId>> {
+  const index = items.findIndex((item) => item.id === afterId);
+  if (index === -1) return [...items, ...topicItems];
+  return [...items.slice(0, index + 1), ...topicItems, ...items.slice(index + 1)];
+}
+
+export const TOPIC_FILTER_MENU_ID = "topic:filter";
+
 async function createTopicFromThreads(threads: readonly TopicThread[]) {
   const project = sharedTopicProject(threads);
   if (project === null) return;
