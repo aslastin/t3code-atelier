@@ -106,8 +106,8 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
     Effect.flatMap((paths) => Effect.forEach(paths, real)),
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
-  const folder = yield* real(worktreePath);
   const path = yield* Path.Path;
+  const folder = yield* real(worktreePath);
   const root = yield* worktreeRootForProject(fileSystem, path, folder, workspaceRoot);
   if (
     !worktrees.includes(root) ||
@@ -122,15 +122,22 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
       message:
         "worktreePath must be one of the project's git worktrees. t3_worktree_list shows them.",
     });
-  if (folder !== root) return folder;
+  const requested = path.resolve(worktreePath);
+  const binding =
+    requested === worktreePath || (yield* real(requested)) === folder ? requested : folder;
+  if (folder !== root) {
+    if (binding === folder) return folder;
+    const boundRoot = yield* worktreeRootForProject(fileSystem, path, binding, workspaceRoot);
+    return (yield* real(boundRoot)) === root ? binding : folder;
+  }
   const realProject = yield* real(workspaceRoot);
   const source = worktrees
     .filter((candidate) => isWithinRoot(path, realProject, candidate))
     .toSorted((a, b) => b.length - a.length)[0];
-  if (source === undefined) return folder;
+  if (source === undefined) return binding;
   return (
-    (yield* worktreeProjectFolder(fileSystem, path, path.relative(source, realProject), folder)) ??
-    folder
+    (yield* worktreeProjectFolder(fileSystem, path, path.relative(source, realProject), binding)) ??
+    binding
   );
 });
 

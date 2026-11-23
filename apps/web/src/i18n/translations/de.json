@@ -3082,6 +3082,7 @@
   "35681365bcdfbd79": "Die Anfrage an die Umgebung ist fehlgeschlagen.",
   "4ff6c201e851fac5": "Repository wird initialisiert",
   "59757c07ff5b0c2f": "Repository wird veröffentlicht",
+  "3c7591cb256c62a7": "Der Projektordner fehlt in diesem Checkout. Das Stammverzeichnis des Worktrees wird verwendet.",
   "0585e19b346283e8": "Pull-Request-Thread wird vorbereitet",
   "1e358a7392662403": "Ungültige Eingabe zum Starten des Terminals",
   "78afe8f657a424b5": "Diese Umgebung konnte keine Nutzung melden.",

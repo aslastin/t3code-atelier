@@ -3442,9 +3442,13 @@ export const make = Effect.gen(function* () {
             })
             .pipe(Effect.flatMap((result) => canonicalizeExistingPath(result.stdout.trimEnd())));
       const projectRelative = path.relative(rootWorktreePath, sourceFolder);
-      const projectFolderIn = (checkout: string) =>
-        worktreeProjectFolder(fileSystem, path, projectRelative, checkout).pipe(
-          Effect.map((folder) => folder ?? checkout),
+      const worktreeBinding = (root: string, folder: string | null | undefined) => ({
+        worktreePath: folder ?? root,
+        ...(folder === null ? { projectFolderMissing: true } : {}),
+      });
+      const existingWorktreeBinding = (root: string) =>
+        worktreeProjectFolder(fileSystem, path, projectRelative, root).pipe(
+          Effect.map((folder) => worktreeBinding(root, folder)),
         );
       const ensureExistingWorktreeUpstream = Effect.fn("ensureExistingWorktreeUpstream")(function* (
         worktreePath: string,
@@ -3491,7 +3495,7 @@ export const make = Effect.gen(function* () {
           return {
             pullRequest,
             branch: localPullRequestBranch,
-            worktreePath: yield* projectFolderIn(worktreePath),
+            ...(yield* existingWorktreeBinding(worktreePath)),
             isOnPullRequestHead: false,
           };
         }
@@ -3554,15 +3558,15 @@ export const make = Effect.gen(function* () {
         );
 
         // Setup can disrupt other threads using this worktree; rerun only when the checkout moved.
-        const projectFolder = yield* projectFolderIn(worktreePath);
+        const binding = yield* existingWorktreeBinding(worktreePath);
         if (refreshed.moved) {
-          yield* maybeRunSetupScript(projectFolder);
+          yield* maybeRunSetupScript(binding.worktreePath);
         }
 
         return {
           pullRequest,
           branch: localPullRequestBranch,
-          worktreePath: projectFolder,
+          ...binding,
           isOnPullRequestHead: refreshed.onTarget,
         };
       });
@@ -3736,12 +3740,12 @@ export const make = Effect.gen(function* () {
             Effect.asVoid,
           ),
         );
-        const projectFolder = worktree.worktree.projectPath ?? worktree.worktree.path;
-        yield* maybeRunSetupScript(projectFolder);
+        const binding = worktreeBinding(worktree.worktree.path, worktree.worktree.projectPath);
+        yield* maybeRunSetupScript(binding.worktreePath);
         return {
           pullRequest,
           branch: worktree.worktree.refName,
-          worktreePath: projectFolder,
+          ...binding,
           isOnPullRequestHead,
         };
       }
@@ -3776,13 +3780,13 @@ export const make = Effect.gen(function* () {
 
       const worktree = yield* createPullRequestWorktree();
       yield* ensureExistingWorktreeUpstream(worktree.worktree.path);
-      const projectFolder = worktree.worktree.projectPath ?? worktree.worktree.path;
-      yield* maybeRunSetupScript(projectFolder);
+      const binding = worktreeBinding(worktree.worktree.path, worktree.worktree.projectPath);
+      yield* maybeRunSetupScript(binding.worktreePath);
 
       return {
         pullRequest,
         branch: worktree.worktree.refName,
-        worktreePath: projectFolder,
+        ...binding,
         isOnPullRequestHead: true,
       };
     }).pipe(

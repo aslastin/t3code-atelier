@@ -3081,6 +3081,7 @@
   "35681365bcdfbd79": "The environment request failed.",
   "4ff6c201e851fac5": "Initializing repository",
   "59757c07ff5b0c2f": "Publishing repository",
+  "3c7591cb256c62a7": "Project folder is missing in this checkout. Using the worktree root.",
   "0585e19b346283e8": "Preparing pull request thread",
   "1e358a7392662403": "Invalid terminal launch input",
   "78afe8f657a424b5": "This environment could not report usage.",

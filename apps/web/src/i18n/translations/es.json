@@ -3081,6 +3081,7 @@
   "35681365bcdfbd79": "Falló la solicitud al entorno.",
   "4ff6c201e851fac5": "Inicializando el repositorio",
   "59757c07ff5b0c2f": "Publicando el repositorio",
+  "3c7591cb256c62a7": "La carpeta del proyecto no está en este checkout. Se usará la raíz del worktree.",
   "0585e19b346283e8": "Preparando el hilo de la pull request",
   "1e358a7392662403": "Datos de inicio de terminal no válidos",
   "78afe8f657a424b5": "Este entorno no pudo informar del uso.",

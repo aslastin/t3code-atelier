@@ -3081,6 +3081,7 @@
   "35681365bcdfbd79": "Miljöbegäran misslyckades.",
   "4ff6c201e851fac5": "Initierar repo",
   "59757c07ff5b0c2f": "Publicerar repo",
+  "3c7591cb256c62a7": "Projektmappen saknas i denna utcheckning. Arbetskatalogens rot används.",
   "0585e19b346283e8": "Förbereder pull request-tråd",
   "1e358a7392662403": "Ogiltig indata för terminalstart",
   "78afe8f657a424b5": "Den här miljön kunde inte rapportera användning.",

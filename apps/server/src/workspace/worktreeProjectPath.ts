@@ -57,15 +57,17 @@ export const worktreeRootForProject = Effect.fn("worktreeRootForProject")(
             ? fs.readFileString(path.join(dir, ".git"))
             : Effect.succeed(""),
         ),
-        Effect.map((file) => {
-          const value = /^gitdir: (.+)$/m.exec(file)?.[1]?.trim();
-          return value ? path.resolve(dir, value) : null;
-        }),
+        Effect.map((file) => /^gitdir: (.+)$/m.exec(file)?.[1]?.trim() || null),
         Effect.orElseSucceed(() => null),
       );
     const hasMarker = yield* hasGit(folder);
     const moduleDirectory = hasMarker ? yield* gitDirectory(folder) : null;
-    if (hasMarker && !moduleDirectory?.split(path.sep).includes("modules")) return folder;
+    if (
+      hasMarker &&
+      (moduleDirectory === null ||
+        !path.normalize(moduleDirectory).split(path.sep).includes("modules"))
+    )
+      return folder;
     const cwd = typeof projectCwd === "string" ? projectCwd : yield* projectCwd;
     if (cwd === undefined) return folder;
     let source = yield* resolveWorkspaceLocation(fs, path, cwd);
@@ -77,8 +79,11 @@ export const worktreeRootForProject = Effect.fn("worktreeRootForProject")(
       target = path.dirname(target);
       if (yield* hasGit(source)) {
         if (moduleDirectory !== null) {
-          const targetGit = (yield* gitDirectory(target)) ?? path.join(target, ".git");
-          const relative = path.relative(path.join(targetGit, "modules"), moduleDirectory);
+          const targetGit = (yield* gitDirectory(target)) ?? ".git";
+          // Relative gitfiles start at the physical checkout, even when its caller used an alias.
+          const modules = path.resolve(yield* fs.realPath(target), targetGit, "modules");
+          const child = path.resolve(yield* fs.realPath(folder), moduleDirectory);
+          const relative = path.relative(yield* fs.realPath(modules), yield* fs.realPath(child));
           if (
             !relative ||
             relative === ".." ||

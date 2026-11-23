@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   scopes: new Map<string, Set<string>>(),
+  notify: vi.fn(),
   requests: [] as { action: string; environmentId: string | null }[],
 }));
 
@@ -18,6 +19,7 @@ vi.mock("react", () => ({ useCallback: (callback: unknown) => callback }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: () => ({ operation: null, error: null, isRunning: false }),
 }));
+vi.mock("../components/ui/toast", () => ({ toastManager: { add: state.notify } }));
 vi.mock("../rpc/atomRegistry", () => ({ appAtomRegistry: {} }));
 vi.mock("../components/sourceControlAppAccessToast", () => ({
   suggestAppAccessForRemote: () => Promise.resolve(),
@@ -32,12 +34,16 @@ vi.mock("./query", () => ({ useEnvironmentQuery: () => ({ refresh: () => {} }) }
 vi.mock("./use-atom-command", () => ({
   useAtomCommand:
     (command: { action: string; environmentId?: string }) =>
-    async (input: { environmentId?: string }) => {
+    async (input: { environmentId?: string; input?: { mode?: string } }) => {
       state.requests.push({
         action: command.action,
         environmentId: input.environmentId ?? command.environmentId ?? null,
       });
-      return AsyncResult.success({});
+      return AsyncResult.success(
+        command.action === "prepare" && input.input?.mode === "worktree"
+          ? { projectFolderMissing: true, worktreePath: "/pr-worktree" }
+          : {},
+      );
     },
 }));
 vi.mock("./vcs", () => ({
@@ -124,6 +130,7 @@ const cases = [
 ] as const;
 
 beforeEach(() => {
+  state.notify.mockClear();
   state.scopes = new Map([
     [primary, new Set([AuthSourceControlWriteScope, AuthOrchestrationOperateScope])],
     [secondary, new Set<string>()],
@@ -168,6 +175,11 @@ describe("pull request worktree attachment permission", () => {
       });
       expect(result._tag).toBe(allowed ? "Success" : "Failure");
       expect(state.requests).toHaveLength(allowed ? 1 : 0);
+      if (allowed && mode === "worktree")
+        expect(state.notify).toHaveBeenCalledWith(
+          expect.objectContaining({ type: "warning", description: "/pr-worktree" }),
+        );
+      else expect(state.notify).not.toHaveBeenCalled();
       if (result._tag === "Failure") {
         expect(Cause.squash(result.cause)).toMatchObject({
           requiredScope: AuthOrchestrationOperateScope,

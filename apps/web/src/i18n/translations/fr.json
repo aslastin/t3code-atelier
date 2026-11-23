@@ -3081,6 +3081,7 @@
   "35681365bcdfbd79": "La requête à l’environnement a échoué.",
   "4ff6c201e851fac5": "Initialisation du dépôt",
   "59757c07ff5b0c2f": "Publication du dépôt",
+  "3c7591cb256c62a7": "Le dossier du projet est absent de cette copie de travail. La racine du worktree sera utilisée.",
   "0585e19b346283e8": "Préparation du fil de pull request",
   "1e358a7392662403": "Paramètres de lancement du terminal non valides",
   "78afe8f657a424b5": "Cet environnement n’a pas pu signaler son utilisation.",

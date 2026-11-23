@@ -3081,6 +3081,7 @@
   "35681365bcdfbd79": "A solicitação ao ambiente falhou.",
   "4ff6c201e851fac5": "Inicializando o repositório",
   "59757c07ff5b0c2f": "Publicando o repositório",
+  "3c7591cb256c62a7": "A pasta do projeto não está neste checkout. Será usada a raiz do worktree.",
   "0585e19b346283e8": "Preparando a thread do pull request",
   "1e358a7392662403": "Entrada de inicialização do terminal inválida",
   "78afe8f657a424b5": "Este ambiente não conseguiu informar o uso.",

@@ -7851,15 +7851,19 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       "removes the containing worktree when the project became a submodule on the worktree branch",
       () =>
         Effect.gen(function* () {
-          const cwd = yield* makeTmpDir();
+          const path = yield* Path.Path;
+          const physical = yield* makeTmpDir();
+          const alias = path.join(yield* makeTmpDir(), "worktrees");
+          NodeFS.symlinkSync(physical, alias, "junction");
+          const cwd = path.join(alias, "repo");
+          NodeFS.mkdirSync(cwd);
           const { initialBranch } = yield* initRepoWithCommit(cwd);
           yield* writeTextFile(cwd, "my-project/tracked.txt", "tracked");
           yield* git(cwd, ["add", "."]);
           yield* git(cwd, ["commit", "-m", "add project"]);
           const nested = yield* makeTmpDir("git-submodule-");
           yield* initRepoWithCommit(nested);
-          const path = yield* Path.Path;
-          const root = path.join(yield* makeTmpDir("git-worktrees-"), "feature");
+          const root = path.join(alias, "feature");
           yield* git(cwd, ["worktree", "add", "-b", "feature/module", root, initialBranch]);
           yield* git(root, ["rm", "-r", "my-project"]);
           yield* git(root, [
@@ -7877,7 +7881,11 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             path: path.join(root, "my-project"),
             force: true,
           });
-          assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), root);
+          assert.isFalse(NodeFS.existsSync(root));
+          assert.notInclude(
+            yield* git(cwd, ["worktree", "list", "--porcelain"]),
+            "refs/heads/feature/module",
+          );
         }),
     );
 

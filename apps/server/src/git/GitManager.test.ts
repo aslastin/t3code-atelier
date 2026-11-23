@@ -7232,65 +7232,78 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
-  it.effect("does not fail PR worktree prep when setup terminal startup fails", () =>
-    Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("t3code-git-manager-");
-      yield* initRepo(repoDir);
-      const project = NodePath.join(repoDir, "my-project");
-      NodeFS.mkdirSync(project);
-      NodeFS.writeFileSync(NodePath.join(project, "README.md"), "project");
-      yield* runGit(repoDir, ["add", "."]);
-      yield* runGit(repoDir, ["commit", "-m", "Add project"]);
-      let setupCwd: string | undefined;
-      const remoteDir = yield* createBareRemote();
-      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
-      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
-      yield* runGit(repoDir, ["checkout", "-b", "feature/pr-setup-failure"]);
-      NodeFS.writeFileSync(NodePath.join(repoDir, "setup-failure.txt"), "setup failure\n");
-      yield* runGit(repoDir, ["add", "setup-failure.txt"]);
-      yield* runGit(repoDir, ["commit", "-m", "PR setup failure branch"]);
-      yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-setup-failure"]);
-      yield* runGit(repoDir, ["push", "origin", "HEAD:refs/pull/184/head"]);
-      yield* runGit(repoDir, ["checkout", "main"]);
+  it.effect.each([true, false])(
+    "prepares a PR worktree when setup fails and its project folder exists: %s",
+    (hasFolder) =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        const project = NodePath.join(repoDir, "my-project");
+        NodeFS.mkdirSync(project);
+        NodeFS.writeFileSync(NodePath.join(project, "README.md"), "project");
+        yield* runGit(repoDir, ["add", "."]);
+        yield* runGit(repoDir, ["commit", "-m", "Add project"]);
+        let setupCwd: string | undefined;
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/pr-setup-failure"]);
+        if (!hasFolder) yield* runGit(repoDir, ["rm", "-r", "my-project"]);
+        NodeFS.writeFileSync(NodePath.join(repoDir, "setup-failure.txt"), "setup failure\n");
+        yield* runGit(repoDir, ["add", "setup-failure.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "PR setup failure branch"]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-setup-failure"]);
+        yield* runGit(repoDir, ["push", "origin", "HEAD:refs/pull/184/head"]);
+        yield* runGit(repoDir, ["checkout", "main"]);
 
-      const { manager } = yield* makeManager({
-        providerScenario: {
-          pullRequest: {
-            number: 184,
-            title: "Setup failure PR",
-            url: "https://github.com/pingdotgg/codething-mvp/pull/184",
-            baseRefName: "main",
-            headRefName: "feature/pr-setup-failure",
-            state: "open",
+        const { manager } = yield* makeManager({
+          providerScenario: {
+            pullRequest: {
+              number: 184,
+              title: "Setup failure PR",
+              url: "https://github.com/pingdotgg/codething-mvp/pull/184",
+              baseRefName: "main",
+              headRefName: "feature/pr-setup-failure",
+              state: "open",
+            },
           },
-        },
-        setupScriptRunner: {
-          runForThread: (input) => {
-            setupCwd = input.worktreePath;
-            return Effect.fail(
-              new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
-                threadId: input.threadId,
-                worktreePath: input.worktreePath,
-                operation: "openTerminal",
-                cause: new Error("terminal start failed"),
-              }),
-            );
+          setupScriptRunner: {
+            runForThread: (input) => {
+              setupCwd = input.worktreePath;
+              return Effect.fail(
+                new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
+                  threadId: input.threadId,
+                  worktreePath: input.worktreePath,
+                  operation: "openTerminal",
+                  cause: new Error("terminal start failed"),
+                }),
+              );
+            },
           },
-        },
-      });
+        });
 
-      const result = yield* preparePullRequestThread(manager, {
-        cwd: project,
-        reference: "184",
-        mode: "worktree",
-        threadId: asThreadId("thread-pr-setup-failure"),
-      });
+        const result = yield* preparePullRequestThread(manager, {
+          cwd: project,
+          reference: "184",
+          mode: "worktree",
+          threadId: asThreadId("thread-pr-setup-failure"),
+        });
 
-      expect(result.branch).toBe("feature/pr-setup-failure");
-      expect(result.worktreePath).toBe(setupCwd);
-      expect(NodePath.basename(result.worktreePath!)).toBe("my-project");
-      expect(NodeFS.existsSync(result.worktreePath as string)).toBe(true);
-    }),
+        expect(result.branch).toBe("feature/pr-setup-failure");
+        expect(result.worktreePath).toBe(setupCwd);
+        expect(result.projectFolderMissing === true).toBe(!hasFolder);
+        expect(
+          (yield* runGit(result.worktreePath!, ["rev-parse", "--show-prefix"])).stdout.trim(),
+        ).toBe(hasFolder ? "my-project/" : "");
+        const reused = yield* preparePullRequestThread(manager, {
+          cwd: project,
+          reference: "184",
+          mode: "worktree",
+        });
+        expect(reused.worktreePath).toBe(result.worktreePath);
+        expect(reused.projectFolderMissing === true).toBe(!hasFolder);
+        expect(NodeFS.existsSync(result.worktreePath as string)).toBe(true);
+      }),
   );
 
   it.effect("rejects worktree prep when the PR head branch is checked out in the main repo", () =>

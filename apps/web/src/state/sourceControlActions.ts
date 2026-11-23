@@ -32,6 +32,7 @@ import { readEnvironmentScope, useEnvironmentScope } from "./session";
 import { sourceControlEnvironment } from "./sourceControl";
 import { useAtomCommand } from "./use-atom-command";
 import { vcsActionManager, vcsEnvironment } from "./vcs";
+import { toastManager } from "../components/ui/toast";
 import { suggestAppAccessForRemote } from "../components/sourceControlAppAccessToast";
 
 export type SourceControlActionKind =
@@ -344,7 +345,7 @@ export function usePreparePullRequestThreadAction(scope: SourceControlActionScop
         ),
       );
     }
-    return preparePullRequestThread({
+    const result = await preparePullRequestThread({
       environmentId: target.environmentId,
       input: {
         cwd: target.cwd,
@@ -353,6 +354,14 @@ export function usePreparePullRequestThreadAction(scope: SourceControlActionScop
         ...(input.threadId ? { threadId: input.threadId } : {}),
       },
     });
+    if (result._tag === "Success" && result.value.projectFolderMissing) {
+      toastManager.add({
+        type: "warning",
+        title: m(msg("Project folder is missing in this checkout. Using the worktree root.")),
+        description: result.value.worktreePath ?? undefined,
+      });
+    }
+    return result;
   };
   return useAction({
     kind: "preparePullRequestThread",
