@@ -838,32 +838,57 @@ describe("large text preview recovery", () => {
     }
   });
 
-  it("replaces both prefetched pages with the worker's current file version", async () => {
+  it("keeps pages from the current source across prefetch and worker replacements", async () => {
     const old = Array.from({ length: 64 }, (_, i) => "old-" + i).join("\n") + "\n";
     const current = Array.from({ length: 100 }, (_, i) => "current-" + i).join("\n");
     const src = URL.createObjectURL(new Blob([current]));
+    const updated = URL.createObjectURL(new Blob([current.replaceAll("current-", "updated-")]));
+    using sent = vi.spyOn(Worker.prototype, "postMessage");
     using _fetch = stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(old, {
-          status: 206,
-          headers: {
-            "content-length": String(old.length),
-            "content-range": "bytes 0-" + (old.length - 1) + "/100000",
-          },
-        }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(new Response(null, { status: 200 }))
+        .mockResolvedValueOnce(
+          new Response(old, {
+            status: 206,
+            headers: {
+              "content-length": String(old.length),
+              "content-range": "bytes 0-" + (old.length - 1) + "/100000",
+            },
+          }),
+        ),
+    );
+    const preview = (url: string, ref?: (node: HTMLDivElement | null) => void) => (
+      <div ref={ref} style={{ display: "flex", height: 2000, width: 600 }}>
+        <LargeTextViewer src={url} name="log.txt" delimiter={null} />
+      </div>
     );
     try {
-      await using screen = await render(
-        <div style={{ display: "flex", height: 2000, width: 600 }}>
-          <LargeTextViewer src={src} name="log.txt" delimiter={null} />
-        </div>,
-      );
+      await using screen = await render(preview(src));
       await vi.waitFor(() => expect(screen.container.textContent).toContain("current-40"), 10_000);
       expect(screen.container.textContent).not.toContain("old-");
+      const oldWorker =
+        sent.mock.contexts[
+          sent.mock.calls.findIndex(([request]) => request.type === "open" && request.src === src)
+        ];
+      if (!(oldWorker instanceof Worker)) throw new Error("Expected the original file worker");
+      const latePage: TextPreviewResult = {
+        type: "page",
+        index: 1,
+        rows: Array.from({ length: 32 }, (_, i) => [`current-${32 + i}`]),
+      };
+      // A ref runs during commit, before the passive effect terminates the previous worker.
+      await screen.rerender(
+        preview(updated, (node) => {
+          if (node) oldWorker.dispatchEvent(new MessageEvent("message", { data: latePage }));
+        }),
+      );
+      await vi.waitFor(() => expect(screen.container.textContent).toContain("updated-40"), 10_000);
+      expect(screen.container.textContent).not.toContain("current-");
     } finally {
       URL.revokeObjectURL(src);
+      URL.revokeObjectURL(updated);
     }
   });
 

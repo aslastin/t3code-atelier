@@ -2,7 +2,14 @@ import { msg, T, useGT, useMessages } from "gt-react";
 import { COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS } from "@t3tools/contracts";
 import type { FileReviewExcerpt } from "~/reviewCommentContext";
 import { clampContextText } from "~/lib/composerContextRecords";
-import { useEffect, useImperativeHandle, useRef, useState, type RefObject } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { m } from "~/i18n/messages";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { parseDelimitedPreview } from "@t3tools/shared/delimitedPreview";
@@ -98,9 +105,12 @@ export default function LargeTextViewer(props: {
   const pending = useRef(new Set<number>());
   const defaultWordWrap = useClientSettings((settings) => settings.wordWrap);
   const wordWrap = props.wordWrap ?? defaultWordWrap;
+  const isCurrentSource = useEffectEvent((opened: typeof source) => opened === source);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Own the prefix fetch and indexing worker, cancelling requests and pending copies when the source changes or unmounts.
   useEffect(() => {
     const controller = new AbortController();
+    // The next source can commit before React runs this worker's cleanup.
+    const isStale = () => controller.signal.aborted || !isCurrentSource(source);
     let indexed = false;
     let prefetched = false;
     let replacementMeta: typeof meta = null;
@@ -111,8 +121,8 @@ export default function LargeTextViewer(props: {
       excerpts.current.clear();
     };
     const paintFirstScreen = (text: string, complete: boolean) => {
-      if (indexed || controller.signal.aborted) return;
-      const rows = firstScreen(text, props.delimiter, complete);
+      if (indexed || isStale()) return;
+      const rows = firstScreen(text, source.delimiter, complete);
       if (!rows.length) return;
       prefetched = true;
       setPages(
@@ -133,7 +143,7 @@ export default function LargeTextViewer(props: {
       });
     };
     const startWorker = () => {
-      if (controller.signal.aborted) return;
+      if (isStale()) return;
       const engine = new Worker(new URL("./largeText.worker.ts", import.meta.url), {
         type: "module",
       });
@@ -145,7 +155,7 @@ export default function LargeTextViewer(props: {
         setError(message ?? cause.message);
       };
       engine.addEventListener("message", (event: MessageEvent<TextPreviewResult>) => {
-        if (controller.signal.aborted || worker.current !== engine) return;
+        if (isStale() || worker.current !== engine) return;
         const result = event.data;
         if (result.type === "excerpt") {
           excerpts.current.get(result.requestId)?.({
@@ -211,7 +221,7 @@ export default function LargeTextViewer(props: {
         }
       });
       engine.addEventListener("error", () => {
-        if (controller.signal.aborted || worker.current !== engine) return;
+        if (isStale() || worker.current !== engine) return;
         failWorker(
           new Error(m(msg("The text viewer stopped."))),
           m(msg("Could not load the text viewer. Close the file and try again.")),
@@ -220,10 +230,10 @@ export default function LargeTextViewer(props: {
       engine.postMessage(
         {
           type: "open",
-          src: props.src,
-          text: props.text,
-          sizeBytes: props.sizeBytes,
-          delimiter: props.delimiter,
+          src: source.src,
+          text: source.text,
+          sizeBytes: source.sizeBytes,
+          delimiter: source.delimiter,
         },
         [],
       );
@@ -234,16 +244,16 @@ export default function LargeTextViewer(props: {
     };
     // Only this bounded prefix is parsed on the main thread. Indexing the full
     // file and fetching later pages remain in the worker.
-    if (props.sizeBytes === 0) {
+    if (source.sizeBytes === 0) {
       startWorker();
-    } else if (props.text !== undefined) {
+    } else if (source.text !== undefined) {
       paintFirstScreen(
-        props.text.slice(0, FIRST_SCREEN_BYTES),
-        props.text.length <= FIRST_SCREEN_BYTES,
+        source.text.slice(0, FIRST_SCREEN_BYTES),
+        source.text.length <= FIRST_SCREEN_BYTES,
       );
       scheduleWorker();
-    } else if (props.src) {
-      void fetch(props.src, {
+    } else if (source.src) {
+      void fetch(source.src, {
         headers: { Range: `bytes=0-${FIRST_SCREEN_BYTES - 1}` },
         cache: "no-store",
         signal: controller.signal,
@@ -272,7 +282,7 @@ export default function LargeTextViewer(props: {
       worker.current = null;
       pending.current.clear();
     };
-  }, [props.src, props.text, props.delimiter, props.sizeBytes]);
+  }, [source]);
   useImperativeHandle(
     props.copyContents,
     () => () =>
