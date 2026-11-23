@@ -38,6 +38,16 @@ test(
       const traces = browser.locator("#otlpTracesUrl");
       const exportSection = browser.locator("#telemetry-export");
       await exportSection.getByText("What to send", { exact: true }).tap();
+      const analyticsLabel = "T3 product analytics (PostHog)";
+      const analyticsRow = browser
+        .locator("#telemetry-export label")
+        .filter({ hasText: analyticsLabel });
+      const analytics = analyticsRow.getByRole("switch", analyticsLabel);
+      const selectable = await analyticsRow.getByText("Off", { exact: true }).isVisible();
+      expect(
+        await analytics.isEnabled(),
+        "Analytics respects the environment's telemetry settings",
+      ).toBe(selectable);
       await browser.locator("#otlpMetricsUrl").fill(`${origin}/v1/metrics`);
       await exportSection.getByRole("button", "Save").tap();
       await exportSection.getByText("Saved", { exact: true }).waitFor();

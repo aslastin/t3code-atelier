@@ -11162,6 +11162,7 @@
   "3756a3373e5725ec": "Solo mi receptor OpenTelemetry",
   "031083cfc8190246": "Canales activos: {count}",
   "78b8a5f3f15fc868": "Bloqueado por la configuración de la aplicación de escritorio",
+  "9eb9c0d574e9b60e": "Todos los canales de telemetría están bloqueados",
   "f9be0b78e0fefab8": "Desactivado por {variable}",
   "d90521be99b483e1": "Enviar telemetría",
   "1e68549106acaf99": "Qué enviar",

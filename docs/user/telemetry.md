@@ -26,6 +26,8 @@ Builds configured for T3 Connect tracing can send relay connection traces to Axi
 
 Setting `T3CODE_TELEMETRY_ENABLED=false` or disabling telemetry through [managed policy](./managed-policy.md#other-capabilities) blocks product events and T3 Connect tracing. Your own OpenTelemetry receiver remains available. The effective `T3CODE_OTEL_SDK_DISABLED` or `OTEL_SDK_DISABLED` setting disables OpenTelemetry exports, including Connect traces. The T3-specific variable takes precedence.
 
+Blocked channels appear off and their switches are locked. Changes made under **All environments** skip those channels and preserve their saved choices. Setting `T3CODE_TELEMETRY_ENABLED=true` lets you choose whether to send T3 telemetry. You can always turn off **Send telemetry** if it was enabled.
+
 The desktop app reads `T3CODE_TELEMETRY_ENABLED` from your shell profile on macOS and Linux. On Windows, set it as a user environment variable. Restart the app after changing its startup environment.
 
 ## Mobile app diagnostics

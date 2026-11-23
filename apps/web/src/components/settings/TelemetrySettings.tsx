@@ -19,17 +19,10 @@ import { TelemetryExportSettings } from "./TelemetryExportSettings";
 import {
   nextTelemetryChoice,
   saveTelemetryChoice,
+  telemetryChoiceIssue,
+  telemetryChoiceSelected,
   telemetryTargetIssue,
 } from "./TelemetrySettings.logic";
-
-const outcomes = {
-  unavailable: msg("Unavailable"),
-  incompatible: msg("Incompatible server"),
-  denied: msg("Permission denied"),
-  confirmed: msg("Confirmed"),
-  unconfirmed: msg("Not confirmed"),
-  noChannel: msg("Unavailable in this build"),
-} as const;
 
 const channels = {
   analytics: msg("T3 product analytics (PostHog)"),
@@ -47,6 +40,18 @@ const reasons = {
   unavailable: msg("Unavailable in this build"),
   noEndpoint: msg("No OTLP endpoint configured"),
 } satisfies Record<TelemetryStatus["otlp"], unknown>;
+
+const outcomes = {
+  ...reasons,
+  unavailable: msg("Unavailable"),
+  incompatible: msg("Incompatible server"),
+  denied: msg("Permission denied"),
+  confirmed: msg("Confirmed"),
+  unconfirmed: msg("Not confirmed"),
+  noChannel: reasons.unavailable,
+  desktop: msg("Blocked by desktop settings"),
+  allBlocked: msg("All telemetry channels are blocked"),
+} as const;
 
 export function TelemetrySettings() {
   const gt = useGT();
@@ -71,11 +76,13 @@ export function TelemetrySettings() {
       status.rendererConnect
     ) {
       const allowed = relayTelemetryEnabled();
-      blockedByDesktop = allowed === false && status.rendererConnect === "on";
+      const serverAllowsChoice =
+        status.rendererConnect === "on" || status.rendererConnect === "off";
+      blockedByDesktop = allowed === false && serverAllowsChoice;
       status = {
         ...status,
         connect:
-          status.rendererConnect !== "on" || allowed === true
+          !serverAllowsChoice || allowed === true
             ? status.rendererConnect
             : allowed === null
               ? "pending"
@@ -90,7 +97,8 @@ export function TelemetrySettings() {
     } as const;
   });
 
-  const summary = (status: TelemetryStatus) => {
+  const summary = (status: TelemetryStatus, allBlocked: boolean) => {
+    if (allBlocked) return m(outcomes.allBlocked);
     const count = [status.analytics, status.connect, status.otlp].filter(
       (value) => value === "on",
     ).length;
@@ -139,15 +147,17 @@ export function TelemetrySettings() {
       (t) => t.status && (key !== "connect" || t.status.connect !== "unavailable"),
     );
     if (key === "connect" && eligible.length === 0) return null;
-    const anyOn = eligible.some((t) => t.status?.preferences[key]);
-    const mixed = anyOn && eligible.some((t) => !t.status?.preferences[key]);
-    const states = eligible.flatMap(({ env, status, blockedByDesktop }) => {
+    const anyOn = eligible.some((t) => telemetryChoiceSelected(t, key));
+    const mixed = anyOn && eligible.some((t) => !telemetryChoiceSelected(t, key));
+    const next = nextTelemetryChoice(eligible, key);
+    const states = eligible.flatMap((target) => {
+      const { env, status, blockedByDesktop } = target;
       if (!status) return [];
       const state =
         key === "enabled"
-          ? summary(status)
+          ? summary(status, telemetryChoiceIssue(target, key, true) === "allBlocked")
           : key === "connect" && blockedByDesktop
-            ? gt("Blocked by desktop settings")
+            ? m(outcomes.desktop)
             : status[key] === "sdk" && status.sdkDisabledBy
               ? gt("Disabled by {variable}", { variable: status.sdkDisabledBy })
               : m(reasons[status[key]]);
@@ -168,8 +178,8 @@ export function TelemetrySettings() {
           aria-label={label}
           checked={anyOn}
           mixed={mixed}
-          disabled={saving || !eligible.some((t) => !t.issue)}
-          onCheckedChange={() => void write(key, nextTelemetryChoice(eligible, key))}
+          disabled={saving || !eligible.some((t) => !telemetryChoiceIssue(t, key, next))}
+          onCheckedChange={() => void write(key, next)}
         />
       </label>
     );

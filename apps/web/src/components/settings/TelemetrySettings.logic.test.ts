@@ -50,3 +50,59 @@ it("reports individual results when applying a switch to several environments", 
   ]);
   expect(requests).toEqual([0, 4, 5]);
 });
+
+it("keeps externally blocked choices off and preserves them during group writes", async () => {
+  const status = {
+    preferences: { enabled: true, analytics: true, connect: true, otlp: false },
+    analytics: "environment",
+    connect: "unavailable",
+    otlp: "sdk",
+  } as const;
+  const locked = { status, issue: undefined };
+  const available = {
+    ...locked,
+    status: {
+      ...status,
+      analytics: "off",
+      otlp: "noEndpoint",
+      preferences: { ...status.preferences, analytics: false },
+    },
+  } as const;
+  expect(nextTelemetryChoice([locked, available], "analytics")).toBe(true);
+  const writes: string[] = [];
+  for (const reason of ["environment", "policy", "pending", "sdk"] as const) {
+    const target = { ...locked, status: { ...status, connect: reason } };
+    for (const value of [true, false]) {
+      expect(
+        await saveTelemetryChoice(target, "connect", value, async () => {
+          writes.push(reason);
+          return { ...status.preferences, connect: value };
+        }),
+      ).toBe(reason);
+    }
+  }
+  for (const [target, key, value, outcome] of [
+    [locked, "enabled", true, "allBlocked"],
+    [locked, "enabled", false, "confirmed"],
+    [locked, "otlp", true, "sdk"],
+    [locked, "connect", true, "noChannel"],
+    [locked, "analytics", true, "environment"],
+    [available, "analytics", true, "confirmed"],
+    [available, "otlp", true, "confirmed"],
+    [available, "enabled", true, "confirmed"],
+    [
+      { ...available, blockedByDesktop: true, status: { ...available.status, connect: "off" } },
+      "connect",
+      true,
+      "desktop",
+    ],
+  ] as const) {
+    expect(
+      await saveTelemetryChoice(target, key, value, async () => {
+        writes.push(key);
+        return { ...target.status.preferences, [key]: value };
+      }),
+    ).toBe(outcome);
+  }
+  expect(writes).toEqual(["enabled", "analytics", "otlp", "enabled"]);
+});
