@@ -31,7 +31,8 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as SourceControlRepositoryService from "../sourceControl/SourceControlRepositoryService.ts";
-import type { ProjectConflictError } from "./ProjectService.ts";
+import * as KeyedLock from "@t3tools/shared/KeyedLock";
+import { ProjectInvalidError, type ProjectConflictError } from "./ProjectService.ts";
 
 export class ProjectCloneTracker extends Context.Service<
   ProjectCloneTracker,
@@ -46,11 +47,12 @@ export class ProjectCloneTracker extends Context.Service<
     /** Interrupts a running clone and deletes the partial checkout. */
     readonly cancel: (projectId: ProjectId) => Effect.Effect<boolean>;
     readonly retry: (projectId: ProjectId) => Effect.Effect<boolean, SourceControlRepositoryError>;
-    /** With keepFiles, a running git clone finishes without interruption or directory cleanup. */
-    readonly discard: (
+    /** Stops tracking, interrupts any running clone and removes unfinished checkouts. */
+    readonly discard: (projectId: ProjectId) => Effect.Effect<void>;
+    readonly withReviewedRemoval: <A, E, R>(
       projectId: ProjectId,
-      options?: { readonly keepFiles: boolean },
-    ) => Effect.Effect<void>;
+      removeProject: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | ProjectInvalidError, R>;
     readonly get: (projectId: ProjectId) => Effect.Effect<ProjectCloneSnapshot | null>;
     readonly stream: Stream.Stream<ReadonlyArray<ProjectCloneSnapshot>>;
   }
@@ -107,6 +109,10 @@ export const make = Effect.gen(function* () {
   // Serialize actions on the shared entry and directory so retries cannot race clones.
   const actionLock = yield* Semaphore.make(1);
   const locked = <A, E, R>(effect: Effect.Effect<A, E, R>) => actionLock.withPermits(1)(effect);
+
+  const removals = yield* KeyedLock.make<ProjectId>();
+  const isRemoving = (projectId: ProjectId) =>
+    Effect.map(removals.activeKeys, (keys) => keys.includes(projectId));
 
   const list = Ref.get(clones).pipe(
     Effect.map((current) => Array.from(current.values(), (tracked) => tracked.snapshot)),
@@ -303,13 +309,14 @@ export const make = Effect.gen(function* () {
         endedAt: null,
         sequence: ++sequence,
       };
+      const beingRemoved = yield* isRemoving(input.projectId);
       const claimed = yield* Ref.modify(clones, (current) => {
         const conflict = Array.from(current.values()).some(
           (tracked) =>
             tracked.snapshot.projectId === input.projectId ||
             tracked.input.destinationPath === prepared.destinationPath,
         );
-        if (conflict) return [false, current] as const;
+        if (conflict || beingRemoved) return [false, current] as const;
         const next = new Map(current);
         next.set(input.projectId, {
           snapshot,
@@ -347,12 +354,12 @@ export const make = Effect.gen(function* () {
               // A failed clone's project still owns its empty folder after a restart
               // forgets the clone; clone for that project instead.
               Effect.catchTags({
-                ProjectConflictError: (conflict) =>
-                  moveClaim(input.projectId, conflict.conflictingProjectId).pipe(
-                    Effect.flatMap((moved) =>
-                      moved ? Effect.succeed(conflict.conflictingProjectId) : alreadyInProgress,
-                    ),
-                  ),
+                ProjectConflictError: Effect.fnUntraced(function* (conflict) {
+                  if (yield* isRemoving(conflict.conflictingProjectId))
+                    return yield* alreadyInProgress;
+                  const moved = yield* moveClaim(input.projectId, conflict.conflictingProjectId);
+                  return moved ? conflict.conflictingProjectId : yield* alreadyInProgress;
+                }),
               }),
             );
           yield* publish;
@@ -397,6 +404,7 @@ export const make = Effect.gen(function* () {
       const tracked = current.get(projectId);
       if (
         !tracked ||
+        (yield* isRemoving(projectId)) ||
         (tracked.snapshot.phase !== "failed" && tracked.snapshot.phase !== "cancelled")
       ) {
         return false;
@@ -424,20 +432,45 @@ export const make = Effect.gen(function* () {
 
   const discard: ProjectCloneTracker["Service"]["discard"] = Effect.fn(
     "ProjectCloneTracker.discard",
-  )(function* (projectId, options) {
+  )(function* (projectId) {
     const current = yield* Ref.get(clones);
     const tracked = current.get(projectId);
     if (!tracked) return;
-    // Interrupting git clone can make Git recursively clean up the destination.
-    if (tracked.fiber && !options?.keepFiles) yield* Fiber.interrupt(tracked.fiber);
+    if (tracked.fiber) yield* Fiber.interrupt(tracked.fiber);
     // Git may have finished while the interrupt was landing; the project
     // is going away either way, but a complete checkout is the user's.
     const after = yield* get(projectId);
-    if (!options?.keepFiles && after?.phase !== "done") {
+    if (after?.phase !== "done") {
       yield* repositories.discardClone(tracked.input.destinationPath).pipe(Effect.ignore);
     }
     yield* clearRetention(projectId);
     yield* remove(projectId);
+  });
+
+  const withReviewedRemoval = Effect.fn("ProjectCloneTracker.withReviewedRemoval")(function* <
+    A,
+    E,
+    R,
+  >(projectId: ProjectId, removeProject: Effect.Effect<A, E, R>) {
+    return yield* removals.withLock(
+      projectId,
+      Effect.gen(function* () {
+        // Drain a clone action already in flight; later starts and retries see the removal claim.
+        const clone = yield* locked(get(projectId));
+        if (clone?.phase === "running")
+          return yield* new ProjectInvalidError({
+            projectId,
+            reason: "clone_running",
+            detail: "Wait for the repository to finish cloning before removing this project.",
+          });
+        const result = yield* removeProject;
+        if (clone) {
+          yield* clearRetention(projectId);
+          yield* remove(projectId);
+        }
+        return result;
+      }),
+    );
   });
 
   const stream: ProjectCloneTracker["Service"]["stream"] = Stream.callback<
@@ -468,10 +501,11 @@ export const make = Effect.gen(function* () {
     retry: Effect.fnUntraced(function* (projectId) {
       return yield* locked(retry(projectId));
     }),
-    discard: Effect.fnUntraced(function* (projectId, options) {
-      return yield* locked(discard(projectId, options));
+    discard: Effect.fnUntraced(function* (projectId) {
+      return yield* locked(discard(projectId));
     }),
     get,
+    withReviewedRemoval,
     stream,
   });
 });

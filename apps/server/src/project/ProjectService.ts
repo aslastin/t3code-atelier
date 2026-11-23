@@ -27,6 +27,7 @@ import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
+import { nativeRealPath } from "../nativeRealPath.ts";
 import { withCommandMetrics } from "../observability/Metrics.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -112,7 +113,11 @@ export class ProjectNotEmptyError extends Schema.TaggedError<ProjectNotEmptyErro
 /** A change the project's rules refuse, such as an invalid script ID: the caller's input is wrong, nothing failed. */
 export class ProjectInvalidError extends Schema.TaggedError<ProjectInvalidError>()(
   "ProjectInvalidError",
-  { projectId: ProjectId, detail: Schema.String },
+  {
+    projectId: ProjectId,
+    detail: Schema.String,
+    reason: Schema.optional(Schema.Literal("clone_running")),
+  },
 ) {
   override get message(): string {
     return this.detail;
@@ -771,10 +776,10 @@ export const make = Effect.gen(function* () {
   ) {
     let current = workspaceRoot;
     while (true) {
-      const result = yield* fileSystem.realPath(current).pipe(Effect.result);
+      const result = yield* nativeRealPath(current).pipe(Effect.result);
       if (Result.isSuccess(result))
         return path.join(result.success, path.relative(current, workspaceRoot));
-      if (result.failure.reason._tag !== "NotFound") return null;
+      if (result.failure.code !== "ENOENT") return null;
       const parent = path.dirname(current);
       if (current === parent) return null;
       current = parent;

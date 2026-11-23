@@ -140,6 +140,13 @@ it.effect(
       const second = path.join(temp, "second");
       yield* fs.makeDirectory(first);
       yield* fs.makeDirectory(second);
+      const childId = ProjectId.make("nested-project");
+      const child = path.join(first, "child");
+      yield* fs.makeDirectory(child);
+      const alternate = path.join(temp, "FIRST", "child");
+      const childRoot = (yield* fs.exists(alternate)) ? alternate : child;
+      yield* seedProject(childId);
+      yield* sql`UPDATE projection_projects SET workspace_root = ${childRoot} WHERE project_id = ${childId}`;
       const id = ProjectId.make("plain-project");
       yield* seedProject(id);
       const windows = (yield* HostProcess.Platform) === "win32";
@@ -148,7 +155,12 @@ it.effect(
       yield* sql`UPDATE projection_projects SET workspace_root = ${registered} WHERE project_id = ${id}`;
       yield* Effect.gen(function* () {
         const service = yield* ProjectService.make;
-        const [entry] = yield* service.removalPreview();
+        const preview = yield* service.removalPreview();
+        const entry = preview.find((row) => row.projectId === id);
+        assert.equal(
+          preview.find((row) => row.projectId === childId)?.resolvedWorkspaceRoot,
+          path.join(entry!.resolvedWorkspaceRoot!, "child"),
+        );
         assert.equal(entry?.resolvedWorkspaceRoot, yield* fs.realPath(first));
         if (!windows) {
           yield* fs.remove(registered);

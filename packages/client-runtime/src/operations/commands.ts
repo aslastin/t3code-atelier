@@ -1,5 +1,5 @@
 import { msg } from "gt-i18n";
-import { translatableMessage } from "../errors/translatable.ts";
+import { translatableMessage, withI18nMessage } from "../errors/translatable.ts";
 import { remapComposerContextAttachments } from "@t3tools/shared/composerContextReferences";
 import {
   type ThreadLinkedPullRequest,
@@ -518,7 +518,16 @@ export const deleteProject = Effect.fn("EnvironmentCommands.deleteProject")(func
       commandId,
       projectId: input.projectId,
       expectedFolder: input.expectedFolder,
-    });
+    }).pipe(
+      Effect.mapError((error) =>
+        error._tag === "ProjectMutationError" && error.reason === "clone_running"
+          ? withI18nMessage(
+              error,
+              msg("Wait for the repository to finish cloning before removing this project."),
+            )
+          : error,
+      ),
+    );
   return yield* mutateProject({
     type: "project.delete",
     commandId,

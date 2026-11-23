@@ -522,6 +522,7 @@
   "c039a54c8238eafe": "It may be overloaded, asleep, or off the network.",
   "9ce98924616584c5": "Update this environment's T3 Code server to implement plans.",
   "3c4391a7f6421455": "{host} did not confirm the message within 60 seconds.",
+  "e126460f1d713a04": "Wait for the repository to finish cloning before removing this project.",
   "204ac030de627c0a": "Git URL",
   "68b989c06486c4e0": "URL",
   "b0f180f236623386": "Enter the full owner/repository name.",

@@ -1,6 +1,7 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import {
+  CommandId,
   OrchestrationDispatchCommandError,
   ProjectId,
   projectCloneProgressSummary,
@@ -16,6 +17,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as SourceControlRepositoryService from "../sourceControl/SourceControlRepositoryService.ts";
 import * as ProjectCloneTracker from "./ProjectCloneTracker.ts";
+import { mutateProjectWithClone } from "./ProjectMutation.ts";
 import { ProjectConflictError } from "./ProjectService.ts";
 import { parseGitCloneProgressLine } from "./gitCloneProgress.ts";
 
@@ -265,12 +267,71 @@ describe("ProjectCloneTracker", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("forgets a reviewed project without clearing its unfinished clone folder", () => {
+  it.effect("keeps an active clone cancellable when settings removal is refused", () => {
     const harness = makeHarness({ clone: () => Effect.never });
     return Effect.gen(function* () {
       const tracker = yield* ProjectCloneTracker.ProjectCloneTracker;
       yield* tracker.start(startInput, harness.hooks);
-      yield* tracker.discard(projectId, { keepFiles: true });
+      const refused = yield* mutateProjectWithClone(
+        {
+          create: () => Effect.die("unused"),
+          update: () => Effect.die("unused"),
+          delete: () => Effect.die("must not delete a project with an active clone"),
+        },
+        tracker,
+        {
+          type: "project.removeReviewed",
+          projectId,
+          commandId: CommandId.make("remove-clone"),
+          expectedFolder: {
+            workspaceRoot: startInput.destinationPath,
+            resolvedWorkspaceRoot: startInput.destinationPath,
+          },
+        },
+      ).pipe(Effect.flip);
+      expect(refused._tag).toBe("ProjectInvalidError");
+      expect((yield* tracker.get(projectId))?.phase).toBe("running");
+      expect(harness.discarded).toEqual([]);
+      expect(yield* tracker.cancel(projectId)).toBe(true);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("preserves a failed clone's files and prevents a retry during reviewed removal", () => {
+    const harness = makeHarness({
+      clone: () =>
+        Effect.fail(
+          new SourceControlRepositoryError({
+            operation: "cloneRepository",
+            provider: SourceControlProviderKind.make("unknown"),
+            detail: "checkout failed",
+          }),
+        ),
+    });
+    return Effect.gen(function* () {
+      const tracker = yield* ProjectCloneTracker.ProjectCloneTracker;
+      yield* tracker.start(startInput, harness.hooks);
+      yield* tracker.stream.pipe(
+        Stream.filter((rows) =>
+          rows.some((row) => row.projectId === projectId && row.phase === "failed"),
+        ),
+        Stream.runHead,
+      );
+      yield* tracker
+        .withReviewedRemoval(projectId, Effect.fail("deletion refused"))
+        .pipe(Effect.flip);
+      expect((yield* tracker.get(projectId))?.phase).toBe("failed");
+      const started = yield* Deferred.make<void>();
+      const complete = yield* Deferred.make<void>();
+      const removing = yield* tracker
+        .withReviewedRemoval(
+          projectId,
+          Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(complete))),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      expect(yield* tracker.retry(projectId)).toBe(false);
+      yield* Deferred.succeed(complete, undefined);
+      yield* Fiber.join(removing);
       expect(yield* tracker.get(projectId)).toBeNull();
       expect(harness.discarded).toEqual([]);
     }).pipe(Effect.provide(harness.layer));

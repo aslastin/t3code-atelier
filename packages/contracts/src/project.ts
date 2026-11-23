@@ -287,6 +287,7 @@ export class ProjectMutationError extends Schema.TaggedError<ProjectMutationErro
   "ProjectMutationError",
   {
     commandId: CommandId,
+    reason: Schema.optional(Schema.Literal("clone_running")),
     message: Schema.String,
     cause: Schema.optional(Schema.Defect()),
   },

@@ -3092,6 +3092,9 @@ export const layerWsRpc = (
               (cause) =>
                 new ProjectMutationError({
                   commandId: mutation.commandId,
+                  ...(cause._tag === "ProjectInvalidError" && cause.reason
+                    ? { reason: cause.reason }
+                    : {}),
                   message:
                     cause._tag === "ProjectNotEmptyError" || cause._tag === "ProjectInvalidError"
                       ? cause.message

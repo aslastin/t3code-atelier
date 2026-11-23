@@ -522,6 +522,7 @@
   "c039a54c8238eafe": "Puede que esté sobrecargado, en reposo o fuera de la red.",
   "9ce98924616584c5": "Actualiza el servidor de T3 Code de este entorno para implementar planes.",
   "3c4391a7f6421455": "{host} no confirmó el mensaje en 60 segundos.",
+  "e126460f1d713a04": "Espera a que termine la clonación del repositorio antes de eliminar este proyecto.",
   "204ac030de627c0a": "URL de Git",
   "68b989c06486c4e0": "URL",
   "b0f180f236623386": "Introduce el nombre completo propietario/repositorio.",

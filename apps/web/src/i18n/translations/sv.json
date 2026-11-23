@@ -522,6 +522,7 @@
   "c039a54c8238eafe": "Den kan vara överbelastad, i viloläge eller utanför nätverket.",
   "9ce98924616584c5": "Uppdatera miljöns T3 Code-server för att genomföra planer.",
   "3c4391a7f6421455": "{host} bekräftade inte meddelandet inom 60 sekunder.",
+  "e126460f1d713a04": "Vänta tills kloningen av kodförrådet är klar innan du tar bort projektet.",
   "204ac030de627c0a": "Git-URL",
   "68b989c06486c4e0": "URL",
   "b0f180f236623386": "Ange hela namnet ägare/repo.",
