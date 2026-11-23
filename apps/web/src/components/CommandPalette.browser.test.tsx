@@ -78,6 +78,28 @@ function makeProject(title: string): Project {
 }
 
 describe("CommandPalette open intents", () => {
+  it("opens the telemetry row by anchor and the Diagnostics page without one", async () => {
+    setup();
+    await using screen = await render(<CommandPalette>{null}</CommandPalette>);
+    openCommandPalette({ query: "Send telemetry" });
+    await page.getByRole("option", { name: /^Send telemetry/ }).click();
+    await vi.waitFor(() =>
+      expect(screen.router?.state.location).toMatchObject({
+        pathname: "/settings/diagnostics",
+        hash: "telemetry-export",
+      }),
+    );
+
+    openCommandPalette({ query: "Diagnostics" });
+    await page.getByRole("option", { name: /^Diagnostics/ }).click();
+    await vi.waitFor(() =>
+      expect(screen.router?.state.location).toMatchObject({
+        pathname: "/settings/diagnostics",
+        hash: "",
+      }),
+    );
+  });
+
   it("drags a searched thread into the current composer without navigating", async () => {
     const environmentId = EnvironmentId.make("remote");
     const threadId = ThreadId.make("dragged-thread");
