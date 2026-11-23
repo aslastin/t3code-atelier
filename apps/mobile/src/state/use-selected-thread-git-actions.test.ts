@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   primaryScopes: new Set<string>(),
   branch: "main",
   worktrees: [] as string[],
+  missingProjectFolder: false,
   thread: {
     id: "thread",
     environmentId: "environment",
@@ -105,7 +106,11 @@ vi.mock("./vcs", () => ({
       state.worktrees.push("/repo-worktree");
       state.afterGitAction?.();
       return AsyncResult.success({
-        worktree: { path: "/repo-worktree", refName: input.newRefName, projectPath: null },
+        worktree: {
+          path: "/repo-worktree",
+          refName: input.newRefName,
+          ...(state.missingProjectFolder ? { projectPath: null } : {}),
+        },
       });
     },
     pull: async () => AsyncResult.success({ status: "pulled", refName: state.branch }),
@@ -138,6 +143,7 @@ describe("thread Git mutation permissions", () => {
     state.primaryScopes = new Set([AuthSourceControlWriteScope, AuthOrchestrationOperateScope]);
     state.branch = "main";
     state.worktrees = [];
+    state.missingProjectFolder = false;
     state.thread.branch = "main";
     state.thread.worktreePath = null;
     state.commits = 0;
@@ -153,6 +159,7 @@ describe("thread Git mutation permissions", () => {
   it.each([false, true])(
     "requires task permission before creating and attaching a worktree: %s",
     async (canOperate) => {
+      state.missingProjectFolder = true;
       if (canOperate) state.scopes.add(AuthOrchestrationOperateScope);
       const actions = useSelectedThreadGitActions();
       const result = await actions.onCreateSelectedThreadWorktree({
