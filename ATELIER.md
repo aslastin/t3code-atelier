@@ -182,6 +182,32 @@ The `atelier` skill runs these steps and, before changing anything, reports what
 and whether it is safe. Keep fork changes in separate files where possible (like this one and
 `assets/atelier/`) so rebases stay conflict-free.
 
+## Working on the fork
+
+New fork features follow the same path, so Issues and pull requests keep their history:
+
+1. **Idea.** Open-ended ideas start in
+   [Discussions → Ideas](https://github.com/aslastin/t3code-atelier/discussions/categories/ideas).
+2. **Issue.** Once you agree what to build, open an issue with the **Fork feature** form: the
+   problem, the proposed behavior, and what is out of scope. The form labels it
+   `atelier-feature`. A follow-up to an existing feature gets its own issue and names the feature
+   it extends. Deferred work gets an issue too, like
+   [#6](https://github.com/aslastin/t3code-atelier/issues/6).
+3. **Pull request.** Branch `atelier/<short-name>` from `main`, title it `feat(atelier): …`, put
+   `Closes #N` in the description, and label it `atelier-feature`. `main` accepts changes only
+   through pull requests.
+4. **Finish.** A finished feature gets the next number in `atelier-build-number` and an entry in
+   "Differences from upstream". Follow-ups extend the existing entry and keep the number.
+
+Fork-only fixes, docs, and upstream syncs need no issue and no label.
+
+Problems that also happen in the official app are fixed here first and offered upstream later.
+Their issues live in this repository too and carry `upstream-candidate`. When upstream ships an
+equivalent change, the issue gets `upstream-merged`, and the next sync drops the fork's copy.
+
+`label:atelier-feature` lists every fork feature, and `label:upstream-candidate` lists what is
+waiting to go upstream.
+
 ## Known limitations
 
 - T3 Connect is disabled in a fresh clone, and passkeys need a signed, provisioned app. Expect
