@@ -1046,7 +1046,23 @@ const SecretProviderConfigWrite = Schema.Struct({
 export const SourceControlHostSettings = Schema.Record(Schema.String, Schema.Unknown);
 export type SourceControlHostSettings = typeof SourceControlHostSettings.Type;
 
+export const TelemetryPreferences = Schema.Struct({
+  enabled: Schema.Boolean,
+  analytics: Schema.Boolean,
+  connect: Schema.Boolean,
+  otlp: Schema.Boolean,
+});
+export type TelemetryPreferences = typeof TelemetryPreferences.Type;
+
+export function legacyTelemetryPreferences(hasEndpoint: boolean): TelemetryPreferences {
+  return { enabled: hasEndpoint, otlp: hasEndpoint, analytics: false, connect: false };
+}
+
+export const TelemetryRevisions = Schema.Struct({ connect: Schema.Int, otlp: Schema.Int });
+
 export const ObservabilitySettings = Schema.Struct({
+  telemetry: Schema.optionalKey(TelemetryPreferences),
+  telemetryRevisions: Schema.optionalKey(TelemetryRevisions),
   otlpTracesUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   otlpMetricsUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   otlpLogsUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -1973,6 +1989,14 @@ export const ServerSettingsPatch = Schema.Struct({
   pullRequestMergeMethod: Schema.optionalKey(Schema.NullOr(PullRequestMergeMethod)),
   observability: Schema.optionalKey(
     Schema.Struct({
+      telemetry: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          analytics: Schema.optionalKey(Schema.Boolean),
+          connect: Schema.optionalKey(Schema.Boolean),
+          otlp: Schema.optionalKey(Schema.Boolean),
+        }),
+      ),
       otlpTracesUrl: Schema.optionalKey(TrimmedString),
       otlpMetricsUrl: Schema.optionalKey(TrimmedString),
       otlpLogsUrl: Schema.optionalKey(TrimmedString),

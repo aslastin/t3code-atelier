@@ -50,7 +50,7 @@ import { formatCpuTime } from "./ResourceTelemetryDiagnostics.logic";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { TelemetryExportSettings } from "./TelemetryExportSettings";
+import { TelemetrySettings } from "./TelemetrySettings";
 
 const NUMBER_FORMAT = new Intl.NumberFormat();
 
@@ -775,9 +775,13 @@ function DiagnosticsRefreshButton({
 }
 
 export function DiagnosticsSettingsPanel() {
-  const { environment } = useSettingsScope();
+  const { environment, scope } = useSettingsScope();
   // Signals and pending UI state belong to one environment, so a scope switch starts fresh.
-  return <DiagnosticsSettingsBody key={environment?.environmentId ?? ""} />;
+  return (
+    <DiagnosticsSettingsBody
+      key={JSON.stringify([environment?.environmentId, scope.kind, ...scope.environmentIds])}
+    />
+  );
 }
 
 function DiagnosticsSettingsBody() {
@@ -879,18 +883,6 @@ function DiagnosticsSettingsBody() {
   const isInitialLoading = isPending && data === null;
   const isProcessInitialLoading = isProcessPending && processData === null;
   const isResourceInitialLoading = isResourcePending && resourceData === null;
-  // Wait for initial tables to stabilize search targets; later loads must preserve export drafts.
-  const [exportFormEnvironmentId, setExportFormEnvironmentId] =
-    useState<typeof environmentId>(null);
-  if (
-    exportFormEnvironmentId !== environmentId &&
-    canReadDiagnostics &&
-    !isInitialLoading &&
-    !isProcessInitialLoading &&
-    !isResourceInitialLoading
-  ) {
-    setExportFormEnvironmentId(environmentId);
-  }
   const signalProcess = async (pid: number, signal: ServerProcessSignal) => {
     const targetEnvironmentId = environmentId;
     const process = processData?.processes.find((entry) => entry.pid === pid);
@@ -991,6 +983,7 @@ function DiagnosticsSettingsBody() {
   if (!canReadDiagnostics) {
     return (
       <SettingsPageContainer>
+        <TelemetrySettings />
         <p className="text-sm text-muted-foreground">
           {environmentId === null
             ? gt("Connect an environment to see diagnostics.")
@@ -1004,6 +997,7 @@ function DiagnosticsSettingsBody() {
 
   return (
     <SettingsPageContainer width="expanded" className="gap-10">
+      <TelemetrySettings />
       <ResourceTelemetryDiagnostics environmentId={environmentId} />
 
       <SettingsSection
@@ -1442,7 +1436,6 @@ function DiagnosticsSettingsBody() {
           />
         )}
       </SettingsSection>
-      {exportFormEnvironmentId === environmentId && <TelemetryExportSettings />}
     </SettingsPageContainer>
   );
 }

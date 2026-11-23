@@ -1,12 +1,11 @@
-import * as Exit from "effect/Exit";
+import * as Effect from "effect/Effect";
+import { bindExporter, ExportChannel, switchingTracer } from "@t3tools/shared/telemetryConsent";
+import type { ServerObservability } from "@t3tools/contracts";
+import { relayTelemetryEnabled, resolveRelayTracingConfig } from "../cloud/publicConfig";
 import * as Layer from "effect/Layer";
-import * as ManagedRuntime from "effect/ManagedRuntime";
-import * as Scope from "effect/Scope";
 import { HttpClient } from "effect/http";
 import { OtlpExporter, OtlpSerialization, OtlpTracer } from "effect/observability";
 
-import { settleAsyncResult, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import { resolvePrimaryEnvironmentHttpUrl } from "../environments/primary";
 import { releaseChannelOf, releaseResourceAttributes } from "@t3tools/shared/releaseResource";
 import * as ClientTracer from "./clientTracer";
@@ -68,81 +67,36 @@ const layerDelegateRuntime = Layer.mergeAll(
   Layer.succeed(HttpClient.TracerDisabledWhen, () => true),
 );
 
-let activeRuntime: ManagedRuntime.ManagedRuntime<never, never> | null = null;
-let activeScope: Scope.Closeable | null = null;
-let activeConfigKey: string | null = null;
-let pendingConfiguration = Promise.resolve();
+const traces = new ExportChannel();
+export const connect = new ExportChannel();
 
-export function configureClientTracing(): Promise<void> {
-  if (activeConfigKey !== null) {
-    return pendingConfiguration;
-  }
-  pendingConfiguration = pendingConfiguration.finally(() => applyClientTracingConfig());
-  return pendingConfiguration;
-}
-
-async function applyClientTracingConfig(): Promise<void> {
-  const otlpTracesUrl = resolvePrimaryEnvironmentHttpUrl("/api/observability/v1/traces");
-  const exportIntervalMs = DEFAULT_EXPORT_INTERVAL_MS;
-  const nextConfigKey = `${otlpTracesUrl}|${exportIntervalMs}`;
-
-  if (activeConfigKey === nextConfigKey && ClientTracer.hasDelegate()) {
-    return;
-  }
-
-  activeConfigKey = nextConfigKey;
-
-  const previousRuntime = activeRuntime;
-  const previousScope = activeScope;
-
-  ClientTracer.setDelegate(null);
-  activeRuntime = null;
-  activeScope = null;
-
-  await disposeTracerRuntime(previousRuntime, previousScope);
-
-  const runtime = ManagedRuntime.make(layerDelegateRuntime);
-  const scope = runtime.runSync(Scope.make());
-
-  const delegateResult = await settleAsyncResult(() =>
-    runtime.runPromiseExit(
-      Scope.provide(scope)(
-        OtlpTracer.make({
-          url: otlpTracesUrl,
-          exportInterval: `${exportIntervalMs} millis`,
-          resource: CLIENT_TRACING_RESOURCE,
-        }),
-      ),
-    ),
+export function configureClientTracing(state?: ServerObservability) {
+  const status = state?.telemetry;
+  traces.set(
+    status?.otlp === "on" && state?.otlpTracesEnabled
+      ? resolvePrimaryEnvironmentHttpUrl("/api/observability/v1/traces")
+      : undefined,
+    status?.revisions?.otlp,
   );
-  if (delegateResult._tag === "Failure") {
-    await disposeTracerRuntime(runtime, scope);
-
-    const error = squashAtomCommandFailure(delegateResult);
-    const tracesUrl = new URL(otlpTracesUrl);
-    console.warn("Failed to configure client tracing exporter", {
-      scheme: tracesUrl.protocol.replace(/:$/, ""),
-      host: tracesUrl.hostname,
-      port: tracesUrl.port || undefined,
-      exportIntervalMs,
-      ...safeErrorLogAttributes(error),
-    });
-    return;
-  }
-
-  ClientTracer.setDelegate(delegateResult.value);
-  activeRuntime = runtime;
-  activeScope = scope;
+  connect.set(
+    (status?.rendererConnect ?? status?.connect) === "on" && relayTelemetryEnabled() === true
+      ? resolveRelayTracingConfig()?.tracesUrl
+      : undefined,
+    status?.revisions?.connect,
+  );
 }
 
-async function disposeTracerRuntime(
-  runtime: ManagedRuntime.ManagedRuntime<never, never> | null,
-  scope: Scope.Closeable | null,
-): Promise<void> {
-  if (runtime === null || scope === null) {
-    return;
-  }
-
-  await settleAsyncResult(() => runtime.runPromiseExit(Scope.close(scope, Exit.void)));
-  runtime.dispose();
-}
+export const layer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const read = yield* bindExporter(traces, (url, revision) =>
+      OtlpTracer.make({
+        url,
+        headers: { "x-t3-telemetry-revision": String(revision ?? 0) },
+        exportInterval: `${DEFAULT_EXPORT_INTERVAL_MS} millis`,
+        resource: CLIENT_TRACING_RESOURCE,
+      }),
+    );
+    ClientTracer.setDelegate(switchingTracer(read));
+    yield* Effect.addFinalizer(() => Effect.sync(() => ClientTracer.setDelegate(null)));
+  }),
+).pipe(Layer.provide(layerDelegateRuntime));

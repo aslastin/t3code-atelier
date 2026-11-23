@@ -10,9 +10,9 @@ const load = (env: Record<string, string>) =>
   OtelEnvironment.load.pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))));
 
 const SPEC_OFF =
-  "OTEL_SDK_DISABLED is set, so no telemetry is exported, whatever configured it; set T3CODE_OTEL_SDK_DISABLED=false to export anyway";
+  "OTEL_SDK_DISABLED is set, so OpenTelemetry export is disabled, whatever configured it; set T3CODE_OTEL_SDK_DISABLED=false to export anyway";
 const T3_OFF =
-  "T3CODE_OTEL_SDK_DISABLED is set, so no telemetry is exported, whatever configured it";
+  "T3CODE_OTEL_SDK_DISABLED is set, so OpenTelemetry export is disabled, whatever configured it";
 const specIgnored = (value: string) =>
   `OTEL_SDK_DISABLED=${value} was read as false; the OpenTelemetry specification recognizes only the string true, so use OTEL_SDK_DISABLED=true or T3CODE_OTEL_SDK_DISABLED to say it any other way`;
 
@@ -258,7 +258,7 @@ describe("OtelEnvironment", () => {
     it.each([
       {
         name: "T3CODE_OTLP_*_URL wins over a signal the OTEL variables turned off",
-        otel: withLogs(OtelEnvironment.OtelSignal.Off()),
+        otel: withLogs(OtelEnvironment.OtelSignal.Off({ variable: "OTEL_LOGS_EXPORTER" })),
         t3Url: "http://t3:4318/v1/logs",
         expected: {
           url: "http://t3:4318/v1/logs",
@@ -284,7 +284,7 @@ describe("OtelEnvironment", () => {
       },
       {
         name: "a signal the OTEL variables turned off does not fall through",
-        otel: withLogs(OtelEnvironment.OtelSignal.Off()),
+        otel: withLogs(OtelEnvironment.OtelSignal.Off({ variable: "OTEL_LOGS_EXPORTER" })),
         t3Url: undefined,
         expected: undefined,
       },

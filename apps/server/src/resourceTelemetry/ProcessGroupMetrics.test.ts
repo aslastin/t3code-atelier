@@ -8,6 +8,7 @@ import * as References from "effect/References";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 
+import { ExportChannel } from "@t3tools/shared/telemetryConsent";
 import * as ServerConfig from "../config.ts";
 import * as ProcessGroupMetrics from "./ProcessGroupMetrics.ts";
 import * as ResourceTelemetry from "./ResourceTelemetry.ts";
@@ -82,6 +83,8 @@ describe("ProcessGroupMetrics.layer", () => {
     const logger = Logger.make(({ logLevel, message }) => {
       logs.push(`${logLevel.toUpperCase()} ${String([message].flat()[0])}`);
     });
+    const metrics = new ExportChannel();
+    metrics.set("http://localhost:4318/v1/metrics");
     const telemetry = { refresh } as unknown as ResourceTelemetry.ResourceTelemetry["Service"];
     return Effect.gen(function* () {
       yield* Layer.build(
@@ -89,7 +92,7 @@ describe("ProcessGroupMetrics.layer", () => {
           Layer.provide(Layer.succeed(ResourceTelemetry.ResourceTelemetry, telemetry)),
           Layer.provide(
             ServerConfig.layer({
-              otlpMetricsUrl: "http://localhost:4318/v1/metrics",
+              telemetry: { metrics },
             } as ServerConfig.ServerConfig["Service"]),
           ),
         ),

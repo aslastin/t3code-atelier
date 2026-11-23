@@ -91,6 +91,13 @@ export function resolveRelayClientTracingConfig(
     return null;
   }
 
+  return relayClientTracingDestination(env, fallback);
+}
+
+export function relayClientTracingDestination(
+  env: Readonly<Record<string, string | undefined>>,
+  fallback = buildTimeRelayClientTracing,
+) {
   const tracesUrl = env.T3CODE_RELAY_CLIENT_OTLP_TRACES_URL?.trim() || fallback.tracesUrl;
   const tracesDataset =
     env.T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET?.trim() || fallback.tracesDataset;

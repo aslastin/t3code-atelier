@@ -369,7 +369,7 @@ export const layerOtlpTracesProxyRoute = HttpRouter.add(
     yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
     const request = yield* HttpServerRequest.HttpServerRequest;
     const config = yield* ServerConfig.ServerConfig;
-    const otlpTracesUrl = config.otlpTracesUrl;
+    const lease = config.telemetry.traces.current;
     const otlpHeaders = config.otlpTracesExport.headers;
     const browserTraceCollector = yield* BrowserTraceCollector.BrowserTraceCollector;
     const httpClient = yield* HttpClient.HttpClient;
@@ -384,12 +384,17 @@ export const layerOtlpTracesProxyRoute = HttpRouter.add(
       Effect.catch((cause) => Effect.logWarning("Failed to decode browser OTLP traces", { cause })),
     );
 
-    if (otlpTracesUrl === undefined) {
+    const revision = request.headers["x-t3-telemetry-revision"];
+    if (
+      !lease ||
+      config.telemetry.traces.current !== lease ||
+      (revision !== undefined && revision !== String(lease.revision ?? 0))
+    ) {
       return HttpServerResponse.empty({ status: 204 });
     }
 
     return yield* httpClient
-      .post(otlpTracesUrl, {
+      .post(lease.url, {
         body: serialization.traces(bodyJson),
         headers: otlpHeaders,
       })
@@ -399,7 +404,7 @@ export const layerOtlpTracesProxyRoute = HttpRouter.add(
         Effect.tapError((cause) =>
           Effect.logWarning("Failed to export browser OTLP traces", {
             cause,
-            otlpTracesUrl,
+            otlpTracesUrl: lease.url,
           }),
         ),
         Effect.orElseSucceed(() =>

@@ -1,6 +1,5 @@
 import * as NodeOS from "node:os";
 
-import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Clock from "effect/Clock";
@@ -14,7 +13,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import serverPackageJson from "../../../server/package.json" with { type: "json" };
@@ -28,18 +26,6 @@ import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
-
-export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedError<DesktopBackendObservabilitySettingsReadError>()(
-  "DesktopBackendObservabilitySettingsReadError",
-  {
-    settingsPath: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Failed to read persisted backend observability settings at ${this.settingsPath}.`;
-  }
-}
 
 export class DesktopBackendConfiguration extends Context.Service<
   DesktopBackendConfiguration,
@@ -65,12 +51,6 @@ interface BackendObservabilitySettings {
   readonly otlpMetricsUrl: Option.Option<string>;
   readonly otlpLogsUrl: Option.Option<string>;
 }
-
-const emptyBackendObservabilitySettings: BackendObservabilitySettings = {
-  otlpTracesUrl: Option.none(),
-  otlpMetricsUrl: Option.none(),
-  otlpLogsUrl: Option.none(),
-};
 
 const DESKTOP_BACKEND_ENV_NAMES = [
   "T3CODE_PORT",
@@ -153,19 +133,6 @@ const mergeWslEnv = (
   return parts.length > 0 ? parts.join(":") : undefined;
 };
 
-const logBackendObservabilitySettingsReadFailure = (
-  settingsPath: string,
-  cause: PlatformError.PlatformError,
-) => {
-  const error = new DesktopBackendObservabilitySettingsReadError({ settingsPath, cause });
-  return Effect.logWarning(error).pipe(
-    Effect.annotateLogs({
-      component: "desktop-backend-configuration",
-      error,
-    }),
-  );
-};
-
 function resourceMonitorBinaryName(platform: NodeJS.Platform): string {
   return platform === "win32" ? "t3-resource-monitor.exe" : "t3-resource-monitor";
 }
@@ -202,42 +169,6 @@ const resolveResourceMonitorPath = Effect.fn(
   }
 
   return Option.none<string>();
-});
-
-const readPersistedBackendObservabilitySettings = Effect.gen(function* () {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  const raw = yield* fileSystem.readFileString(environment.serverSettingsPath).pipe(
-    Effect.asSome,
-    Effect.catchTags({
-      PlatformError: (cause) =>
-        cause.reason._tag === "NotFound"
-          ? Effect.succeedNone
-          : logBackendObservabilitySettingsReadFailure(environment.serverSettingsPath, cause).pipe(
-              Effect.as(Option.none()),
-            ),
-    }),
-  );
-  if (Option.isNone(raw)) {
-    return emptyBackendObservabilitySettings;
-  }
-
-  const parsed = parsePersistedServerObservabilitySettings(raw.value);
-  return {
-    otlpTracesUrl: Option.fromNullishOr(parsed.otlpTracesUrl),
-    otlpMetricsUrl: Option.fromNullishOr(parsed.otlpMetricsUrl),
-    otlpLogsUrl: Option.fromNullishOr(parsed.otlpLogsUrl),
-  };
-});
-
-const readBackendObservabilitySettings = Effect.gen(function* () {
-  const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  const persisted = yield* readPersistedBackendObservabilitySettings;
-  return {
-    otlpTracesUrl: Option.orElse(environment.otlpTracesUrl, () => persisted.otlpTracesUrl),
-    otlpMetricsUrl: Option.orElse(environment.otlpMetricsUrl, () => persisted.otlpMetricsUrl),
-    otlpLogsUrl: Option.orElse(environment.otlpLogsUrl, () => persisted.otlpLogsUrl),
-  } satisfies BackendObservabilitySettings;
 });
 
 interface SharedBootstrapInput {
@@ -803,14 +734,10 @@ export const make = Effect.gen(function* () {
       bootstrapSecret,
       yield* Clock.currentTimeMillis,
     ).pipe(Effect.provideService(Mac.Mac, mac));
-    const observabilitySettings = yield* readBackendObservabilitySettings.pipe(
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
-    );
     return {
       bootstrapToken,
       bootstrapSecret,
-      observabilitySettings,
+      observabilitySettings: environment,
       hostScope: yield* hostScope,
     } satisfies SharedBootstrapInput;
   });

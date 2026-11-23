@@ -1,3 +1,4 @@
+import { bindExporter } from "@t3tools/shared/telemetryConsent";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as SharedObservability from "@t3tools/shared/observability";
 import * as Cause from "effect/Cause";
@@ -55,24 +56,19 @@ export const layer = Effect.gen(function* () {
   const layerMinimumLogLevel = Layer.succeed(References.MinimumLogLevel, config.logLevel);
 
   const logs = config.otlpLogsExport;
-  const otlpLogger =
-    config.otlpLogsUrl === undefined
-      ? undefined
-      : OtlpLogger.make({
-          url: config.otlpLogsUrl,
-          exportInterval: `${logs.exportIntervalMs} millis`,
-          headers: logs.headers,
-          resource: ServerConfig.otlpResource(config, hostName),
-        }).pipe(Effect.map(redactingCredentials));
-
-  // Logger.layer replaces the whole set; name every logger here.
-  // OTLP includes traced messages as log records, so also using tracerLogger would duplicate in-span exports.
-  const layerLogger = Logger.layer(
-    otlpLogger === undefined
-      ? [consolePretty(), Logger.tracerLogger]
-      : [consolePretty(), otlpLogger],
-    { mergeWithExisting: false },
+  const otlpLogger = bindExporter(config.telemetry.logs, (url) =>
+    OtlpLogger.make({
+      url,
+      exportInterval: `${logs.exportIntervalMs} millis`,
+      headers: logs.headers,
+      resource: ServerConfig.otlpResource(config, hostName),
+    }).pipe(Effect.map(redactingCredentials)),
   ).pipe(
+    Effect.map((read) => Logger.make((options) => (read() ?? Logger.tracerLogger).log(options))),
+  );
+  const layerLogger = Logger.layer([consolePretty(), otlpLogger], {
+    mergeWithExisting: false,
+  }).pipe(
     Layer.provide(OtlpExporter.layerFlusher),
     Layer.provide(OtlpExportFailures.layer("logs")),
     Layer.provide(SharedObservability.layerOtlpSerialization(logs.protocol)),

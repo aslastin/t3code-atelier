@@ -599,7 +599,10 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
         }
 
         if (message.type === "shellEnvironment") {
-          return recordContact.pipe(Effect.andThen(applyShellSnapshot(message)));
+          return recordContact.pipe(
+            Effect.andThen(applyShellSnapshot(message)),
+            Effect.tap(() => Effect.sync(() => config.telemetry.refresh())),
+          );
         }
 
         if (message.type === "desktopUpdateStatus") {

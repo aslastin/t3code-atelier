@@ -54,8 +54,12 @@ function runningOverride(
 ) {
   const url = running?.[key];
   const source = running?.[sourceKey];
-  if (url === undefined || (source !== "environment" && source !== "bootstrap")) return undefined;
-  return { url, label: resolve(OVERRIDE_LABELS[source]), variable: running?.[variableKey] };
+  if (source !== "environment" && source !== "bootstrap") return undefined;
+  return {
+    url: url ?? "",
+    label: resolve(OVERRIDE_LABELS[source]),
+    variable: running?.[variableKey],
+  };
 }
 
 type EndpointCheck = { readonly url: string; readonly result: OtlpEndpointCheckResult | null };
@@ -84,6 +88,11 @@ function endpointStatus(
         label: resolve(msg("Connected · {ms} ms", { ms: Math.round(result.latencyMs) })),
         dot: "bg-success",
       };
+    case "Disabled":
+      return {
+        label: resolve(msg("Off", { $context: "export disabled" })),
+        dot: "bg-muted-foreground/40",
+      };
     case "Rejected":
       return {
         label: resolve(msg("Rejected · HTTP {status}", { status: result.status })),
@@ -102,7 +111,7 @@ export function TelemetryExportSettings() {
   const { environment, scope } = useSettingsScope();
   if (scope.kind !== "environment" || !environment) {
     return (
-      <SettingsSection title={gt("OpenTelemetry export")} id="telemetry-export">
+      <SettingsSection title={gt("OpenTelemetry export")} id="telemetry-endpoints">
         <SettingsScopeNotice target="environment">
           {gt("Choose one environment to configure its telemetry exports.")}
         </SettingsScopeNotice>
@@ -125,7 +134,9 @@ function TelemetryExportForm() {
     serverEnvironment.checkOtlpEndpoint.permissionAtom(environmentId ?? null),
   );
   const canCheck =
-    canEdit && environment?.serverConfig?.environment.capabilities.otlpEndpointCheck === true;
+    environment?.serverConfig?.observability?.telemetry?.otlp === "on" &&
+    canEdit &&
+    environment?.serverConfig?.environment.capabilities.otlpEndpointCheck === true;
   const running = environment?.serverConfig?.observability;
   const [checks, setChecks] = useState<Partial<Record<SignalKey, EndpointCheck>>>(() =>
     Object.fromEntries(
@@ -142,7 +153,7 @@ function TelemetryExportForm() {
   const changed = changedSignals.length > 0;
 
   const sendCheck = async (key: SignalKey, signal: OtlpSignal, attempt: EndpointCheck) => {
-    if (!environmentId) return;
+    if (!environmentId || !canCheck) return;
     const { url } = attempt;
     const response = await checkOtlpEndpoint({ environmentId, input: { signal, url } });
     setChecks((previous) => {
@@ -155,7 +166,7 @@ function TelemetryExportForm() {
   };
 
   const checkEndpoint = (key: SignalKey, signal: OtlpSignal, url: string) => {
-    if (!isHttpUrl(url)) return;
+    if (!canCheck || !isHttpUrl(url)) return;
     const attempt = { url, result: null };
     setChecks((previous) => ({ ...previous, [key]: attempt }));
     void sendCheck(key, signal, attempt);
@@ -174,7 +185,7 @@ function TelemetryExportForm() {
   }, [canCheck]);
 
   return (
-    <SettingsSection title={gt("OpenTelemetry export")} id="telemetry-export">
+    <SettingsSection title={gt("OpenTelemetry export")} id="telemetry-endpoints">
       <form
         className="grid gap-4 px-4 py-4 sm:px-5"
         onSubmit={async (event) => {
@@ -195,14 +206,14 @@ function TelemetryExportForm() {
           setSaving(false);
           if (result._tag === "Success") {
             setDraft({});
-            setMessage(gt("Saved. Restart the server to apply."));
+            setMessage(gt("Saved"));
           }
         }}
       >
         <p className="text-xs text-muted-foreground">
           <T>
-            Send traces, metrics, and logs to an OTLP HTTP receiver. Restart the server to apply.
-            Environment variables override these settings.
+            Send traces, metrics, and logs to an OTLP HTTP receiver. Environment variables override
+            these settings.
           </T>
         </p>
         {!canEdit && (
@@ -228,7 +239,7 @@ function TelemetryExportForm() {
               }
             : check;
           return (
-            <div key={key} className="grid gap-1.5">
+            <div key={key} role="group" aria-label={messages(label)} className="grid gap-1.5">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-1.5">
                   {status && <ConnectionStatusDot dotClassName={status.dot} />}

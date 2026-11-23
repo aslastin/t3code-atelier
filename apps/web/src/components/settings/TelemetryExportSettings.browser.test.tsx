@@ -61,6 +61,19 @@ vi.mock(import("./useScopedSettings"), async (original) => ({
 
 import { TelemetryExportSettings } from "./TelemetryExportSettings";
 
+const activeExport: ServerObservability = {
+  localTracingEnabled: true,
+  logsDirectoryPath: "/tmp/logs",
+  otlpMetricsEnabled: false,
+  otlpLogsEnabled: false,
+  otlpTracesEnabled: true,
+  telemetry: {
+    preferences: { enabled: true, analytics: false, connect: false, otlp: true },
+    analytics: "off",
+    connect: "unavailable",
+    otlp: "on",
+  },
+};
 function setup() {
   updateSettings.mockClear();
   checkOtlpEndpoint.mockReset();
@@ -96,7 +109,7 @@ describe("TelemetryExportSettings", () => {
       environmentId: "env",
       input: { patch: { observability: { otlpMetricsUrl: "http://new/v1/metrics" } } },
     });
-    expect(container.textContent).toContain("Saved. Restart the server to apply.");
+    expect(container.textContent).toContain("Saved");
   });
 
   it("reports and tests the endpoint the environment set over an empty setting", async () => {
@@ -105,6 +118,7 @@ describe("TelemetryExportSettings", () => {
     state.serverConfig = {
       environment: { capabilities: { otlpEndpointCheck: true } },
       observability: {
+        ...activeExport,
         logsDirectoryPath: "/tmp/logs",
         localTracingEnabled: true,
         otlpTracesUrl: "http://collector/v1/traces",
@@ -143,7 +157,10 @@ describe("TelemetryExportSettings", () => {
   it("can test a corrected URL and reports only the latest attempt when a URL is reused", async () => {
     setup();
     state.observability = { ...DEFAULT_SERVER_SETTINGS.observability, otlpTracesUrl: "" };
-    state.serverConfig = { environment: { capabilities: { otlpEndpointCheck: true } } };
+    state.serverConfig = {
+      environment: { capabilities: { otlpEndpointCheck: true } },
+      observability: activeExport,
+    };
     const first = Promise.withResolvers<Awaited<ReturnType<typeof checkOtlpEndpoint>>>();
     const corrected = Promise.withResolvers<Awaited<ReturnType<typeof checkOtlpEndpoint>>>();
     const latest = Promise.withResolvers<Awaited<ReturnType<typeof checkOtlpEndpoint>>>();
@@ -153,7 +170,7 @@ describe("TelemetryExportSettings", () => {
       .mockReturnValueOnce(latest.promise);
     await using screen = await render(<TelemetryExportSettings />);
 
-    const traces = screen.getByLabelText("Traces endpoint");
+    const traces = screen.getByRole("textbox", { name: "Traces endpoint" });
     const testTraces = screen.getByRole("button", { name: "Test" }).first();
     await userEvent.fill(traces, "http://first/v1/traces");
     await userEvent.click(testTraces);

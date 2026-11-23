@@ -14,7 +14,7 @@ type OtlpSignalName = "TRACES" | "METRICS" | "LOGS";
 
 export type OtelSignal = Data.TaggedEnum<{
   Unset: {};
-  Off: {};
+  Off: { readonly variable: string };
   Export: {
     readonly url: string;
     readonly variable: string;
@@ -26,6 +26,8 @@ export const OtelSignal = Data.taggedEnum<OtelSignal>();
 
 export interface OtelEnvironment {
   readonly disabled: boolean;
+  readonly hasConfiguredEndpoint?: boolean;
+  readonly disabledBy?: "T3CODE_OTEL_SDK_DISABLED" | "OTEL_SDK_DISABLED";
   readonly warnings: ReadonlyArray<string>;
   readonly resourceAttributes: Readonly<Record<string, string>>;
   readonly traces: OtelSignal;
@@ -220,7 +222,7 @@ const signal = (
   generic: Settings,
 ): ResolvedSignal => {
   if (exporter.value === "none") {
-    return { signal: OtelSignal.Off(), used: [exporter] };
+    return { signal: OtelSignal.Off({ variable: `OTEL_${name}_EXPORTER` }), used: [exporter] };
   }
   const resolved = endpointSignal(name, own, generic);
   return { signal: resolved.signal, used: [exporter, ...resolved.used] };
@@ -229,21 +231,35 @@ const signal = (
 const endpointSignal = (name: OtlpSignalName, own: Settings, generic: Settings): ResolvedSignal => {
   const ownEndpoint = isClaimed(own.endpoint);
   const endpoint = ownEndpoint ? own.endpoint : generic.endpoint;
+  const endpointVariable = ownEndpoint
+    ? `OTEL_EXPORTER_OTLP_${name}_ENDPOINT`
+    : "OTEL_EXPORTER_OTLP_ENDPOINT";
   if (endpoint.value === undefined) {
-    const signal = endpoint.warning === undefined ? OtelSignal.Unset() : OtelSignal.Off();
+    const signal =
+      endpoint.warning === undefined
+        ? OtelSignal.Unset()
+        : OtelSignal.Off({ variable: endpointVariable });
     return { signal, used: [endpoint] };
   }
   const protocol = claimed(own.protocol, generic.protocol);
   const headers = claimed(own.headers, generic.headers);
   const used = [endpoint, protocol, headers];
   if (protocol.warning !== undefined || headers.warning !== undefined) {
-    return { signal: OtelSignal.Off(), used };
+    const variable =
+      protocol.warning !== undefined
+        ? isClaimed(own.protocol)
+          ? `OTEL_EXPORTER_OTLP_${name}_PROTOCOL`
+          : "OTEL_EXPORTER_OTLP_PROTOCOL"
+        : isClaimed(own.headers)
+          ? `OTEL_EXPORTER_OTLP_${name}_HEADERS`
+          : "OTEL_EXPORTER_OTLP_HEADERS";
+    return { signal: OtelSignal.Off({ variable }), used };
   }
   const url = ownEndpoint ? endpoint.value : withSignalPath(name, endpoint.value);
   return {
     signal: OtelSignal.Export({
       url: url.toString(),
-      variable: ownEndpoint ? `OTEL_EXPORTER_OTLP_${name}_ENDPOINT` : "OTEL_EXPORTER_OTLP_ENDPOINT",
+      variable: endpointVariable,
       protocol: protocol.value ?? "http/protobuf",
       headers: headers.value,
     }),
@@ -302,12 +318,22 @@ export const load: Effect.Effect<OtelEnvironment> = Config.all({
     if (disabled) {
       warnings.push(
         t3.value
-          ? "T3CODE_OTEL_SDK_DISABLED is set, so no telemetry is exported, whatever configured it"
-          : "OTEL_SDK_DISABLED is set, so no telemetry is exported, whatever configured it; set T3CODE_OTEL_SDK_DISABLED=false to export anyway",
+          ? "T3CODE_OTEL_SDK_DISABLED is set, so OpenTelemetry export is disabled, whatever configured it"
+          : "OTEL_SDK_DISABLED is set, so OpenTelemetry export is disabled, whatever configured it; set T3CODE_OTEL_SDK_DISABLED=false to export anyway",
       );
     }
     return {
       disabled,
+      ...(disabled
+        ? {
+            hasConfiguredEndpoint: [generic, own.traces, own.metrics, own.logs].some(
+              ({ endpoint }) => endpoint.value !== undefined,
+            ),
+            disabledBy: t3.value
+              ? ("T3CODE_OTEL_SDK_DISABLED" as const)
+              : ("OTEL_SDK_DISABLED" as const),
+          }
+        : {}),
       warnings,
       resourceAttributes: resource.value,
       traces: signals?.traces.signal ?? OtelSignal.Unset(),

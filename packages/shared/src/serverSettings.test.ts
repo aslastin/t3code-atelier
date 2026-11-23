@@ -263,6 +263,32 @@ describe("serverSettings helpers", () => {
     expect(secondUpdate.projectAgentBrowserAccessOverrides[firstProjectId]).toBe(false);
   });
 
+  it("keeps the configured receiver and invalidates only queues affected by a settings change", () => {
+    const endpoint = "http://localhost:4318/v1/logs";
+    const legacy = {
+      ...DEFAULT_SERVER_SETTINGS,
+      observability: { ...DEFAULT_SERVER_SETTINGS.observability, otlpLogsUrl: endpoint },
+    };
+    const change = (
+      settings: ServerSettings,
+      telemetry: NonNullable<NonNullable<ServerSettingsPatch["observability"]>["telemetry"]>,
+    ) => applyServerSettingsPatch(settings, { observability: { telemetry } });
+    const off = change(legacy, { enabled: false });
+    expect(off.observability.telemetry).toEqual({
+      enabled: false,
+      otlp: true,
+      analytics: false,
+      connect: false,
+    });
+    expect(off.observability.otlpLogsUrl).toBe(endpoint);
+    const on = change(off, { enabled: true });
+    expect(on.observability.telemetryRevisions).toEqual({ connect: 2, otlp: 2 });
+    const product = change(on, { analytics: true });
+    expect(product.observability.telemetryRevisions).toEqual(on.observability.telemetryRevisions);
+    const connect = change(product, { connect: true });
+    expect(connect.observability.telemetryRevisions).toEqual({ connect: 3, otlp: 2 });
+  });
+
   it("parses lenient persisted settings JSON and trims observability URLs", () => {
     expect(
       parsePersistedServerObservabilitySettings(
@@ -292,6 +318,7 @@ describe("serverSettings helpers", () => {
 
   it("falls back cleanly when persisted settings are invalid", () => {
     expect(parsePersistedServerObservabilitySettings("{")).toEqual({
+      telemetry: { enabled: false, analytics: false, connect: false, otlp: false },
       otlpTracesUrl: undefined,
       otlpMetricsUrl: undefined,
       otlpLogsUrl: undefined,

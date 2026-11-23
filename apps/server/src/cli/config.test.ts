@@ -408,6 +408,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       );
 
       expect(resolved).toEqual({
+        telemetry: expect.anything(),
         logLevel: "Info",
         ...defaultObservabilityConfig,
         mode: "web",
@@ -487,6 +488,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       );
 
       expect(resolved).toEqual({
+        telemetry: expect.anything(),
         logLevel: "Debug",
         ...defaultObservabilityConfig,
         mode: "web",
@@ -627,6 +629,11 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       expect(resolved.otlpMetricsUrl).toBeUndefined();
       expect(resolved.otlpLogsUrl).toBeUndefined();
       expect(resolved.otelEnvironment.disabled).toBe(true);
+      expect(resolved.telemetry.describe().telemetry).toMatchObject({
+        sdkDisabledBy: "OTEL_SDK_DISABLED",
+        otlp: "sdk",
+        preferences: { enabled: true, otlp: true, connect: false, analytics: false },
+      });
     }),
   );
 
@@ -724,6 +731,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       );
 
       expect(resolved).toEqual({
+        telemetry: expect.anything(),
         logLevel: "Info",
         ...defaultObservabilityConfig,
         mode: "web",

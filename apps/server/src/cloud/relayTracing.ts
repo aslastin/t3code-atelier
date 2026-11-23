@@ -1,3 +1,4 @@
+import * as TelemetrySettingsFile from "@t3tools/shared/telemetrySettingsFile";
 import {
   nodeProcessRuntimeAttributes,
   processServiceInstanceId,
@@ -21,12 +22,21 @@ export const relayLayer = (
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const policy = yield* ManagedPolicy.ManagedPolicy;
+      const denied = ManagedPolicy.deniedBy(policy, "telemetry") !== undefined;
+      config.telemetry.setManaged(denied);
+      const refresh =
+        resource.client === "headless-cli" && tracingConfig
+          ? yield* TelemetrySettingsFile.follow(config.settingsPath, (settings) =>
+              config.telemetry.update(settings),
+            )
+          : Effect.void;
       return RelayTracing.layer(
-        ManagedPolicy.deniedBy(policy, "telemetry") === undefined ? tracingConfig : null,
+        denied ? null : tracingConfig,
         {
           ...resource,
           serviceInstanceId: processServiceInstanceId(config.otelEnvironment.resourceAttributes),
         },
+        { channel: config.telemetry.connect, refresh },
       );
     }),
   );

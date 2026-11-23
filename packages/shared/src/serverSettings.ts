@@ -5,6 +5,8 @@ import {
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   globalIdleCompaction,
+  legacyTelemetryPreferences,
+  type TelemetryPreferences,
   type IdleCompactionMode,
   isProviderAvailable,
   isUnconfiguredDefaultInstanceEnabled,
@@ -175,6 +177,8 @@ export function resolveSpeechPostProcessingModelSelection(
 }
 
 export interface PersistedServerObservabilitySettings {
+  readonly telemetry?: ServerSettings["observability"]["telemetry"];
+  readonly telemetryRevisions?: ServerSettings["observability"]["telemetryRevisions"];
   readonly otlpTracesUrl: string | undefined;
   readonly otlpMetricsUrl: string | undefined;
   readonly otlpLogsUrl: string | undefined;
@@ -188,13 +192,13 @@ function normalizePersistedServerSettingString(
 }
 
 function extractPersistedServerObservabilitySettings(input: {
-  readonly observability?: {
-    readonly otlpTracesUrl?: string;
-    readonly otlpMetricsUrl?: string;
-    readonly otlpLogsUrl?: string;
-  };
+  readonly observability?: ServerSettings["observability"];
 }): PersistedServerObservabilitySettings {
   return {
+    ...(input.observability?.telemetry ? { telemetry: input.observability.telemetry } : {}),
+    ...(input.observability?.telemetryRevisions
+      ? { telemetryRevisions: input.observability.telemetryRevisions }
+      : {}),
     otlpTracesUrl: normalizePersistedServerSettingString(input.observability?.otlpTracesUrl),
     otlpMetricsUrl: normalizePersistedServerSettingString(input.observability?.otlpMetricsUrl),
     otlpLogsUrl: normalizePersistedServerSettingString(input.observability?.otlpLogsUrl),
@@ -208,7 +212,12 @@ export function parsePersistedServerObservabilitySettings(
   if (Option.isSome(decoded)) {
     return extractPersistedServerObservabilitySettings(decoded.value);
   }
-  return { otlpTracesUrl: undefined, otlpMetricsUrl: undefined, otlpLogsUrl: undefined };
+  return {
+    telemetry: { enabled: false, analytics: false, connect: false, otlp: false },
+    otlpTracesUrl: undefined,
+    otlpMetricsUrl: undefined,
+    otlpLogsUrl: undefined,
+  };
 }
 
 function shouldReplaceTextGenerationModelSelection(
@@ -383,9 +392,43 @@ function patchedIdleCompaction(
   return globalIdleCompaction(current) === "off" ? "off" : "onReturn";
 }
 
+function patchObservability(
+  current: ServerSettings["observability"],
+  patch: NonNullable<ServerSettingsPatch["observability"]>,
+  legacy?: TelemetryPreferences,
+): ServerSettings["observability"] {
+  const previous =
+    current.telemetry ??
+    legacy ??
+    legacyTelemetryPreferences(
+      Boolean(current.otlpTracesUrl || current.otlpMetricsUrl || current.otlpLogsUrl),
+    );
+  const telemetry = { ...previous, ...patch.telemetry };
+  const next = { ...current, ...patch, telemetry };
+  const revisions = current.telemetryRevisions ?? { connect: 0, otlp: 0 };
+  const masterChanged = previous.enabled !== telemetry.enabled;
+  // Separate processes can miss an entire off/on cycle between file notifications.
+  return {
+    ...next,
+    telemetryRevisions: {
+      connect: revisions.connect + Number(masterChanged || previous.connect !== telemetry.connect),
+      otlp:
+        revisions.otlp +
+        Number(
+          masterChanged ||
+            previous.otlp !== telemetry.otlp ||
+            current.otlpTracesUrl !== next.otlpTracesUrl ||
+            current.otlpLogsUrl !== next.otlpLogsUrl ||
+            current.otlpMetricsUrl !== next.otlpMetricsUrl,
+        ),
+    },
+  };
+}
+
 export function applyServerSettingsPatch(
   current: ServerSettings,
   rawPatch: ServerSettingsPatch,
+  legacyTelemetry?: TelemetryPreferences,
 ): ServerSettings {
   const patch = translateLegacyProjectOverridePatch(current, rawPatch);
   const selectionPatch = patch.textGenerationModelSelection;
@@ -399,6 +442,7 @@ export function applyServerSettingsPatch(
     providerHealthRefreshInterval,
     backgroundActivityProfile,
     backgroundActivity,
+    observability: observabilityPatch,
     worktreeCleanup: worktreeCleanupPatch,
     // Merged per entry below; its `null` removals must not reach deepMerge.
     usageLimitSources: usageLimitSourcesPatch,
@@ -504,6 +548,9 @@ export function applyServerSettingsPatch(
   const next = deepMerge(current, patchForMerge);
   const nextWithReplacementsBase = {
     ...next,
+    ...(observabilityPatch && {
+      observability: patchObservability(current.observability, observabilityPatch, legacyTelemetry),
+    }),
     favorites,
     providerModelPreferences: nextModelPreferences,
     ...(worktreeCleanupPatch === undefined

@@ -75,6 +75,10 @@ export function resolveRelayTracingConfig() {
   if (relayTelemetryEnabled() === false) {
     return null;
   }
+  return relayTracingDestination();
+}
+
+export function relayTracingDestination() {
   const { relayTracing } = resolveCloudPublicConfig();
   return relayTracing.tracesUrl && relayTracing.tracesDataset && relayTracing.tracesToken
     ? {

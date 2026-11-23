@@ -168,6 +168,7 @@ describe("browser API CORS", () => {
       expect(allowedHeaders.has(ORCHESTRATION_PROTOCOL_HEADER)).toBe(true);
       expect(allowedHeaders.has("authorization")).toBe(true);
       expect(allowedHeaders.has("dpop")).toBe(true);
+      expect(allowedHeaders.has("x-t3-telemetry-revision")).toBe(true);
     } finally {
       await dispose();
     }

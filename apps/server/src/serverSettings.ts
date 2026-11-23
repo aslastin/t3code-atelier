@@ -670,7 +670,7 @@ function foldLegacyProjectSettings(
 }
 
 const make = Effect.gen(function* () {
-  const { settingsPath } = yield* ServerConfig.ServerConfig;
+  const { settingsPath, telemetry } = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
   const pathService = yield* Path.Path;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
@@ -694,8 +694,10 @@ const make = Effect.gen(function* () {
   const watcherScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
 
-  const emitChange = (settings: ServerSettings) =>
-    PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
+  const emitChange = (settings: ServerSettings) => {
+    telemetry.update(managed.applyLocks(settings).observability);
+    return PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
+  };
 
   const readConfigExists = fs.exists(settingsPath).pipe(
     Effect.mapError(
@@ -811,6 +813,10 @@ const make = Effect.gen(function* () {
         settings = {
           ...managed.defaults,
           continueThreadsAfterServerUpdate: false,
+          observability: {
+            ...managed.defaults.observability,
+            telemetry: { enabled: false, analytics: false, connect: false, otlp: false },
+          },
           usageHistoryRetentionDays: "unlimited",
         };
         if (failure._tag === "Failure") {
@@ -1397,7 +1403,7 @@ const make = Effect.gen(function* () {
 
     const startup = Effect.gen(function* () {
       yield* startWatcher;
-      yield* reloadSettings;
+      telemetry.update(managed.applyLocks((yield* reloadSettings).settings).observability);
     });
 
     const startupExit = yield* Effect.exit(startup);
@@ -1417,7 +1423,9 @@ const make = Effect.gen(function* () {
     updateSettings: (patch) =>
       updateAndPersistSettings(patch, (current) =>
         ensureSecretProviderWritesAllowed(patch, settingsPath).pipe(
-          Effect.as(applyServerSettingsPatch(current, patch)),
+          Effect.map(() =>
+            applyServerSettingsPatch(current, patch, telemetry.describe().telemetry.preferences),
+          ),
         ),
       ),
     updateProviderInstance: (mutation, patch = {}) =>
@@ -1425,7 +1433,11 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           yield* ensureSecretProviderWritesAllowed(patch, settingsPath);
           yield* ensureProviderInstanceMutationAllowed(current, mutation, settingsPath);
-          const patched = applyServerSettingsPatch(current, patch);
+          const patched = applyServerSettingsPatch(
+            current,
+            patch,
+            telemetry.describe().telemetry.preferences,
+          );
           return applyProviderInstanceMutation(patched, mutation);
         }),
       ),

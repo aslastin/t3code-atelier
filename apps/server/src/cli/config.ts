@@ -1,3 +1,4 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NetService from "@t3tools/shared/Net";
 import {
   OtlpHeadersFromString,
@@ -252,13 +253,15 @@ const resolveOptionPrecedence = <Value>(
 
 const loadPersistedObservabilitySettings = Effect.fn(function* (settingsPath: string) {
   const fs = yield* FileSystem.FileSystem;
-  const exists = yield* fs.exists(settingsPath).pipe(Effect.orElseSucceed(() => false));
-  if (!exists) {
-    return { otlpTracesUrl: undefined, otlpMetricsUrl: undefined, otlpLogsUrl: undefined };
-  }
-
-  const raw = yield* fs.readFileString(settingsPath).pipe(Effect.orElseSucceed(() => ""));
-  return parsePersistedServerObservabilitySettings(raw);
+  return yield* fs.readFileString(settingsPath).pipe(
+    Effect.match({
+      onSuccess: parsePersistedServerObservabilitySettings,
+      onFailure: (cause) =>
+        cause.reason._tag === "NotFound"
+          ? { otlpTracesUrl: undefined, otlpMetricsUrl: undefined, otlpLogsUrl: undefined }
+          : parsePersistedServerObservabilitySettings(""),
+    }),
+  );
 });
 
 export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(function* (
@@ -484,54 +487,75 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     },
   );
 
-  const config: ServerConfig.ServerConfig["Service"] = {
-    logLevel,
-    traceMinLevel: env.traceMinLevel,
-    traceTimingEnabled: env.traceTimingEnabled,
-    traceBatchWindowMs: env.traceBatchWindowMs,
-    traceMaxBytes: env.traceMaxBytes,
-    traceMaxFiles: env.traceMaxFiles,
-    otlpTracesUrl: traces?.url,
-    otlpMetricsUrl: metrics?.url,
-    otlpLogsUrl: logs?.url,
-    otlpTracesExport: traces?.export ?? signalExport,
-    otlpMetricsExport: metrics?.export ?? signalExport,
-    otlpLogsExport: logs?.export ?? signalExport,
-    ...(traces !== undefined ? { otlpTracesSource: traces.source } : {}),
-    ...(traces?.variable !== undefined ? { otlpTracesVariable: traces.variable } : {}),
-    ...(metrics !== undefined ? { otlpMetricsSource: metrics.source } : {}),
-    ...(metrics?.variable !== undefined ? { otlpMetricsVariable: metrics.variable } : {}),
-    ...(logs !== undefined ? { otlpLogsSource: logs.source } : {}),
-    ...(logs?.variable !== undefined ? { otlpLogsVariable: logs.variable } : {}),
-    otelEnvironment: otel,
-    mode,
-    port,
-    cwd,
-    baseDir,
-    ...derivedPaths,
-    serverTracePath,
-    host,
-    ...(privateNetworkOnly ? { privateNetworkOnly } : {}),
-    staticDir,
-    devUrl,
-    ...(devAuthToken === undefined ? {} : { devAuthToken }),
-    devAllowedOrigins: env.devAllowedOrigins,
-    noBrowser,
-    startupPresentation,
-    desktopBootstrapToken,
-    ...(desktopBootstrapSecret === undefined ? {} : { desktopBootstrapSecret }),
-    ...(shellEnvironmentPrepared === undefined ? {} : { shellEnvironmentPrepared }),
-    desktopTelemetryFd,
-    desktopTelemetryControlFd,
-    ...(desktopAppUpdate === undefined ? {} : { desktopAppUpdate }),
-    desktopBrowserFd,
-    desktopBrowserControlFd,
-    resourceMonitorPath,
-    autoBootstrapProjectFromCwd,
-    logWebSocketEvents,
-    tailscaleServeEnabled,
-    tailscaleServePort,
-  };
+  const config = ServerConfig.make(
+    {
+      logLevel,
+      traceMinLevel: env.traceMinLevel,
+      traceTimingEnabled: env.traceTimingEnabled,
+      traceBatchWindowMs: env.traceBatchWindowMs,
+      traceMaxBytes: env.traceMaxBytes,
+      traceMaxFiles: env.traceMaxFiles,
+      otlpTracesUrl: traces?.url,
+      otlpMetricsUrl: metrics?.url,
+      otlpLogsUrl: logs?.url,
+      otlpTracesExport: traces?.export ?? signalExport,
+      otlpMetricsExport: metrics?.export ?? signalExport,
+      otlpLogsExport: logs?.export ?? signalExport,
+      ...(traces !== undefined ? { otlpTracesSource: traces.source } : {}),
+      ...(traces?.variable !== undefined ? { otlpTracesVariable: traces.variable } : {}),
+      ...(metrics !== undefined ? { otlpMetricsSource: metrics.source } : {}),
+      ...(metrics?.variable !== undefined ? { otlpMetricsVariable: metrics.variable } : {}),
+      ...(logs !== undefined ? { otlpLogsSource: logs.source } : {}),
+      ...(logs?.variable !== undefined ? { otlpLogsVariable: logs.variable } : {}),
+      otelEnvironment: otel.disabled
+        ? {
+            ...otel,
+            hasConfiguredEndpoint: Boolean(
+              otel.hasConfiguredEndpoint ||
+              env.otlpTracesUrl ||
+              env.otlpMetricsUrl ||
+              env.otlpLogsUrl ||
+              bootstrap?.otlpTracesUrl ||
+              bootstrap?.otlpMetricsUrl ||
+              bootstrap?.otlpLogsUrl,
+            ),
+          }
+        : otel,
+      mode,
+      port,
+      cwd,
+      baseDir,
+      ...derivedPaths,
+      serverTracePath,
+      host,
+      ...(privateNetworkOnly ? { privateNetworkOnly } : {}),
+      staticDir,
+      devUrl,
+      ...(devAuthToken === undefined ? {} : { devAuthToken }),
+      devAllowedOrigins: env.devAllowedOrigins,
+      noBrowser,
+      startupPresentation,
+      desktopBootstrapToken,
+      ...(desktopBootstrapSecret === undefined ? {} : { desktopBootstrapSecret }),
+      ...(shellEnvironmentPrepared === undefined ? {} : { shellEnvironmentPrepared }),
+      desktopTelemetryFd,
+      desktopTelemetryControlFd,
+      ...(desktopAppUpdate === undefined ? {} : { desktopAppUpdate }),
+      desktopBrowserFd,
+      desktopBrowserControlFd,
+      resourceMonitorPath,
+      autoBootstrapProjectFromCwd,
+      logWebSocketEvents,
+      tailscaleServeEnabled,
+      tailscaleServePort,
+    },
+    persistedObservabilitySettings,
+    yield* HostProcess.Environment,
+    yield* Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(
+      Config.withDefault(true),
+      Effect.orElseSucceed(() => false),
+    ),
+  );
 
   return config;
 });

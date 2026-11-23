@@ -1,3 +1,5 @@
+import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import desktopPackageJson from "../../package.json" with { type: "json" };
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -98,13 +100,13 @@ const layerEmptyEnv = ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }));
 
 const encodeObservabilitySettingsFile = Schema.encodeSync(
   Schema.fromJsonString(
-    Schema.Struct({ observability: Schema.Record(Schema.String, Schema.String) }),
+    Schema.Struct({ observability: Schema.Record(Schema.String, Schema.Unknown) }),
   ),
 );
 
 const writeObservabilitySettings = Effect.fn(function* (
   environmentLayer: ReturnType<typeof layerEnvironmentFor>,
-  observability: Readonly<Record<string, string>>,
+  observability: Readonly<Record<string, unknown>>,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const { path, serverSettingsPath } = yield* Effect.gen(function* () {
@@ -300,6 +302,49 @@ describe("DesktopObservability", () => {
         retained.map((suffix) => `server-child.log.${suffix}`).sort(),
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.live("checks the latest consent before flushing desktop spans and logs to the receiver", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-desktop-consent-" });
+      const env = layerEnvironmentFor(baseDir);
+      const server = yield* HttpServer.HttpServer;
+      if (server.address._tag === "UnixPathAddress") return yield* Effect.die("expected TCP");
+      const url = `http://127.0.0.1:${server.address.port}`;
+      const bodies: string[] = [];
+      yield* Layer.build(
+        HttpServer.serve(
+          Effect.gen(function* () {
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            bodies.push(yield* request.text);
+            return HttpServerResponse.empty({ status: 200 });
+          }),
+        ),
+      );
+      const save = (enabled: boolean, revision: number) =>
+        writeObservabilitySettings(env, {
+          otlpLogsUrl: url + "/v1/logs",
+          otlpTracesUrl: url + "/v1/traces",
+          telemetry: { enabled, analytics: false, connect: false, otlp: true },
+          telemetryRevisions: { connect: revision, otlp: revision },
+        });
+      const desktop = DesktopObservability.layer.pipe(Layer.provideMerge(env));
+      yield* save(true, 0);
+      yield* Effect.gen(function* () {
+        yield* Effect.logInfo("revoked-desktop-log").pipe(Effect.withSpan("revoked-desktop-span"));
+        yield* save(false, 1);
+        yield* save(true, 2);
+      }).pipe(Effect.provide(desktop), Effect.scoped);
+      assert.notInclude(bodies.join(""), "revoked-desktop");
+      yield* Effect.logInfo("fresh-desktop-log").pipe(
+        Effect.withSpan("fresh-desktop-span"),
+        Effect.provide(desktop),
+        Effect.scoped,
+      );
+      assert.include(bodies.join(""), "fresh-desktop-log");
+      assert.include(bodies.join(""), "fresh-desktop-span");
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeHttpServer.layerTest, layerEmptyEnv))),
   );
 
   it.effect("stops every export when the OpenTelemetry SDK is disabled", () => {

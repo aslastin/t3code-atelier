@@ -1,3 +1,5 @@
+import * as Metric from "effect/Metric";
+import { bindExporter, switchingTracer } from "@t3tools/shared/telemetryConsent";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as HttpObservability from "@t3tools/shared/httpObservability";
 import { makeLocalFileTracer, makeTraceSink } from "@t3tools/shared/observability";
@@ -54,15 +56,14 @@ export const layer = Layer.unwrap(
               durationMs: stats.durationMs,
             }),
         });
-        const delegate =
-          config.otlpTracesUrl === undefined
-            ? undefined
-            : yield* OtlpTracer.make({
-                url: config.otlpTracesUrl,
-                exportInterval: `${traces.exportIntervalMs} millis`,
-                headers: traces.headers,
-                resource,
-              }).pipe(Effect.provide(OtlpExportFailures.layer("traces")));
+        const readTracer = yield* bindExporter(config.telemetry.traces, (url) =>
+          OtlpTracer.make({
+            url,
+            exportInterval: `${traces.exportIntervalMs} millis`,
+            headers: traces.headers,
+            resource,
+          }),
+        ).pipe(Effect.provide(OtlpExportFailures.layer("traces")));
 
         const tracer = yield* makeLocalFileTracer({
           filePath: config.serverTracePath,
@@ -70,7 +71,7 @@ export const layer = Layer.unwrap(
           maxFiles: config.traceMaxFiles,
           batchWindowMs: config.traceBatchWindowMs,
           sink,
-          ...(delegate ? { delegate } : {}),
+          delegate: switchingTracer(readTracer),
         });
 
         const heapAttribution = yield* HeapAttribution.make(tracer);
@@ -83,18 +84,24 @@ export const layer = Layer.unwrap(
       }),
     ).pipe(Layer.provide(OtlpExporter.layerFlusher), Layer.provideMerge(layerSerialization));
 
-    const metricsLayer =
-      config.otlpMetricsUrl === undefined
-        ? Layer.empty
-        : OtlpMetrics.layer({
-            url: config.otlpMetricsUrl,
-            exportInterval: `${metrics.exportIntervalMs} millis`,
-            headers: metrics.headers,
-            resource,
-          }).pipe(
-            Layer.provide(OtlpExportFailures.layer("metrics")),
-            Layer.provide(SharedObservability.layerOtlpSerialization(metrics.protocol)),
-          );
+    const registry: Metric.MetricRegistry = new Map();
+    const metricsLayer = Layer.effectDiscard(
+      bindExporter(config.telemetry.metrics, (url) => {
+        // Cumulative counters and series labels from an earlier consent period must stay local.
+        registry.clear();
+        return OtlpMetrics.make({
+          url,
+          exportInterval: `${metrics.exportIntervalMs} millis`,
+          headers: metrics.headers,
+          resource,
+        });
+      }),
+    ).pipe(
+      Layer.provide(OtlpExportFailures.layer("metrics")),
+      Layer.provideMerge(Layer.succeed(Metric.MetricRegistry, registry)),
+      Layer.provide(SharedObservability.layerOtlpSerialization(metrics.protocol)),
+      Layer.provide(OtlpExporter.layerFlusher),
+    );
 
     const layerOtelWarnings = Layer.effectDiscard(
       Effect.forEach(config.otelEnvironment.warnings, (warning) => Effect.logWarning(warning)),

@@ -410,7 +410,7 @@ export const withLateConfigDiscovery = <E, R>(
           case "providerStatuses":
             return [{ ...current, providers: event.payload.providers }, [event]];
           case "settingsUpdated":
-            return [{ ...current, settings: event.payload.settings }, [event]];
+            return [{ ...current, ...event.payload }, [event]];
           // Themes and usage-limit sources survive snapshots because snapshots never include them.
           default:
             return [current, [event]];
@@ -1561,6 +1561,7 @@ export const layerWsRpc = (
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const npmRelease = yield* NpmRelease.NpmRelease;
       const config = yield* ServerConfig.ServerConfig;
+      const { telemetry } = config;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
@@ -1879,34 +1880,7 @@ export const layerWsRpc = (
           issues: keybindingsConfig.issues,
           providers,
           ...discovery,
-          observability: {
-            logsDirectoryPath: config.logsDir,
-            localTracingEnabled: true,
-            ...(config.otlpTracesUrl !== undefined
-              ? {
-                  otlpTracesUrl: config.otlpTracesUrl,
-                  otlpTracesSource: config.otlpTracesSource,
-                  otlpTracesVariable: config.otlpTracesVariable,
-                }
-              : {}),
-            otlpTracesEnabled: config.otlpTracesUrl !== undefined,
-            ...(config.otlpMetricsUrl !== undefined
-              ? {
-                  otlpMetricsUrl: config.otlpMetricsUrl,
-                  otlpMetricsSource: config.otlpMetricsSource,
-                  otlpMetricsVariable: config.otlpMetricsVariable,
-                }
-              : {}),
-            otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
-            ...(config.otlpLogsUrl !== undefined
-              ? {
-                  otlpLogsUrl: config.otlpLogsUrl,
-                  otlpLogsSource: config.otlpLogsSource,
-                  otlpLogsVariable: config.otlpLogsVariable,
-                }
-              : {}),
-            otlpLogsEnabled: config.otlpLogsUrl !== undefined,
-          },
+          observability: telemetry.describe(),
           settings,
           ...(serverSettings.managedPolicy === undefined
             ? {}
@@ -3539,14 +3513,17 @@ export const layerWsRpc = (
                       })),
                     )
                   : Stream.empty;
-              const settingsUpdates = settingsChanges.pipe(
+              const settingsUpdates = Stream.merge(
+                settingsChanges,
+                telemetry.limitChanges.pipe(Stream.mapEffect(() => serverSettings.getSettings)),
+              ).pipe(
                 Stream.map((settings) =>
                   ServerSettings.redactServerSettingsForClient(settings, settingsClient),
                 ),
                 Stream.map((settings) => ({
                   version: 1 as const,
                   type: "settingsUpdated" as const,
-                  payload: { settings },
+                  payload: { settings, observability: telemetry.describe() },
                 })),
               );
 

@@ -980,11 +980,14 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "telemetry-export",
-    title: msg("OpenTelemetry export"),
+    title: msg("Send telemetry"),
     to: "/settings/diagnostics",
     targetId: "telemetry-export",
-    scope: "environment",
-    searchTerms: [msg("OTel OTLP telemetry export endpoints logs traces metrics Grafana")],
+    scope: "environment-defaults",
+    searchTerms: [
+      msg("OpenTelemetry export"),
+      msg("OpenTelemetry OTLP PostHog Axiom T3 Connect traces metrics logs"),
+    ],
   },
   {
     id: "diagnostics",

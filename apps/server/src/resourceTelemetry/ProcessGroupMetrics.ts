@@ -100,12 +100,14 @@ export function groupProcesses(
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
-    if (config.otlpMetricsUrl === undefined) return;
     const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
     // A group that empties reads zero rather than holding its last value.
     const seen = new Set<string>();
     const sample = Effect.fn("ProcessGroupMetrics.sample")(function* () {
+      const lease = config.telemetry.metrics.current;
+      if (!lease) return;
       const totals = groupProcesses((yield* telemetry.refresh).processes);
+      if (config.telemetry.metrics.current !== lease) return;
       for (const group of totals.keys()) seen.add(group);
       for (const group of seen) {
         const total = totals.get(group) ?? { residentBytes: 0, cpuPercent: 0, count: 0 };

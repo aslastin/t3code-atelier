@@ -35,12 +35,19 @@ test(
 
       const traces = browser.locator("#otlpTracesUrl");
       const exportSection = browser.locator("#telemetry-export");
-      const testTraces = exportSection.getByRole("button", "Test").first();
+      await exportSection.getByText("What to send", { exact: true }).tap();
+      await browser.locator("#otlpMetricsUrl").fill(`${origin}/v1/metrics`);
+      await exportSection.getByRole("button", "Save").tap();
+      await exportSection.getByText("Saved", { exact: true }).waitFor();
+      await exportSection.getByRole("switch", "My OpenTelemetry receiver").tap();
+      await exportSection.getByRole("switch", "Send telemetry").tap();
+      const tracesGroup = exportSection.getByRole("group", "Traces endpoint");
+      const testTraces = tracesGroup.getByRole("button", "Test");
       await traces.fill(`${origin}/slow/v1/traces`);
       await testTraces.tap();
       await firstProbe.promise;
       await traces.fill(`${origin}/v1/traces`);
-      await exportSection.getByText("Not checked", { exact: true }).waitFor();
+      await tracesGroup.getByText("Not checked", { exact: true }).waitFor();
 
       // Sample the screen before the old request reaches its server timeout.
       const canTestCorrectedUrl = await testTraces.isEnabled();
