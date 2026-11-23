@@ -8,6 +8,8 @@ import {
   type ProjectTrackedFolder,
   type ProjectUpdatePayload,
   type ProjectSnapshot,
+  type ProjectRemovalFolder,
+  type ProjectRemovalPreviewEntry,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -73,7 +75,7 @@ export interface ProjectDeleteInput {
   readonly commandId: CommandId;
   readonly projectId: ProjectId;
   readonly force?: boolean;
-  readonly expectedWorkspaceRoot?: string;
+  readonly expectedFolder?: ProjectRemovalFolder;
 }
 
 export class ProjectNotFoundError extends Schema.TaggedError<ProjectNotFoundError>()(
@@ -156,6 +158,10 @@ export class ProjectService extends Context.Service<
       ProjectServiceError
     >;
     readonly update: (input: ProjectUpdateInput) => Effect.Effect<Project, ProjectServiceError>;
+    readonly removalPreview: () => Effect.Effect<
+      ReadonlyArray<ProjectRemovalPreviewEntry>,
+      ProjectOperationError
+    >;
     readonly delete: (input: ProjectDeleteInput) => Effect.Effect<Project, ProjectServiceError>;
     readonly getById: (
       projectId: ProjectId,
@@ -759,6 +765,39 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  // A missing registration can still be removed. Resolve its existing ancestors so aliases agree.
+  const resolveRemovalPath = Effect.fn("ProjectService.resolveRemovalPath")(function* (
+    workspaceRoot: string,
+  ) {
+    let current = workspaceRoot;
+    while (true) {
+      const result = yield* fileSystem.realPath(current).pipe(Effect.result);
+      if (Result.isSuccess(result))
+        return path.join(result.success, path.relative(current, workspaceRoot));
+      if (result.failure.reason._tag !== "NotFound") return null;
+      const parent = path.dirname(current);
+      if (current === parent) return null;
+      current = parent;
+    }
+  });
+  const removalPreview = Effect.fn("ProjectService.removalPreview")(function* () {
+    const rows = yield* projects
+      .listRemovalRows()
+      .pipe(
+        Effect.mapError(
+          (cause) => new ProjectOperationError({ operation: "list-projects", cause }),
+        ),
+      );
+    return yield* Effect.forEach(
+      rows,
+      (row) =>
+        resolveRemovalPath(row.workspaceRoot).pipe(
+          Effect.map((resolvedWorkspaceRoot) => ({ ...row, resolvedWorkspaceRoot })),
+        ),
+      { concurrency: 8 },
+    );
+  });
+
   const deleteProject: ProjectService["Service"]["delete"] = Effect.fn("ProjectService.delete")(
     function* (input) {
       const { projectId } = input;
@@ -775,8 +814,10 @@ export const make = Effect.gen(function* () {
         Effect.fnUntraced(function* (current) {
           if (current?.deletedAt === null) {
             if (
-              input.expectedWorkspaceRoot !== undefined &&
-              current.workspaceRoot !== input.expectedWorkspaceRoot
+              input.expectedFolder !== undefined &&
+              (current.workspaceRoot !== input.expectedFolder.workspaceRoot ||
+                (yield* resolveRemovalPath(current.workspaceRoot)) !==
+                  input.expectedFolder.resolvedWorkspaceRoot)
             ) {
               return yield* new ProjectInvalidError({
                 projectId,
@@ -871,6 +912,7 @@ export const make = Effect.gen(function* () {
     bootstrap,
     update,
     delete: deleteProject,
+    removalPreview,
     getById,
     getByWorkspaceRoot,
     workspaceScanDirectory,

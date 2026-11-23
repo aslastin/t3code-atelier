@@ -8,7 +8,9 @@ import { mapAtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   planProjectRemoval,
-  readRemovalArchives,
+  readProjectRemovalPreview,
+  reviewedFoldersMatch,
+  removalServerUpdateNotice,
   removalEnvironmentLabel,
   removalFoldersMatch,
   changedProjectFolderNotice,
@@ -40,8 +42,6 @@ import {
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { readProjects, readThreadShells, waitForProjectRemoval } from "../../state/entities";
 import { refreshProjectFaviconUrl } from "../../state/assets";
-import { appAtomRegistry } from "../../rpc/atomRegistry";
-import { orchestrationEnvironment } from "../../state/orchestration";
 import { projectEnvironment } from "../../state/projects";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Alert, AlertDescription } from "../ui/alert";
@@ -72,7 +72,6 @@ import {
   scopeProjectSettingsGroup,
 } from "./ProjectSettingsPanel.logic";
 import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
-import { readUnloadedThreadCount } from "../../state/olderSettledShelf";
 import { settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 
 const ProjectIconPickerDialog = lazy(() =>
@@ -297,6 +296,9 @@ function ProjectDetail({
       (member) => environmentById.get(member.environmentId)?.serverConfig != null,
     ) ?? group.memberProjects[0]!;
   const router = useRouter();
+  const readPreview = useOrchestrationCommand(projectEnvironment.removalPreview, {
+    reportFailure: false,
+  });
   const deleteProject = useOrchestrationCommand(projectEnvironment.delete, {
     reportFailure: false,
   });
@@ -373,19 +375,30 @@ function ProjectDetail({
     toastManager.add({ type: "warning", title: resolveMessage(changedProjectFolderNotice) });
     return false;
   };
+  const loadPreview = async (members: readonly SidebarProjectGroupMember[]) => {
+    const result = await readProjectRemovalPreview(members, readPreview);
+    if (result._tag === "Failure") {
+      reportProjectFailure(gt("Failed to remove project"), result);
+      return null;
+    }
+    return result.value;
+  };
   const reviewRemoval = async (members: readonly SidebarProjectGroupMember[]) => {
     if (isRemoving || checkProjectAccess(members, gt("Failed to remove project"))) return;
-    setIsRemoving(true);
-    const archives = await readRemovalArchives(
-      appAtomRegistry,
-      members,
-      orchestrationEnvironment.archivedShellSnapshot,
-    );
-    setIsRemoving(false);
-    if (archives._tag === "Failure") {
-      reportProjectFailure(gt("Failed to remove project"), archives);
+    if (
+      members.some(
+        (member) =>
+          !environments.find((env) => env.environmentId === member.environmentId)?.serverConfig
+            ?.environment.capabilities.reviewedProjectRemoval,
+      )
+    ) {
+      toastManager.add({ type: "warning", title: resolveMessage(removalServerUpdateNotice) });
       return;
     }
+    setIsRemoving(true);
+    const preview = await loadPreview(members);
+    setIsRemoving(false);
+    if (!preview) return;
     if (!foldersStillMatch(members)) return;
     const plan = planProjectRemoval({
       members,
@@ -396,9 +409,12 @@ function ProjectDetail({
         environmentLabel: removalEnvironmentLabel(project.environmentId, environments),
       })),
       threads: readThreadShells(),
-      archives: archives.value,
-      unloadedThreadCount: (member, held) => readUnloadedThreadCount([member], held),
+      preview,
     });
+    if (plan.foldersChanged) {
+      toastManager.add({ type: "warning", title: resolveMessage(changedProjectFolderNotice) });
+      return;
+    }
     if (plan.ambiguousFolders) {
       toastManager.add({ type: "warning", title: resolveMessage(ambiguousProjectFoldersNotice) });
       return;
@@ -411,9 +427,15 @@ function ProjectDetail({
     const members = entries.map((entry) => entry.member);
     if (checkProjectAccess(members, gt("Failed to remove project")) || !foldersStillMatch(members))
       return;
+    const preview = await loadPreview(members);
+    if (!preview) return;
+    if (!reviewedFoldersMatch(entries, preview)) {
+      toastManager.add({ type: "warning", title: resolveMessage(changedProjectFolderNotice) });
+      return;
+    }
     const draftStore = useComposerDraftStore.getState();
     const removedKeys = new Set(members.map((member) => member.physicalProjectKey));
-    for (const { member, threads: memberThreads } of entries) {
+    for (const { member, expectedFolder, threads: memberThreads } of entries) {
       if (
         checkProjectAccess([member], gt("Failed to remove project")) ||
         !foldersStillMatch([member])
@@ -424,7 +446,7 @@ function ProjectDetail({
           environmentId: member.environmentId,
           input: {
             projectId: member.id,
-            expectedWorkspaceRoot: member.workspaceRoot,
+            expectedFolder,
             force: true,
           },
         }),

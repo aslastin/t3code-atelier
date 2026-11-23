@@ -11,6 +11,9 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { TestClock } from "effect/testing";
@@ -125,6 +128,46 @@ function nativeThreadCreated(projectId: ProjectId, threadId: ThreadId) {
   };
 }
 
+it.effect(
+  "reviews the real folder of a plain project and refuses a retargeted directory link",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const sql = yield* SqlClient.SqlClient;
+      const temp = yield* fs.makeTempDirectoryScoped();
+      const first = path.join(temp, "first");
+      const second = path.join(temp, "second");
+      yield* fs.makeDirectory(first);
+      yield* fs.makeDirectory(second);
+      const id = ProjectId.make("plain-project");
+      yield* seedProject(id);
+      const windows = (yield* HostProcess.Platform) === "win32";
+      const registered = windows ? first : path.join(temp, "alias");
+      if (!windows) yield* fs.symlink(first, registered);
+      yield* sql`UPDATE projection_projects SET workspace_root = ${registered} WHERE project_id = ${id}`;
+      yield* Effect.gen(function* () {
+        const service = yield* ProjectService.make;
+        const [entry] = yield* service.removalPreview();
+        assert.equal(entry?.resolvedWorkspaceRoot, yield* fs.realPath(first));
+        if (!windows) {
+          yield* fs.remove(registered);
+          yield* fs.symlink(second, registered);
+          const error = yield* service
+            .delete({
+              projectId: id,
+              commandId: CommandId.make("reviewed-delete"),
+              force: true,
+              expectedFolder: entry!,
+            })
+            .pipe(Effect.flip);
+          assert.instanceOf(error, ProjectService.ProjectInvalidError);
+          assert.isTrue(Option.isSome(yield* service.getById(id)));
+        }
+      }).pipe(Effect.provide(layerServices));
+    }).pipe(Effect.provide(layerDatabase)),
+);
+
 it.effect("retries a partial project deletion without repeating child events or cleanup", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -138,7 +181,12 @@ it.effect("retries a partial project deletion without repeating child events or 
       const eventSink = yield* EventSink.EventSinkV2;
       const projections = yield* ProjectionStore.ProjectionStoreV2;
       yield* eventSink.write({
-        events: threadIds.map((threadId) => nativeThreadCreated(projectId, threadId)),
+        events: threadIds.map((threadId, index) => {
+          const event = nativeThreadCreated(projectId, threadId);
+          return index === 0
+            ? event
+            : { ...event, payload: { ...event.payload, archivedAt: event.occurredAt } };
+        }),
       });
       const attempts: ThreadId[] = [];
       const failingEventSink = EventSink.EventSinkV2.of({
@@ -161,8 +209,19 @@ it.effect("retries a partial project deletion without repeating child events or 
         Effect.provideService(EventSink.EventSinkV2, failingEventSink),
       );
       const input = { commandId, projectId, force: true };
+      const preview = yield* service.removalPreview();
+      const folder = preview.find((row) => row.projectId === projectId)!;
+      assert.equal(folder.threadCount, 2);
+      const retargeted = yield* service
+        .delete({
+          ...input,
+          expectedFolder: { ...folder, resolvedWorkspaceRoot: "/different/target" },
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(retargeted, ProjectService.ProjectInvalidError);
+      assert.isEmpty(attempts);
       const moved = yield* service
-        .delete({ ...input, expectedWorkspaceRoot: "/old/location" })
+        .delete({ ...input, expectedFolder: { ...folder, workspaceRoot: "/old/location" } })
         .pipe(Effect.flip);
       assert.instanceOf(moved, ProjectService.ProjectInvalidError);
       assert.isEmpty(attempts);

@@ -164,6 +164,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   agentActivityPublishing: Schema.optionalKey(Schema.Boolean),
   projectCloneTracking: Schema.optionalKey(Schema.Boolean),
   /** Server keeps `pinned` and `archived` from project.update. Older servers drop them. */
+  reviewedProjectRemoval: Schema.optionalKey(Schema.Boolean),
   projectOrganization: Schema.optionalKey(Schema.Boolean),
   /** Server answers projects.listIgnoredFiles. */
   ignoredFileListing: Schema.optionalKey(Schema.Boolean),
@@ -260,8 +261,6 @@ export const RepositoryIdentity = Schema.Struct({
   webUrl: Schema.optionalKey(TrimmedNonEmptyString),
   /** Work tree root, or the git dir for a bare repository. */
   rootPath: Schema.optionalKey(TrimmedNonEmptyString),
-  /** Physical workspace directory when the registered path follows a symlink. */
-  resolvedWorkspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
   displayName: Schema.optionalKey(TrimmedNonEmptyString),
   provider: Schema.optionalKey(SourceControlProviderKind),
   owner: Schema.optionalKey(TrimmedNonEmptyString),

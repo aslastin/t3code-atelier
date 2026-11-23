@@ -3076,6 +3076,16 @@ export const layerWsRpc = (
                 }),
             ),
           ),
+        [WS_METHODS.projectsRemovalPreview]: () =>
+          projectService.removalPreview().pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2GetShellSnapshotError({
+                  message: "Failed to review project removal.",
+                  cause,
+                }),
+            ),
+          ),
         [WS_METHODS.projectsMutate]: (mutation) =>
           startup.enqueueCommand(mutateProject(mutation)).pipe(
             Effect.mapError(

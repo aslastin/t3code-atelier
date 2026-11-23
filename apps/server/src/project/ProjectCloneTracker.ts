@@ -46,8 +46,11 @@ export class ProjectCloneTracker extends Context.Service<
     /** Interrupts a running clone and deletes the partial checkout. */
     readonly cancel: (projectId: ProjectId) => Effect.Effect<boolean>;
     readonly retry: (projectId: ProjectId) => Effect.Effect<boolean, SourceControlRepositoryError>;
-    /** Stops tracking, interrupts any running clone and removes unfinished checkouts. */
-    readonly discard: (projectId: ProjectId) => Effect.Effect<void>;
+    /** With keepFiles, a running git clone finishes without interruption or directory cleanup. */
+    readonly discard: (
+      projectId: ProjectId,
+      options?: { readonly keepFiles: boolean },
+    ) => Effect.Effect<void>;
     readonly get: (projectId: ProjectId) => Effect.Effect<ProjectCloneSnapshot | null>;
     readonly stream: Stream.Stream<ReadonlyArray<ProjectCloneSnapshot>>;
   }
@@ -198,7 +201,7 @@ export const make = Effect.gen(function* () {
     error: string | null,
   ) {
     const endedAt = yield* nowIso;
-    yield* modify(projectId, (tracked) => ({
+    const snapshot = yield* modify(projectId, (tracked) => ({
       ...tracked,
       fiber: null,
       snapshot: {
@@ -210,7 +213,7 @@ export const make = Effect.gen(function* () {
         error: error === null ? null : clampText(error, PROJECT_CLONE_ERROR_MAX_LENGTH),
       },
     }));
-    if (phase === "done") yield* scheduleRemoval(projectId);
+    if (snapshot && phase === "done") yield* scheduleRemoval(projectId);
   });
 
   const cloneWatchingForStall = Effect.fn("ProjectCloneTracker.cloneWatchingForStall")(function* (
@@ -249,7 +252,10 @@ export const make = Effect.gen(function* () {
       Effect.flatMap(() =>
         tracked.hooks
           .onCloned({ projectId, workspaceRoot: tracked.input.destinationPath })
-          .pipe(Effect.ignoreCause({ log: true })),
+          .pipe(
+            Effect.when(Ref.get(clones).pipe(Effect.map((entries) => entries.has(projectId)))),
+            Effect.ignoreCause({ log: true }),
+          ),
       ),
       Effect.ignoreCause(),
     );
@@ -418,15 +424,16 @@ export const make = Effect.gen(function* () {
 
   const discard: ProjectCloneTracker["Service"]["discard"] = Effect.fn(
     "ProjectCloneTracker.discard",
-  )(function* (projectId) {
+  )(function* (projectId, options) {
     const current = yield* Ref.get(clones);
     const tracked = current.get(projectId);
     if (!tracked) return;
-    if (tracked.fiber) yield* Fiber.interrupt(tracked.fiber);
+    // Interrupting git clone can make Git recursively clean up the destination.
+    if (tracked.fiber && !options?.keepFiles) yield* Fiber.interrupt(tracked.fiber);
     // Git may have finished while the interrupt was landing; the project
     // is going away either way, but a complete checkout is the user's.
     const after = yield* get(projectId);
-    if (after?.phase !== "done") {
+    if (!options?.keepFiles && after?.phase !== "done") {
       yield* repositories.discardClone(tracked.input.destinationPath).pipe(Effect.ignore);
     }
     yield* clearRetention(projectId);
@@ -461,8 +468,8 @@ export const make = Effect.gen(function* () {
     retry: Effect.fnUntraced(function* (projectId) {
       return yield* locked(retry(projectId));
     }),
-    discard: Effect.fnUntraced(function* (projectId) {
-      return yield* locked(discard(projectId));
+    discard: Effect.fnUntraced(function* (projectId, options) {
+      return yield* locked(discard(projectId, options));
     }),
     get,
     stream,

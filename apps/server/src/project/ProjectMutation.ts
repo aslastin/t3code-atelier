@@ -56,14 +56,19 @@ export const projectMutationOperation = Effect.fn("projectMutationOperation")(fu
         ...(mutation.archived === undefined ? {} : { archived: mutation.archived }),
       });
 
+    case "project.removeReviewed":
+      return yield* projects.delete({
+        commandId: mutation.commandId,
+        projectId: mutation.projectId,
+        expectedFolder: mutation.expectedFolder,
+        force: true,
+      });
+
     case "project.delete":
       return yield* projects.delete({
         commandId: mutation.commandId,
         projectId: mutation.projectId,
         ...(mutation.force === undefined ? {} : { force: mutation.force }),
-        ...(mutation.expectedWorkspaceRoot === undefined
-          ? {}
-          : { expectedWorkspaceRoot: mutation.expectedWorkspaceRoot }),
       });
   }
 });
@@ -74,10 +79,12 @@ export const mutateProjectWithClone = Effect.fn("mutateProjectWithClone")(functi
   clones: Pick<ProjectCloneTracker["Service"], "discard">,
   mutation: ProjectMutation,
 ) {
-  if (mutation.type !== "project.delete")
+  if (mutation.type !== "project.delete" && mutation.type !== "project.removeReviewed")
     return yield* projectMutationOperation(projects, mutation);
   return yield* projectMutationOperation(projects, mutation).pipe(
-    Effect.tap(() => clones.discard(mutation.projectId)),
+    Effect.tap(() =>
+      clones.discard(mutation.projectId, { keepFiles: mutation.type === "project.removeReviewed" }),
+    ),
     Effect.uninterruptible,
   );
 });

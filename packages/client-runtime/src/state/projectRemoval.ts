@@ -1,26 +1,26 @@
 import {
-  isListedThreadLineage,
   type EnvironmentId,
-  type OrchestrationV2ArchivedShellSnapshot,
+  type ProjectRemovalPreviewEntry,
+  type ProjectRemovalFolder,
 } from "@t3tools/contracts";
 import { isWindowsAbsolutePath, workspaceRelativeFilePath } from "@t3tools/shared/path";
-import * as Effect from "effect/Effect";
-import type { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { msg } from "gt-i18n";
 
 import type { EnvironmentProject, EnvironmentThreadShell } from "./models.ts";
 import { scopedProjectKey, scopeProjectRef } from "../environment/scoped.ts";
 import { derivePhysicalProjectKey, derivePhysicalProjectKeyFromPath } from "./projectGrouping.ts";
-import { awaitAtomResult, settleAsyncResult } from "./runtime.ts";
+import type { AtomCommandResult } from "./runtime.ts";
 
 type RemovalMember = Pick<
   EnvironmentProject,
   "id" | "environmentId" | "workspaceRoot" | "repositoryIdentity"
 >;
-type RemovalThread = Pick<EnvironmentThreadShell, "environmentId" | "projectId" | "lineage" | "id">;
+type RemovalThread = Pick<EnvironmentThreadShell, "environmentId" | "projectId">;
+type PreviewEntry = ProjectRemovalPreviewEntry & { environmentId: EnvironmentId };
 
 export const projectRemovalNotice = msg(
-  "Removing these entries permanently deletes their threads, including archived threads. Unfinished clone folders may be cleared. Other files and provider sessions are kept.",
+  "Removing these entries permanently deletes their threads, including archived threads. Files on disk and provider sessions are kept.",
 );
 export const differentRepositoryFoldersNotice = msg(
   "This group contains different folders of the same repository.",
@@ -28,6 +28,9 @@ export const differentRepositoryFoldersNotice = msg(
 
 export const changedProjectFolderNotice = msg(
   "The project folder changed. Review the removal again.",
+);
+export const removalServerUpdateNotice = msg(
+  "Update this environment to review and remove project entries.",
 );
 export const ambiguousProjectFoldersNotice = msg(
   "Review these checkouts individually because their folder relationship is unknown.",
@@ -58,24 +61,33 @@ export function removalFoldersMatch(
   );
 }
 
-export function readRemovalArchives<E>(
-  registry: AtomRegistry.AtomRegistry,
-  members: readonly RemovalMember[],
-  snapshotAtom: (request: {
+export async function readProjectRemovalPreview<E>(
+  members: readonly Pick<RemovalMember, "environmentId">[],
+  read: (request: {
     environmentId: EnvironmentId;
     input: Record<string, never>;
-  }) => Atom.Atom<AsyncResult.AsyncResult<OrchestrationV2ArchivedShellSnapshot, E>>,
+  }) => Promise<AtomCommandResult<readonly ProjectRemovalPreviewEntry[], E>>,
+): Promise<AtomCommandResult<readonly PreviewEntry[], E>> {
+  const rows: PreviewEntry[] = [];
+  for (const environmentId of new Set(members.map((member) => member.environmentId))) {
+    const result = await read({ environmentId, input: {} });
+    if (result._tag === "Failure") return AsyncResult.failure(result.cause);
+    for (const row of result.value) rows.push({ ...row, environmentId });
+  }
+  return AsyncResult.success(rows);
+}
+
+export function reviewedFoldersMatch(
+  entries: readonly { member: RemovalMember; expectedFolder: ProjectRemovalFolder }[],
+  preview: readonly PreviewEntry[],
 ) {
-  return settleAsyncResult(() =>
-    Effect.runPromiseExit(
-      Effect.forEach(
-        [...new Set(members.map((member) => member.environmentId))],
-        (environmentId) =>
-          awaitAtomResult(registry, snapshotAtom({ environmentId, input: {} }), {
-            refresh: true,
-          }).pipe(Effect.map(({ threads }) => ({ environmentId, threads }))),
-        { concurrency: 4 },
-      ),
+  return entries.every(({ member, expectedFolder }) =>
+    preview.some(
+      (row) =>
+        row.environmentId === member.environmentId &&
+        row.projectId === member.id &&
+        row.workspaceRoot === expectedFolder.workspaceRoot &&
+        row.resolvedWorkspaceRoot === expectedFolder.resolvedWorkspaceRoot,
     ),
   );
 }
@@ -99,17 +111,22 @@ export function planProjectRemoval<
   readonly groupMembers: ReadonlyArray<Member>;
   readonly projects: ReadonlyArray<Member>;
   readonly threads: ReadonlyArray<Thread>;
-  readonly archives?: ReadonlyArray<{
-    environmentId: EnvironmentId;
-    threads: ReadonlyArray<Pick<RemovalThread, "projectId" | "lineage"> & { id: string }>;
-  }>;
-  readonly unloadedThreadCount?: (member: Member, threads: ReadonlyArray<Thread>) => number;
+  readonly preview: readonly PreviewEntry[];
 }) {
   const { members, projects, groupMembers } = options;
-  const pathOf = (member: Member) =>
-    member.repositoryIdentity?.resolvedWorkspaceRoot ?? member.workspaceRoot;
-  const relativeTo = (candidate: Member, parent: Member) =>
-    workspaceRelativeFilePath(pathOf(candidate), pathOf(parent));
+  const keyOf = (member: RemovalMember) =>
+    scopedProjectKey(scopeProjectRef(member.environmentId, member.id));
+  const folders = new Map(
+    options.preview.map((row) => [
+      scopedProjectKey(scopeProjectRef(row.environmentId, row.projectId)),
+      row,
+    ]),
+  );
+  const pathOf = (member: Member) => folders.get(keyOf(member))?.resolvedWorkspaceRoot;
+  const relativeTo = (candidate: Member, parent: Member) => {
+    const path = pathOf(candidate);
+    return path == null ? null : workspaceRelativeFilePath(path, pathOf(parent));
+  };
   const isNested = (candidate: Member) =>
     members.some((parent) => {
       if (parent.environmentId !== candidate.environmentId) return false;
@@ -121,27 +138,18 @@ export function planProjectRemoval<
     (member) => selectedCheckouts.has(derivePhysicalProjectKey(member)) && !isNested(member),
   );
   const nested = projects.filter(isNested);
-  // Older servers may only report Git's real root for a checkout registered through a symlink.
   const relativeFolder = (member: Member) =>
-    workspaceRelativeFilePath(pathOf(member), member.repositoryIdentity?.rootPath);
-  const ambiguousFolders = roots.some((member, index) =>
-    roots
-      .slice(index + 1)
-      .some(
+    workspaceRelativeFilePath(
+      pathOf(member) ?? member.workspaceRoot,
+      member.repositoryIdentity?.rootPath,
+    );
+  const ambiguousFolders = roots.some(
+    (member) =>
+      pathOf(member) == null &&
+      roots.some(
         (other) =>
           member.environmentId === other.environmentId &&
-          relativeTo(member, other) !== "." &&
-          (!member.repositoryIdentity?.rootPath ||
-            !other.repositoryIdentity?.rootPath ||
-            (derivePhysicalProjectKeyFromPath(
-              member.environmentId,
-              member.repositoryIdentity.rootPath,
-            ) ===
-              derivePhysicalProjectKeyFromPath(
-                other.environmentId,
-                other.repositoryIdentity.rootPath,
-              ) &&
-              (relativeFolder(member) === null || relativeFolder(other) === null))),
+          derivePhysicalProjectKey(member) !== derivePhysicalProjectKey(other),
       ),
   );
   const byProject = new Map<string, Thread[]>(
@@ -155,26 +163,18 @@ export function planProjectRemoval<
       .get(scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)))
       ?.push(thread);
   }
-  const archivedByProject = new Map<string, Set<string>>();
-  for (const { environmentId, threads } of options.archives ?? []) {
-    for (const thread of threads) {
-      const key = scopedProjectKey(scopeProjectRef(environmentId, thread.projectId));
-      if (!byProject.has(key) || !isListedThreadLineage(thread.lineage)) continue;
-      const ids = archivedByProject.get(key) ?? new Set<string>();
-      ids.add(thread.id);
-      archivedByProject.set(key, ids);
-    }
-  }
   const entry = (member: Member) => {
-    const key = scopedProjectKey(scopeProjectRef(member.environmentId, member.id));
-    const threads = byProject.get(key)!;
-    const archived = archivedByProject.get(key);
-    const threadCount =
-      (archived?.size ?? 0) +
-      threads.filter((thread) => isListedThreadLineage(thread.lineage) && !archived?.has(thread.id))
-        .length +
-      (options.unloadedThreadCount?.(member, threads) ?? 0);
-    return { member, threads, threadCount };
+    const key = keyOf(member);
+    const row = folders.get(key)!;
+    return {
+      member,
+      threads: byProject.get(key)!,
+      threadCount: row.threadCount,
+      expectedFolder: {
+        workspaceRoot: row.workspaceRoot,
+        resolvedWorkspaceRoot: row.resolvedWorkspaceRoot,
+      },
+    };
   };
   const foldedFolders = new Set<string>();
   const posixFolders = new Set<string>();
@@ -183,13 +183,17 @@ export function planProjectRemoval<
     const relative = relativeFolder(member)?.replace(/\/+$/, "");
     if (relative != null) {
       foldedFolders.add(relative.toLowerCase());
-      if (!isWindowsAbsolutePath(pathOf(member))) posixFolders.add(relative);
+      if (!isWindowsAbsolutePath(pathOf(member) ?? member.workspaceRoot))
+        posixFolders.add(relative);
     }
     const root = member.repositoryIdentity?.rootPath;
     if (!root) return false;
     // Git can report a real path while the project was added through a symlink.
     const checkout = derivePhysicalProjectKeyFromPath(member.environmentId, root);
-    const path = derivePhysicalProjectKeyFromPath(member.environmentId, pathOf(member));
+    const path = derivePhysicalProjectKeyFromPath(
+      member.environmentId,
+      pathOf(member) ?? member.workspaceRoot,
+    );
     const previous = checkoutPaths.get(checkout);
     checkoutPaths.set(checkout, path);
     return (
@@ -198,13 +202,19 @@ export function planProjectRemoval<
       (previous !== undefined && previous !== path)
     );
   });
-  const entries = roots.map(entry);
-  const nestedEntries = nested.map(entry);
+  const environmentIds = new Set(members.map((member) => member.environmentId));
+  const relevant = projects.filter((member) => environmentIds.has(member.environmentId));
+  const foldersChanged =
+    relevant.length !== folders.size ||
+    relevant.some((member) => folders.get(keyOf(member))?.workspaceRoot !== member.workspaceRoot);
+  const entries = foldersChanged ? [] : roots.map(entry);
+  const nestedEntries = foldersChanged ? [] : nested.map(entry);
   return {
     entries,
     nestedEntries,
     differentRepositoryFolders,
     ambiguousFolders,
+    foldersChanged,
     entriesToRemove: (includeNested = false) =>
       includeNested ? entries.concat(nestedEntries) : entries,
   };

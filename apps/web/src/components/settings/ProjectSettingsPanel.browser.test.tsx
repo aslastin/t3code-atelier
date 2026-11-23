@@ -49,6 +49,7 @@ const state = vi.hoisted(() => ({
         input: DeleteProjectInput;
       }) => Promise<AsyncResult.Success<void>>
     >(),
+  preview: vi.fn(),
   releaseUploads: vi.fn(),
   clearDraft: vi.fn(),
   toast: vi.fn(),
@@ -85,25 +86,13 @@ vi.mock(import("~/state/entities"), async (original) => ({
     )) as never,
   waitForProjectRemoval: async () => true,
 }));
-vi.mock(import("~/state/orchestration"), async (original) => {
-  const actual = await original();
-  return {
-    ...actual,
-    orchestrationEnvironment: {
-      ...actual.orchestrationEnvironment,
-      archivedShellSnapshot: () =>
-        Atom.make(
-          AsyncResult.success({ schemaVersion: 1, snapshotSequence: 0, projects: [], threads: [] }),
-        ),
-    },
-  };
-});
 vi.mock(import("~/state/projects"), async (original) => {
   const actual = await original();
   return {
     ...actual,
     projectEnvironment: {
       ...actual.projectEnvironment,
+      removalPreview: "preview",
       update: "update",
       delete: "delete",
     } as unknown as typeof actual.projectEnvironment,
@@ -111,7 +100,7 @@ vi.mock(import("~/state/projects"), async (original) => {
 });
 vi.mock(import("~/state/use-atom-command"), async (original) => ({
   ...(await original()),
-  useAtomCommand: ((command: "update" | "delete") => state[command]) as never,
+  useAtomCommand: ((command: "update" | "delete" | "preview") => state[command]) as never,
 }));
 vi.mock(import("~/hooks/useSettings"), async (original) => ({
   ...(await original()),
@@ -164,7 +153,12 @@ const environments = [primaryId, remoteId].map((environmentId) => ({
   serverConfig: {
     keybindings: DEFAULT_RESOLVED_KEYBINDINGS,
     settings: DEFAULT_SERVER_SETTINGS,
-    environment: { platform: { machine: "server" }, capabilities: { projectOrganization: true } },
+    environment: {
+      platform: { machine: "server" },
+      get capabilities() {
+        return { projectOrganization: true, reviewedProjectRemoval: true };
+      },
+    },
   },
 }));
 const session = (scopes: ReadonlyArray<AuthEnvironmentScope>): AuthSessionState => ({
@@ -223,6 +217,18 @@ function setup() {
     );
     return AsyncResult.success(undefined);
   });
+  state.preview.mockImplementation(async ({ environmentId }: { environmentId: EnvironmentId }) =>
+    AsyncResult.success(
+      state.projects
+        .filter((project) => project.environmentId === environmentId)
+        .map((project) => ({
+          projectId: project.id,
+          workspaceRoot: project.workspaceRoot,
+          resolvedWorkspaceRoot: project.workspaceRoot,
+          threadCount: 0,
+        })),
+    ),
+  );
   state.delete.mockResolvedValue(AsyncResult.success(undefined));
   useComposerDraftStore.setState({ clearProjectDraftThreadId: state.clearDraft });
 }
@@ -424,7 +430,7 @@ describe("project settings permissions", () => {
       environmentId: primaryId,
       input: {
         projectId: state.projects[0]!.id,
-        expectedWorkspaceRoot: "/work/primary",
+        expectedFolder: { workspaceRoot: "/work/primary", resolvedWorkspaceRoot: "/work/primary" },
         force: true,
       },
     });
@@ -477,6 +483,21 @@ describe("project settings permissions", () => {
     expect(state.delete).not.toHaveBeenCalled();
     expect(state.releaseUploads).not.toHaveBeenCalled();
     expect(state.clearDraft).not.toHaveBeenCalled();
+  });
+
+  it("requires an upgrade before sending a deletion to an older environment", async () => {
+    setup();
+    using _old = vi
+      .spyOn(environments[1]!.serverConfig.environment, "capabilities", "get")
+      .mockReturnValue({ projectOrganization: true, reviewedProjectRemoval: false });
+    await using screen = await mountPanel();
+    await userEvent.click(removeAll(screen));
+    expect(state.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Update this environment to review and remove project entries.",
+      }),
+    );
+    expect(state.delete).not.toHaveBeenCalled();
   });
 
   it("stops before the first deletion when another client moves a reviewed project", async () => {

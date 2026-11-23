@@ -14,7 +14,9 @@ import {
   changedProjectFolderNotice,
   removalEnvironmentLabel,
   removalFoldersMatch,
-  readRemovalArchives,
+  readProjectRemovalPreview,
+  reviewedFoldersMatch,
+  removalServerUpdateNotice,
   projectRemovalNotice,
   removalEntryDetail,
   removeEntriesLabel,
@@ -36,7 +38,6 @@ import { useRef, useState } from "react";
 import { Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { orchestrationEnvironment } from "../../state/orchestration";
 import { environmentProjects, projectEnvironment } from "../../state/projects";
 import { environmentThreadShells } from "../../state/threads";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -62,7 +63,6 @@ import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-en
 import { leaveSettingsPage } from "./settings-navigation";
 import { workspaceHasColumns } from "../layout/workspace/workspace-selection-store";
 import { DEFAULT_SETTINGS_PAGE } from "../layout/workspace/workspace-tab-navigation";
-import { readUnloadedThreadCount } from "../../state/olderSettledShelf";
 import { m } from "../../i18n/messages";
 
 export function SettingsProjectOverviewRouteScreen() {
@@ -174,6 +174,7 @@ function ProjectOverviewContent(props: {
   const canRemoveGroup = props.members.every((member) =>
     removableEnvironments.has(member.environmentId),
   );
+  const readPreview = useAtomCommand(projectEnvironment.removalPreview, { reportFailure: false });
   const deleteProject = useAtomCommand(projectEnvironment.delete, { reportFailure: false });
   const updateProject = useAtomCommand(projectEnvironment.update, {
     label: "project name update",
@@ -263,18 +264,11 @@ function ProjectOverviewContent(props: {
     Dialog.alert(gt("Failed to remove project"), m(changedProjectFolderNotice));
     return false;
   };
-  const reviewRemoval = async (members: readonly EnvironmentProject[]) => {
-    if (!checkRemovalAccess(members) || !startRemoval()) return;
-    setIsRemoving(true);
-    const archives = await readRemovalArchives(
-      appAtomRegistry,
-      members,
-      orchestrationEnvironment.archivedShellSnapshot,
-    );
-    finishRemoval();
-    if (archives._tag === "Failure") {
-      if (!isAtomCommandInterrupted(archives)) {
-        const error = squashAtomCommandFailure(archives);
+  const loadPreview = async (members: readonly EnvironmentProject[]) => {
+    const result = await readProjectRemovalPreview(members, readPreview);
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
         Dialog.alert(
           gt("Failed to remove project"),
           error instanceof Error
@@ -282,17 +276,39 @@ function ProjectOverviewContent(props: {
             : gt("An error occurred."),
         );
       }
+      return null;
+    }
+    return result.value;
+  };
+  const reviewRemoval = async (members: readonly EnvironmentProject[]) => {
+    if (!checkRemovalAccess(members)) return;
+    if (
+      members.some(
+        (member) =>
+          !props.connectedTargets.find((env) => env.environmentId === member.environmentId)
+            ?.serverConfig?.environment.capabilities.reviewedProjectRemoval,
+      )
+    ) {
+      Dialog.alert(gt("Failed to remove project"), m(removalServerUpdateNotice));
       return;
     }
+    if (!startRemoval()) return;
+    setIsRemoving(true);
+    const preview = await loadPreview(members);
+    finishRemoval();
+    if (!preview) return;
     if (!foldersStillMatch(members)) return;
     const plan = planProjectRemoval({
       members,
       groupMembers: allMembers,
       projects: appAtomRegistry.get(environmentProjects.projectsAtom),
       threads: appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
-      archives: archives.value,
-      unloadedThreadCount: (member, held) => readUnloadedThreadCount([member], held),
+      preview,
     });
+    if (plan.foldersChanged) {
+      Dialog.alert(gt("Failed to remove project"), m(changedProjectFolderNotice));
+      return;
+    }
     if (plan.ambiguousFolders) {
       Dialog.alert(gt("Failed to remove project"), m(ambiguousProjectFoldersNotice));
       return;
@@ -304,11 +320,17 @@ function ProjectOverviewContent(props: {
     const members = entries.map((entry) => entry.member);
     const projectKey = props.projectKey;
     if (!checkRemovalAccess(members) || !foldersStillMatch(members)) return;
-    for (const member of members) {
+    const preview = await loadPreview(members);
+    if (!preview) return;
+    if (!reviewedFoldersMatch(entries, preview)) {
+      Dialog.alert(gt("Failed to remove project"), m(changedProjectFolderNotice));
+      return;
+    }
+    for (const { member, expectedFolder } of entries) {
       if (!checkRemovalAccess([member]) || !foldersStillMatch([member])) return;
       const result = await deleteProject({
         environmentId: member.environmentId,
-        input: { projectId: member.id, expectedWorkspaceRoot: member.workspaceRoot, force: true },
+        input: { projectId: member.id, expectedFolder, force: true },
       });
       if (result._tag === "Failure") {
         if (!isAtomCommandInterrupted(result)) {

@@ -18,6 +18,7 @@ import {
   type OrchestrationV2SourcePlanRef,
   type ProjectId,
   type ProjectIconOverride,
+  type ProjectRemovalFolder,
   type ProjectScript,
   type ProjectTrackedFolder,
   type ProviderApprovalDecision,
@@ -88,11 +89,10 @@ export interface UpdateProjectInput extends CommandMetadata {
   readonly archived?: boolean;
 }
 
-export interface DeleteProjectInput extends CommandMetadata {
-  readonly projectId: ProjectId;
-  readonly force?: boolean;
-  readonly expectedWorkspaceRoot?: string;
-}
+export type DeleteProjectInput = CommandMetadata & { readonly projectId: ProjectId } & (
+    | { readonly force?: boolean; readonly expectedFolder?: never }
+    | { readonly force: true; readonly expectedFolder: ProjectRemovalFolder }
+  );
 
 export interface CreateThreadInput extends CommandMetadata {
   readonly threadId: ThreadId;
@@ -450,7 +450,12 @@ const mutateProject = Effect.fn("EnvironmentCommands.mutateProject")(function* (
         readonly commandId: CommandId;
         readonly projectId: ProjectId;
         readonly force?: boolean;
-        readonly expectedWorkspaceRoot?: string;
+      }
+    | {
+        readonly type: "project.removeReviewed";
+        readonly commandId: CommandId;
+        readonly projectId: ProjectId;
+        readonly expectedFolder: ProjectRemovalFolder;
       },
 ) {
   return yield* request(WS_METHODS.projectsMutate, mutation);
@@ -506,14 +511,19 @@ export const updateProject = Effect.fn("EnvironmentCommands.updateProject")(func
 export const deleteProject = Effect.fn("EnvironmentCommands.deleteProject")(function* (
   input: DeleteProjectInput,
 ) {
+  const commandId = yield* allocateCommandId(input);
+  if (input.expectedFolder !== undefined)
+    return yield* mutateProject({
+      type: "project.removeReviewed",
+      commandId,
+      projectId: input.projectId,
+      expectedFolder: input.expectedFolder,
+    });
   return yield* mutateProject({
     type: "project.delete",
-    commandId: yield* allocateCommandId(input),
+    commandId,
     projectId: input.projectId,
     ...(input.force === undefined ? {} : { force: input.force }),
-    ...(input.expectedWorkspaceRoot === undefined
-      ? {}
-      : { expectedWorkspaceRoot: input.expectedWorkspaceRoot }),
   });
 });
 

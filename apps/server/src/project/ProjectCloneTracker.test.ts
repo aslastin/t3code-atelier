@@ -265,6 +265,17 @@ describe("ProjectCloneTracker", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("forgets a reviewed project without clearing its unfinished clone folder", () => {
+    const harness = makeHarness({ clone: () => Effect.never });
+    return Effect.gen(function* () {
+      const tracker = yield* ProjectCloneTracker.ProjectCloneTracker;
+      yield* tracker.start(startInput, harness.hooks);
+      yield* tracker.discard(projectId, { keepFiles: true });
+      expect(yield* tracker.get(projectId)).toBeNull();
+      expect(harness.discarded).toEqual([]);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("releases the claim when project creation fails", () => {
     const harness = makeHarness();
     const hooks: ProjectCloneTracker.ProjectCloneHooks = {

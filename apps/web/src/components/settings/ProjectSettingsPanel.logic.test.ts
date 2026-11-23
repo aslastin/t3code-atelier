@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, ProjectId, SourceControlProviderKind, ThreadId } from "@t3tools/contracts";
 import {
   planProjectRemoval,
+  reviewedFoldersMatch,
   removalEnvironmentLabel,
 } from "@t3tools/client-runtime/state/projects";
 
@@ -149,19 +150,30 @@ describe("project removal confirmation", () => {
     },
   ];
 
-  it("limits a checkout's thread count to its listed threads in that environment and project", () => {
+  function previewRows(
+    projects: readonly (typeof local)[],
+    environments = projects.map((project) => project.environmentId),
+  ) {
+    return projects
+      .filter((project) => environments.includes(project.environmentId))
+      .map((project) => ({
+        environmentId: project.environmentId,
+        projectId: project.id,
+        workspaceRoot: project.workspaceRoot,
+        resolvedWorkspaceRoot: project.workspaceRoot,
+        threadCount: 1,
+      }));
+  }
+
+  it("uses each checkout's own thread total and retains its loaded threads for cleanup", () => {
+    const preview = previewRows(groupMembers, [local.environmentId]);
+    preview[0]!.threadCount = 5;
     const plan = planProjectRemoval({
       members: [local],
       groupMembers,
       projects: groupMembers,
       threads,
-      archives: [
-        {
-          environmentId: local.environmentId,
-          threads: [{ id: "archived", projectId: nested.id, lineage: listed }],
-        },
-      ],
-      unloadedThreadCount: (member) => (member.id === local.id ? 4 : 0),
+      preview,
     });
     expect(plan.entries.map((entry) => entry.member)).toEqual([local]);
     expect(plan.entries[0]?.threads).toHaveLength(3);
@@ -176,6 +188,7 @@ describe("project removal confirmation", () => {
     for (const member of [remote, nested]) {
       const plan = planProjectRemoval({
         members: [member],
+        preview: previewRows(groupMembers, [member.environmentId]),
         groupMembers,
         projects: groupMembers,
         threads,
@@ -197,6 +210,7 @@ describe("project removal confirmation", () => {
       members,
       groupMembers: members,
       projects: [...members, other, sibling],
+      preview: previewRows([...members, other, sibling]),
       threads,
     });
     expect(plan.differentRepositoryFolders).toBe(true);
@@ -205,8 +219,13 @@ describe("project removal confirmation", () => {
       workspaceRoot: "/alias" + member.workspaceRoot,
     }));
     expect(
-      planProjectRemoval({ members: aliased, groupMembers: aliased, projects: aliased, threads })
-        .differentRepositoryFolders,
+      planProjectRemoval({
+        members: aliased,
+        groupMembers: aliased,
+        projects: aliased,
+        preview: previewRows(aliased),
+        threads,
+      }).differentRepositoryFolders,
     ).toBe(true);
     expect(plan.entries.map((entry) => [entry.member, entry.threadCount])).toEqual([
       [members[0], 1],
@@ -217,6 +236,7 @@ describe("project removal confirmation", () => {
       planProjectRemoval({
         members: members.slice(0, 2),
         groupMembers: members.slice(0, 2),
+        preview: previewRows(members),
         projects: members,
         threads,
       }).differentRepositoryFolders,
@@ -230,7 +250,6 @@ describe("project removal confirmation", () => {
       repositoryIdentity: {
         ...identity,
         rootPath: "/real/repo",
-        resolvedWorkspaceRoot: "/real/repo",
       },
     };
     const duplicate = { ...root, id: ProjectId.make("legacy"), workspaceRoot: "/alias/repo/" };
@@ -243,32 +262,42 @@ describe("project removal confirmation", () => {
       members: [root, child],
       groupMembers: [root, child],
       projects: [duplicate, root, child],
+      preview: previewRows([duplicate, root, child]).map((row) => ({
+        ...row,
+        resolvedWorkspaceRoot: row.workspaceRoot.replace("/alias/", "/real/"),
+      })),
       threads: [],
     });
     expect(plan.entriesToRemove().map(({ member }) => member.id)).toEqual([duplicate.id, root.id]);
     expect(plan.nestedEntries.map(({ member }) => member.id)).toEqual([child.id]);
   });
 
-  it("requires individual review for ambiguous aliases on older servers", () => {
-    const identity = {
-      ...makeProject(localEnvironmentId).repositoryIdentity!,
-      rootPath: "/real/repo",
-    };
-    const members = [
-      { ...local, workspaceRoot: "/alias/repo", repositoryIdentity: identity },
-      { ...nested, workspaceRoot: "/real/repo/ui", repositoryIdentity: identity },
-    ];
+  it("resolves nesting for plain folders and aliases, and detects a retargeted link", () => {
+    const root = { ...local, workspaceRoot: "/repo/X" };
+    const link = { ...nested, workspaceRoot: "/repo/link" };
+    const outside = { ...nested, id: ProjectId.make("outside"), workspaceRoot: "/repo/X/link-out" };
+    const projects = [root, link, outside];
+    const preview = previewRows(projects).map((row, index) => ({
+      ...row,
+      resolvedWorkspaceRoot: ["/real/X", "/real/X/my-project", "/elsewhere"][index]!,
+    }));
+    const plan = planProjectRemoval({
+      members: [root, link],
+      groupMembers: projects,
+      projects,
+      threads,
+      preview,
+    });
+    expect(plan.entriesToRemove().map((entry) => entry.member.id)).toEqual([root.id]);
+    expect(plan.nestedEntries.map((entry) => entry.member.id)).toEqual([link.id]);
+    expect(reviewedFoldersMatch(plan.entriesToRemove(true), preview)).toBe(true);
     expect(
-      planProjectRemoval({ members, groupMembers: members, projects: members, threads: [] })
-        .ambiguousFolders,
-    ).toBe(true);
-    expect(
-      planProjectRemoval({
-        members: [members[1]!],
-        groupMembers: members,
-        projects: members,
-        threads: [],
-      }).ambiguousFolders,
+      reviewedFoldersMatch(
+        plan.entriesToRemove(true),
+        preview.map((row) =>
+          row.projectId === link.id ? { ...row, resolvedWorkspaceRoot: "/different" } : row,
+        ),
+      ),
     ).toBe(false);
   });
 
@@ -296,8 +325,13 @@ describe("project removal confirmation", () => {
       },
     ];
     expect(
-      planProjectRemoval({ members, groupMembers: members, projects: members, threads: [] })
-        .differentRepositoryFolders,
+      planProjectRemoval({
+        members,
+        groupMembers: members,
+        projects: members,
+        preview: previewRows(members),
+        threads: [],
+      }).differentRepositoryFolders,
     ).toBe(false);
   });
 });
