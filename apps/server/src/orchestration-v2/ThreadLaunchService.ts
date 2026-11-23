@@ -19,7 +19,7 @@ import {
   type RunId,
   type RuntimeMode,
   type ScheduledTaskId,
-  type GitCommandError,
+  type VcsWorkflowCommandError,
   type GitManagerServiceError,
   TaskFolderError,
   TextGenerationError,
@@ -824,7 +824,7 @@ const make = Effect.gen(function* () {
                 )
                 .pipe(
                   Effect.catchIf(
-                    (error) => error.reason === "ref_not_found",
+                    (error) => error._tag === "GitCommandError" && error.reason === "ref_not_found",
                     (cause) =>
                       Effect.fail(
                         new ThreadLaunchBaseRefError({
@@ -1130,10 +1130,15 @@ const make = Effect.gen(function* () {
             const removedBranch = createdBranch;
             const removedTaskFolder = createdTaskFolder;
             // Forget worktrees only after removal succeeds; failed removals must not reuse partially written checkouts.
-            yield* Effect.suspend((): Effect.Effect<void, GitCommandError | TaskFolderError> =>
+            type CleanupError = VcsWorkflowCommandError | TaskFolderError;
+            yield* Effect.suspend((): Effect.Effect<void, CleanupError> =>
               removedTaskFolder === null
                 ? git
-                    .removeWorktree({ cwd: project.workspaceRoot, path: removedPath, force: true })
+                    .removeWorktree({
+                      cwd: project.workspaceRoot,
+                      path: removedPath,
+                      force: true,
+                    })
                     .pipe(
                       Effect.andThen(
                         removedBranch === null

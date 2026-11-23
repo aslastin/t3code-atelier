@@ -1,4 +1,4 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { GIT_VCS_KIND, SourceControlProviderKind } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DateTime from "effect/DateTime";
@@ -130,11 +130,12 @@ function makeRegistry(input: {
     Effect.provide(
       Layer.mergeAll(
         Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
+          hasAdditionalDrivers: false,
           resolve: () =>
             Effect.succeed({
-              kind: "git",
+              kind: GIT_VCS_KIND,
               repository: {
-                kind: "git",
+                kind: GIT_VCS_KIND,
                 rootPath: "/repo",
                 metadataPath: null,
                 freshness: {

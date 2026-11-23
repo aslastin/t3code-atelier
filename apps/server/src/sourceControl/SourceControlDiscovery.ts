@@ -1,7 +1,8 @@
 import {
+  GIT_VCS_KIND,
   type SourceControlDiscoveryResult,
   type VcsDiscoveryItem,
-  type VcsDriverKind,
+  VcsDriverKind,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -47,7 +48,7 @@ interface DiscoveryProbeResult<Kind extends string> {
 
 const VCS_PROBES: ReadonlyArray<VcsProbe> = [
   {
-    kind: "git",
+    kind: GIT_VCS_KIND,
     label: "Git",
     executable: "git",
     versionArgs: ["--version"],
@@ -55,7 +56,7 @@ const VCS_PROBES: ReadonlyArray<VcsProbe> = [
     installHint: "Install Git from https://git-scm.com/downloads or with your package manager.",
   },
   {
-    kind: "jj",
+    kind: VcsDriverKind.make("jj"),
     label: "Jujutsu",
     executable: "jj",
     versionArgs: ["--version"],

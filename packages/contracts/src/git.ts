@@ -9,7 +9,7 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { SourceControlProviderError, SourceControlProviderInfo } from "./sourceControl.ts";
-import { VcsDriverKind } from "./vcs.ts";
+import { VcsDriverCapabilities, VcsDriverKind, VcsUnsupportedOperationError } from "./vcs.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const GitFilePath = Schema.String.check(Schema.isNonEmpty());
@@ -221,6 +221,7 @@ const VcsStatusChangeRequest = Schema.Struct({
 });
 
 const VcsStatusLocalShape = {
+  capabilities: Schema.optional(VcsDriverCapabilities),
   isRepo: Schema.Boolean,
   sourceControlProvider: Schema.optional(SourceControlProviderInfo),
   hasPrimaryRemote: Schema.Boolean,
@@ -375,6 +376,7 @@ export const GitCommandFailureReason = Schema.Literals([
 export type GitCommandFailureReason = typeof GitCommandFailureReason.Type;
 
 export class GitCommandError extends Schema.TaggedError<GitCommandError>()("GitCommandError", {
+  vcs: Schema.optional(VcsDriverKind),
   operation: Schema.String,
   command: Schema.String,
   cwd: Schema.String,
@@ -433,10 +435,16 @@ export class GitPullRequestMaterializationError extends Schema.TaggedError<GitPu
   }
 }
 
+export const VcsWorkflowCommandError = Schema.Union([
+  GitCommandError,
+  VcsUnsupportedOperationError,
+]);
+export type VcsWorkflowCommandError = typeof VcsWorkflowCommandError.Type;
+
 export const GitManagerServiceError = Schema.Union([
   GitManagerError,
   GitPullRequestMaterializationError,
-  GitCommandError,
+  VcsWorkflowCommandError,
   SourceControlProviderError,
   TextGenerationError,
 ]);

@@ -28,6 +28,7 @@ describe("GitCommandError", () => {
   it("decodes an unknown failure reason as absent", () => {
     const error = decodeGitCommandError({
       _tag: "GitCommandError",
+      vcs: "test-vcs",
       operation: "GitVcsDriver.createWorktree",
       command: "git",
       cwd: "/repo",
@@ -35,6 +36,7 @@ describe("GitCommandError", () => {
       reason: "added_by_a_newer_server",
     });
 
+    expect(error.vcs).toBe("test-vcs");
     expect(error.reason).toBeUndefined();
     expect(error.message).toBe(
       "Git command failed in GitVcsDriver.createWorktree (/repo): git worktree add failed",

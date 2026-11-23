@@ -13,6 +13,7 @@ import * as Path from "effect/Path";
 import { ChildProcessSpawner } from "effect/process";
 
 import {
+  GIT_VCS_KIND,
   GitCommandError,
   VcsCheckpointStorageError,
   VcsProcessExitError,
@@ -748,7 +749,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         "--git-common-dir",
       ]).pipe(Effect.orElseSucceed(() => null));
       return {
-        kind: "git" as const,
+        kind: GIT_VCS_KIND,
         rootPath: root.stdout.trim(),
         metadataPath: gitCommonDir?.stdout.trim() || null,
         freshness: yield* nowFreshness(),
@@ -756,7 +757,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     }
 
     return {
-      kind: "git" as const,
+      kind: GIT_VCS_KIND,
       rootPath: lines[1]!.trim(),
       metadataPath: lines[2]!.trim() || null,
       freshness: yield* nowFreshness(),
@@ -1487,7 +1488,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           if (tracked.stdout.length === 0) {
             return yield* new VcsUnsupportedOperationError({
               operation,
-              kind: "git",
+              kind: GIT_VCS_KIND,
               detail: "The workspace directory is ignored by its Git repository.",
             });
           }
@@ -2504,7 +2505,21 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
 
 export const makeVcsDriver = Effect.gen(function* () {
   const driver = yield* makeVcsDriverShape();
-  return VcsDriver.VcsDriver.of(driver);
+  return VcsDriver.VcsDriver.of({
+    ...driver,
+    capabilities: {
+      kind: GIT_VCS_KIND,
+      supportsWorktrees: true,
+      supportsCommit: true,
+      supportsPush: true,
+      supportsReviewDiff: true,
+      supportsSparseCheckout: true,
+      supportsBookmarks: false,
+      supportsAtomicSnapshot: false,
+      supportsPushDefaultRemote: true,
+      ignoreClassifier: "native",
+    },
+  });
 });
 
 export const make = Effect.gen(function* () {

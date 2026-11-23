@@ -1,4 +1,11 @@
 import { assert, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
+import {
+  VcsDriverKind,
+  type VcsStatusResult,
+  type VcsDriverCapabilities,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -12,6 +19,7 @@ import * as GitManager from "./GitManager.ts";
 import * as GitWorkflowService from "./GitWorkflowService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import { testVcsDriver } from "../vcs/testing/testVcsDriver.ts";
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowService", (it) => {
   it.effect("finds a name among the refs of every namespace", () =>
@@ -34,15 +42,13 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
         (refName) => workflow.hasRefNamed({ cwd, refName }),
       );
       assert.deepEqual(found, [true, true, true, true, false, false]);
+      const worktrees = yield* workflow.listWorktrees(cwd);
+      assert.deepEqual(worktrees, [yield* fileSystem.realPath(cwd)]);
     }).pipe(
       Effect.scoped,
       Effect.provide(
         GitWorkflowService.layer.pipe(
-          Layer.provide(
-            Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
-              resolve: () => Effect.succeed({ kind: "git" } as VcsDriverRegistry.VcsDriverHandle),
-            }),
-          ),
+          Layer.provide(VcsDriverRegistry.layer),
           Layer.provide(Layer.mock(GitManager.GitManager)({})),
           Layer.provideMerge(GitVcsDriver.layer),
           Layer.provideMerge(VcsProcess.layer),
@@ -57,6 +63,114 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
     ),
   );
 
+  it.effect("routes status, refs and stacked actions to the selected driver", () =>
+    Effect.gen(function* () {
+      const cwd = "/test-repo";
+      const kind = VcsDriverKind.make("test-vcs");
+      const capabilities: VcsDriverCapabilities = {
+        kind,
+        supportsWorktrees: false,
+        supportsBookmarks: true,
+        supportsAtomicSnapshot: true,
+        supportsCommit: true,
+        supportsPush: false,
+        supportsPushDefaultRemote: false,
+        supportsReviewDiff: false,
+        supportsSparseCheckout: false,
+        ignoreClassifier: "native",
+      };
+      const status: VcsStatusResult = {
+        isRepo: true,
+        isDefaultRef: true,
+        refName: "trunk",
+        hasPrimaryRemote: false,
+        hasWorkingTreeChanges: true,
+        workingTree: { files: [], insertions: 0, deletions: 0 },
+        hasUpstream: true,
+        aheadCount: 1,
+        behindCount: 2,
+        pr: null,
+      };
+      const commits: string[] = [];
+      const driver = testVcsDriver({
+        capabilities,
+        workflow: {
+          status: () => Effect.succeed(status),
+          switchRef: (input) => Effect.succeed({ refName: input.refName }),
+          commit: (input) =>
+            Effect.sync(() => {
+              commits.push(input.commitMessage ?? "");
+              return { status: "created" as const, commitSha: "abc" };
+            }),
+        },
+      });
+      const handle = {
+        kind,
+        driver,
+        repository: {
+          rootPath: cwd,
+          metadataPath: null,
+          kind,
+          freshness: {
+            source: "live-local" as const,
+            observedAt: yield* DateTime.now,
+            expiresAt: Option.none(),
+          },
+        },
+      };
+      const workflow = yield* GitWorkflowService.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
+              hasAdditionalDrivers: true,
+              detect: () => Effect.succeed(handle),
+              resolve: () => Effect.succeed(handle),
+            }),
+            Layer.mock(GitVcsDriver.GitVcsDriver)({}),
+            Layer.mock(GitManager.GitManager)({}),
+          ),
+        ),
+      );
+      assert.deepEqual(yield* workflow.status({ cwd }), { ...status, capabilities });
+      assert.deepEqual((yield* workflow.localStatus({ cwd })).capabilities, capabilities);
+      assert.equal((yield* workflow.remoteStatus({ cwd }))?.aheadCount, 1);
+      assert.equal(yield* workflow.currentBranch(cwd), "trunk");
+      assert.deepEqual(yield* workflow.upstreamDivergence(cwd), {
+        refName: "trunk",
+        aheadCount: 1,
+        behindCount: 2,
+      });
+      assert.isNull(yield* workflow.readRefSnapshot(cwd));
+      assert.equal(yield* workflow.repositoryRoot(cwd), cwd);
+      assert.deepEqual(yield* workflow.switchRef({ cwd, refName: "topic" }), { refName: "topic" });
+      const missing = yield* workflow
+        .createWorktree({ cwd, refName: "topic", path: null })
+        .pipe(Effect.flip);
+      assert.include(missing, { _tag: "VcsUnsupportedOperationError", kind });
+      const action = { cwd, actionId: "test", commitMessage: "save" };
+      const partial = yield* workflow
+        .runStackedAction({ ...action, action: "commit_push" })
+        .pipe(Effect.flip);
+      assert.include(partial, { _tag: "VcsUnsupportedOperationError", operation: "push", kind });
+      assert.deepEqual(commits, []);
+      const events: string[] = [];
+      const result = yield* workflow.runStackedAction(
+        { ...action, action: "commit" },
+        {
+          progressReporter: {
+            publish: (event) =>
+              Effect.sync(() => {
+                events.push(event.kind);
+              }),
+          },
+        },
+      );
+      assert.deepEqual(commits, ["save"]);
+      assert.equal(result.commit.commitSha, "abc");
+      assert.deepEqual(events, ["action_started", "phase_started", "action_finished"]);
+    }),
+  );
+
   it.effect("reads no HEAD path from a removed worktree without spawning Git", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -68,7 +182,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
       Effect.scoped,
       Effect.provide(
         GitWorkflowService.layer.pipe(
-          Layer.provide(Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({})),
+          Layer.provide(
+            Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({ hasAdditionalDrivers: false }),
+          ),
           Layer.provide(Layer.mock(GitManager.GitManager)({})),
           Layer.provide(
             Layer.mock(GitVcsDriver.GitVcsDriver)({

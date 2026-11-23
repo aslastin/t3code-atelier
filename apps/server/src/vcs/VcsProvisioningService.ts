@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import {
+  GIT_VCS_KIND,
   type VcsDriverKind,
   type VcsError,
   type VcsInitInput,
@@ -21,7 +22,7 @@ function resolveRequestedKind(
   kind: VcsDriverKind | undefined,
 ): Effect.Effect<VcsDriverKind, VcsUnsupportedOperationError> {
   if (kind === undefined) {
-    return Effect.succeed("git");
+    return Effect.succeed(GIT_VCS_KIND);
   }
   if (kind === "unknown") {
     return Effect.fail(

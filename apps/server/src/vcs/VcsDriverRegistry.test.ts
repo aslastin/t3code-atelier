@@ -6,8 +6,12 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import { ChildProcessSpawner } from "effect/process";
-import { VcsProcessExitError } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
+import { GIT_VCS_KIND, VcsDriverKind, VcsProcessExitError } from "@t3tools/contracts";
 
+import { testVcsDriver } from "./testing/testVcsDriver.ts";
+import type * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 import * as VcsProjectConfig from "./VcsProjectConfig.ts";
 import * as VcsDriverRegistry from "./VcsDriverRegistry.ts";
@@ -26,8 +30,15 @@ const normalizeGitArgs = (args: ReadonlyArray<string>): ReadonlyArray<string> =>
 const DETECT_COMMAND = "rev-parse --is-inside-work-tree --show-toplevel --git-common-dir";
 
 describe("VcsDriverRegistry", () => {
-  const makeDiskBackedLayer = (rootDir: string, calls: string[]) =>
-    Layer.effect(VcsDriverRegistry.VcsDriverRegistry, VcsDriverRegistry.make).pipe(
+  const makeDiskBackedLayer = (
+    rootDir: string,
+    calls: string[],
+    drivers: ReadonlyMap<VcsDriverKind, VcsDriver.VcsDriver["Service"]> = new Map(),
+  ) =>
+    Layer.effect(
+      VcsDriverRegistry.VcsDriverRegistry,
+      VcsDriverRegistry.makeWithDrivers(drivers),
+    ).pipe(
       Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       Layer.provide(
         Layer.mock(VcsProjectConfig.VcsProjectConfig)({
@@ -108,6 +119,65 @@ describe("VcsDriverRegistry", () => {
           projectDir,
         );
       }).pipe(Effect.provide(makeDiskBackedLayer(parentDir, calls)));
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
+  it.effect("selects the closest marker, preferring the additional driver at the same root", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const parent = yield* fs.makeTempDirectoryScoped({ prefix: "t3-vcs-registry-" });
+      const nested = path.join(parent, "nested");
+      const cwd = path.join(nested, "project");
+      yield* fs.makeDirectory(cwd, { recursive: true });
+      yield* fs.makeDirectory(path.join(parent, ".git"));
+      const kind = VcsDriverKind.make("test-vcs");
+      const observedAt = yield* DateTime.now;
+      const driver = testVcsDriver({
+        detectRepository: () =>
+          Effect.gen(function* () {
+            for (const rootPath of [nested, parent]) {
+              const metadataPath = path.join(rootPath, ".test-head");
+              if (yield* fs.exists(metadataPath))
+                return {
+                  kind,
+                  rootPath,
+                  metadataPath,
+                  freshness: {
+                    source: "live-local" as const,
+                    observedAt,
+                    expiresAt: Option.none(),
+                  },
+                };
+            }
+            return null;
+          }).pipe(Effect.orDie),
+      });
+      const calls: string[] = [];
+      yield* Effect.gen(function* () {
+        const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
+        assert.equal((yield* registry.resolve({ cwd })).kind, GIT_VCS_KIND);
+        yield* fs.writeFileString(path.join(parent, ".test-head"), "main");
+        assert.equal((yield* registry.resolve({ cwd })).kind, kind);
+        yield* fs.makeDirectory(path.join(nested, ".git"));
+        assert.equal((yield* registry.resolve({ cwd })).kind, GIT_VCS_KIND);
+        yield* fs.writeFileString(path.join(nested, ".test-head"), "main");
+        const probes = calls.length;
+        const winner = yield* registry.resolve({ cwd });
+        assert.equal(winner.repository.rootPath, nested);
+        assert.equal(winner.driver, driver);
+        assert.equal(calls.length, probes);
+        assert.equal(
+          (yield* registry.resolve({ cwd, requestedKind: GIT_VCS_KIND })).kind,
+          GIT_VCS_KIND,
+        );
+        yield* fs.remove(path.join(nested, ".test-head"));
+        assert.equal((yield* registry.resolve({ cwd })).kind, GIT_VCS_KIND);
+        assert.equal(
+          (yield* registry.resolve({ cwd, requestedKind: kind })).repository.rootPath,
+          parent,
+        );
+      }).pipe(Effect.provide(makeDiskBackedLayer(parent, calls, new Map([[kind, driver]]))));
     }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 

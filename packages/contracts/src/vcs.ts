@@ -1,8 +1,13 @@
 import * as Schema from "effect/Schema";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
-export const VcsDriverKind = Schema.Literals(["git", "jj", "unknown"]);
+export const VcsDriverKind = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(64),
+  Schema.isPattern(/^[a-z][a-z0-9-]*$/),
+).pipe(Schema.brand("VcsDriverKind"));
 export type VcsDriverKind = typeof VcsDriverKind.Type;
+
+export const GIT_VCS_KIND = VcsDriverKind.make("git");
 
 export const VcsFreshnessSource = Schema.Literals([
   "live-local",
@@ -22,6 +27,10 @@ export type VcsFreshness = typeof VcsFreshness.Type;
 export const VcsDriverCapabilities = Schema.Struct({
   kind: VcsDriverKind,
   supportsWorktrees: Schema.Boolean,
+  supportsCommit: Schema.Boolean,
+  supportsPush: Schema.Boolean,
+  supportsReviewDiff: Schema.Boolean,
+  supportsSparseCheckout: Schema.Boolean,
   supportsBookmarks: Schema.Boolean,
   supportsAtomicSnapshot: Schema.Boolean,
   supportsPushDefaultRemote: Schema.Boolean,
