@@ -2,7 +2,7 @@ import DocumentPages, { sanitizeDocumentHtml } from "./DocumentPages";
 import { act, fakeTimers, render, stubGlobal, type Screen } from "../../../test/render";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { page, userEvent } from "vite-plus/test/browser";
+import { cdp, page, userEvent } from "vite-plus/test/browser";
 import "~/index.css";
 
 // Prepare the real worker before tests; Vite's worker transform adds a large inline source map.
@@ -575,12 +575,21 @@ describe("large text preview recovery", () => {
         }
       },
     );
-    const preview = (mutation: string, key = 0) => (
+    const threadRef = {
+      environmentId: EnvironmentId.make("test"),
+      threadId: ThreadId.make("test"),
+    };
+    const preview = (mutation: string, revision = 0) => (
       <div style={{ display: "flex", flexDirection: "column", height: 400, width: 600 }}>
         <WorkspaceLargeTextPreview
-          key={key}
-          environmentId={EnvironmentId.make("test")}
-          threadRef={{ environmentId: EnvironmentId.make("test"), threadId: ThreadId.make("test") }}
+          refreshRevision={revision}
+          commentTarget={{
+            environmentId: threadRef.environmentId,
+            filePath: "large.txt",
+            composerDraftTarget: threadRef,
+          }}
+          environmentId={threadRef.environmentId}
+          threadRef={threadRef}
           absolutePath="/repo/large.txt"
           name="large.txt"
           delimiter={null}
@@ -620,12 +629,40 @@ describe("large text preview recovery", () => {
       expect(screen.container.querySelector('[tabindex="0"]')).toBe(viewport);
       expect(viewport.scrollTop).toBe(scrollTop);
       expect(workers).toHaveLength(1);
+      const frame = window.frameElement?.getBoundingClientRect();
+      for (const [type, line] of [
+        ["mousePressed", 449],
+        ["mouseReleased", 11],
+      ] as const) {
+        await act(() => {
+          viewport.scrollTop = (line - 4) * 29;
+        });
+        const button = screen.getByRole("button", {
+          name: `Comment on lines L${line}`,
+          exact: true,
+        });
+        await expect.element(button).toBeEnabled();
+        const rect = button.element().getBoundingClientRect();
+        await cdp().send("Input.dispatchMouseEvent", {
+          type,
+          x: rect.left + rect.width / 2 + (frame?.left ?? 0),
+          y: rect.top + rect.height / 2 + (frame?.top ?? 0),
+          button: "left",
+          buttons: type === "mousePressed" ? 1 : 0,
+          clickCount: 1,
+        });
+      }
+      const draft = screen.getByRole("textbox", { name: "Comment on lines L11 to L449" });
+      await userEvent.fill(draft, "Check the original line");
       state(`${changed}#updated`, "two");
-      await screen.rerender(preview("file-edit"));
+      await screen.rerender(preview("file-edit", 1));
+      await expect.element(draft).toHaveValue("Check the original line");
+      expect(workers).toHaveLength(1);
+      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
       // The prefetched first screen paints before the worker starts, so wait for the worker itself.
       await vi.waitFor(() => expect(workers).toHaveLength(2));
       await vi.waitFor(() => expect(screen.container.textContent).toContain("changed"));
-      await screen.rerender(preview("file-edit", 1));
+      await screen.rerender(preview("file-edit", 2));
       await vi.waitFor(() => expect(workers).toHaveLength(3));
       await vi.waitFor(() => expect(screen.container.textContent).toContain("changed"));
       state(`${original}#legacy`);

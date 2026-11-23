@@ -6,9 +6,11 @@ export const PREVIEW_PAGE_ROWS = 32;
 export type TextPreviewRequest =
   | { type: "open"; src?: string; text?: string; sizeBytes?: number; delimiter: "," | "\t" | null }
   | { type: "page"; index: number }
+  | { type: "excerpt"; firstLine: number; lastLine: number; maxChars: number }
   | { type: "copy" };
 export type TextPreviewResult =
   | { type: "meta"; count: number; columns: number; complete: boolean; sizeBytes?: number }
   | { type: "page"; index: number; rows: string[][] }
+  | { type: "excerpt"; firstLine: number; lastLine: number; text: string }
   | { type: "copy"; text: string }
   | ({ type: "error"; operation: TextPreviewRequest["type"] } & PreviewFailure);

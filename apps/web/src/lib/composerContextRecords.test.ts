@@ -324,6 +324,13 @@ describe("composerContextRecords", () => {
       paths.map((filePath) => ({ filePath, text: "Why?", diff: "dd" })),
     );
     expect(records[0]!.sectionId).not.toBe(records[1]!.sectionId);
+    const longExtension = reviewCommentContextRecord({
+      ...atLimit,
+      id: "long-extension",
+      filePath: "/tmp/log." + "x".repeat(65),
+      fenceLanguage: "x".repeat(65),
+    });
+    expect(decodeMessageContext({ version: 1, records: [longExtension] }).records).toHaveLength(1);
 
     const terminal = terminalContextRecord({
       id: "term-big",

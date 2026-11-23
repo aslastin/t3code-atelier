@@ -7,6 +7,7 @@ import {
 import {
   COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS,
   COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS,
+  COMPOSER_CONTEXT_REVIEW_FENCE_LANGUAGE_MAX_CHARS,
   COMPOSER_CONTEXT_REVIEW_SECTION_ID_MAX_CHARS,
   COMPOSER_CONTEXT_REVIEW_TEXT_MAX_CHARS,
   COMPOSER_CONTEXT_TERMINAL_TEXT_MAX_CHARS,
@@ -60,7 +61,7 @@ const RESPONSE_LABEL_MAX_CHARS = 64;
 // Truncate selections to wire bounds before persistence to avoid send-time encoding failures.
 const TRUNCATION_MARKER = "\n… truncated …";
 
-function clampContextText(value: string, max: number): string {
+export function clampContextText(value: string, max: number): string {
   if (value.length <= max) return value;
   let end = Math.max(0, max - TRUNCATION_MARKER.length);
   // Never end on a lone high surrogate.
@@ -421,7 +422,10 @@ export function reviewCommentContextRecord(
     rangeLabel: comment.rangeLabel,
     text: clampContextText(comment.text, COMPOSER_CONTEXT_REVIEW_TEXT_MAX_CHARS),
     diff: clampContextText(comment.diff, COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS),
-    ...(comment.fenceLanguage !== undefined ? { fenceLanguage: comment.fenceLanguage } : {}),
+    ...(comment.fenceLanguage !== undefined &&
+    comment.fenceLanguage.length <= COMPOSER_CONTEXT_REVIEW_FENCE_LANGUAGE_MAX_CHARS
+      ? { fenceLanguage: comment.fenceLanguage }
+      : {}),
     ...(comment.pullRequest !== undefined ? { pullRequest: comment.pullRequest } : {}),
   };
 }

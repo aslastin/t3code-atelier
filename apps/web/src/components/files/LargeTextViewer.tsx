@@ -1,4 +1,7 @@
 import { msg, T, useGT, useMessages } from "gt-react";
+import { COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS } from "@t3tools/contracts";
+import type { FileReviewExcerpt } from "~/reviewCommentContext";
+import { clampContextText } from "~/lib/composerContextRecords";
 import { useEffect, useImperativeHandle, useRef, useState, type RefObject } from "react";
 import { m } from "~/i18n/messages";
 import { parseDelimitedPreview } from "@t3tools/shared/delimitedPreview";
@@ -51,6 +54,7 @@ export default function LargeTextViewer(props: {
   const [pages, setPages] = useState(new Map<number, string[][]>());
   const [error, setError] = useState<string | null>(null);
   const worker = useRef<Worker | null>(null);
+  const excerptReady = useRef<((excerpt: FileReviewExcerpt) => void) | null>(null);
   const copyPending = useRef<{
     resolve: (text: string) => void;
     reject: (cause: Error) => void;
@@ -97,8 +101,16 @@ export default function LargeTextViewer(props: {
       });
       worker.current = engine;
       engine.addEventListener("message", (event: MessageEvent<TextPreviewResult>) => {
+        if (controller.signal.aborted) return;
         const result = event.data;
-        if (result.type === "copy") {
+        if (result.type === "excerpt") {
+          excerptReady.current?.({
+            firstLine: result.firstLine,
+            lastLine: result.lastLine,
+            text: clampContextText(result.text, COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS),
+          });
+          excerptReady.current = null;
+        } else if (result.type === "copy") {
           copyPending.current?.resolve(result.text);
           copyPending.current = null;
         } else if (result.type === "error") {
@@ -202,6 +214,7 @@ export default function LargeTextViewer(props: {
     } else startWorker();
     return () => {
       controller.abort();
+      excerptReady.current = null;
       copyPending.current?.reject(new Error(m(msg("Preview closed."))));
       copyPending.current = null;
       worker.current?.terminate();
@@ -285,7 +298,19 @@ export default function LargeTextViewer(props: {
         </FileSurfaceNotice>
       ) : null}
       {props.commentTarget && !props.delimiter ? (
-        <PagedSourcePreview {...tableProps} commentTarget={props.commentTarget} />
+        <PagedSourcePreview
+          {...tableProps}
+          commentTarget={props.commentTarget}
+          readExcerpt={(firstLine, lastLine, ready) => {
+            excerptReady.current = ready;
+            worker.current?.postMessage({
+              type: "excerpt",
+              firstLine,
+              lastLine,
+              maxChars: COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS + 1,
+            });
+          }}
+        />
       ) : meta.count > 0 ? (
         <VirtualTablePreview {...tableProps} />
       ) : null}

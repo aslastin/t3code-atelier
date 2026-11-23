@@ -60,7 +60,15 @@ export function formatReviewCommentFence(language: string, contents: string): st
 
 export interface FileReviewExcerpt {
   firstLine: number;
-  lines: readonly string[];
+  lastLine: number;
+  text: string;
+}
+
+function selectFileLines(contents: string, start: number, end: number): FileReviewExcerpt {
+  const lines = contents.split(/\r\n|\r|\n/);
+  const firstLine = Math.max(1, Math.min(start, end, lines.length));
+  const lastLine = Math.min(lines.length, Math.max(firstLine, start, end));
+  return { firstLine, lastLine, text: lines.slice(firstLine - 1, lastLine).join("\n") };
 }
 
 export function buildFileReviewComment(input: {
@@ -71,14 +79,13 @@ export function buildFileReviewComment(input: {
   text: string;
   contents: string | FileReviewExcerpt;
 }): ReviewCommentContext {
-  const { firstLine, lines } =
-    typeof input.contents === "string"
-      ? { firstLine: 1, lines: input.contents.split(/\r\n|\r|\n/) }
-      : input.contents;
-  const lastLine = firstLine + Math.max(0, lines.length - 1);
-  const startLine = Math.max(firstLine, Math.min(input.startLine, input.endLine, lastLine));
-  const endLine = Math.min(lastLine, Math.max(startLine, input.startLine, input.endLine));
-  const selectedLines = lines.slice(startLine - firstLine, endLine - firstLine + 1);
+  const {
+    firstLine: startLine,
+    lastLine: endLine,
+    text: diff,
+  } = typeof input.contents === "string"
+    ? selectFileLines(input.contents, input.startLine, input.endLine)
+    : input.contents;
   return {
     id: input.id,
     sectionId: `file:${input.filePath}`,
@@ -90,7 +97,7 @@ export function buildFileReviewComment(input: {
     // oxlint-disable-next-line t3code/no-untranslated-copy -- stored in the review comment record sent to the agent
     rangeLabel: startLine === endLine ? `L${startLine}` : `L${startLine} to L${endLine}`,
     text: input.text.trim(),
-    diff: selectedLines.join("\n"),
+    diff,
     fenceLanguage: inferReviewCommentFenceLanguage(input.filePath),
   };
 }

@@ -8,29 +8,44 @@ import VirtualTablePreview from "./VirtualTablePreview";
 
 export function PagedSourcePreview({
   commentTarget,
+  readExcerpt,
   ...table
-}: ComponentProps<typeof VirtualTablePreview> & { commentTarget: FileCommentTarget }) {
+}: ComponentProps<typeof VirtualTablePreview> & {
+  commentTarget: FileCommentTarget;
+  readExcerpt: (
+    firstLine: number,
+    lastLine: number,
+    ready: (excerpt: FileReviewExcerpt) => void,
+  ) => void;
+}) {
   const gt = useGT();
   const surface = useRef<HTMLDivElement>(null);
   const drag = useRef<{ pointerId: number; start: number } | null>(null);
   // Keep the selected rows while the worker's page cache scrolls past them.
   const [excerpt, setExcerpt] = useState<FileReviewExcerpt>({
     firstLine: 1,
-    lines: [],
+    lastLine: 1,
+    text: "",
   });
+  const [reading, setReading] = useState(false);
   const { fileProps, hasOpenCommentForm, setSelectedRange } = useFileComments({
     ...commentTarget,
+    anchorAtPointer: true,
     contents: excerpt,
     revealRequestId: table.revealRequestId ?? 0,
   });
   const select = (range: SelectedLineRange) => {
     const selected = readPagedSourceExcerpt(range, table.getRows);
-    if (!selected) {
-      setSelectedRange(null);
-      return;
+    const open = (excerpt: FileReviewExcerpt) => {
+      setReading(false);
+      setExcerpt(excerpt);
+      fileProps.options.onLineSelectionEnd(range);
+    };
+    if (selected) open(selected);
+    else {
+      setReading(true);
+      readExcerpt(Math.min(range.start, range.end), Math.max(range.start, range.end), open);
     }
-    setExcerpt(selected);
-    fileProps.options.onLineSelectionEnd(range);
   };
 
   const rangeAtPointer = (event: PointerEvent<HTMLDivElement>) => {
@@ -82,7 +97,7 @@ export function PagedSourcePreview({
           <button
             type="button"
             className="w-full cursor-pointer touch-none text-right hover:text-primary focus-visible:text-primary disabled:cursor-default"
-            disabled={!loaded || hasOpenCommentForm}
+            disabled={!loaded || hasOpenCommentForm || reading}
             aria-label={gt("Comment on lines {rangeLabel}", { rangeLabel: `L${line}` })}
             onPointerDown={(event) => {
               if (!event.isPrimary || event.button !== 0 || !surface.current) return;

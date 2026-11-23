@@ -524,6 +524,9 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
           });
 
           expect(result.contents).toBe("beside the target\n");
+          expect(result.absolutePath).toBe(
+            yield* fs.realPath(path.join(root, "target", "parent.md")),
+          );
         }),
     );
 

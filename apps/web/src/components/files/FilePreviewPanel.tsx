@@ -42,7 +42,8 @@ import {
 import type { WorkerPoolManager } from "@pierre/diffs/worker";
 import { EditProvider, File, Virtualizer, useWorkerPool } from "@pierre/diffs/react";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
-import { useFilesystemReadAccess } from "~/state/filesystem";
+import { filesystemEnvironment, useFilesystemReadAccess } from "~/state/filesystem";
+import { useEnvironmentQuery } from "~/state/query";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -75,7 +76,7 @@ import { PREFERRED_HIGHLIGHTER } from "~/lib/syntaxHighlighting";
 import { cn, isMacPlatform } from "~/lib/utils";
 import { requestWorkspaceFocus } from "~/lib/workspaceFocus";
 import type { ChatFileAttachment } from "~/types";
-import { isHostPath } from "@t3tools/shared/path";
+import { isHostPath, isWindowsAbsolutePath } from "@t3tools/shared/path";
 import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
@@ -98,7 +99,7 @@ import { PreviewImage } from "./PreviewImage";
 import FileBrowserPanel from "./FileBrowserPanel";
 import { FileExplorerPane } from "./FileExplorerPane";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
-import { breadcrumbPathOf, retainedBreadcrumbTrail, trailChildOf } from "./filePath";
+import { breadcrumbPathOf, joinHostPath, retainedBreadcrumbTrail, trailChildOf } from "./filePath";
 import { FileMarkdownPreview } from "./FileMarkdownPreview";
 import type { FileCommentAnnotationGroup } from "./fileCommentAnnotations";
 import { useFileComments, type FileCommentTarget } from "./useFileComments";
@@ -890,12 +891,13 @@ function ReadOnlyFileSurface(
 ) {
   // Keep the selected version visible until the user submits or cancels the draft.
   const [source, setSource] = useState({ contents: props.contents, cacheKey: props.cacheKey });
-  const { fileProps, hasOpenCommentForm } = useFileComments({
+  const { fileProps, hasOpenCommentForm, retainUnchangedAnnotations } = useFileComments({
     ...props,
     contents: source.contents,
   });
   if (!hasOpenCommentForm && source.cacheKey !== props.cacheKey) {
     setSource({ contents: props.contents, cacheKey: props.cacheKey });
+    retainUnchangedAnnotations(source.contents, props.contents);
   }
   return (
     <SourceFilePreview
@@ -1195,6 +1197,12 @@ export default function FilePreviewPanel({
     m,
   );
   const [fileRefreshRevision, setFileRefreshRevision] = useState(0);
+  const [pagedDraft, setPagedDraft] = useState<{
+    threadId: string;
+    relativePath: string;
+    absolutePath: string;
+    filePath: string | null;
+  } | null>(null);
   const attemptedPath = file.readError?.resolvedPath ?? file.readError?.operationPath;
   // Folder links fail file reads; retain mutation refresh to detect conversion to files. Host folders own
   // roots; folderTrail keeps descendants.
@@ -1258,6 +1266,17 @@ export default function FilePreviewPanel({
   const renderMermaid = isMermaid && renderMermaidPreferred && revealHandled;
   const renderBrowserFile = isPdf || (isHtml && renderBrowserFilePreferred && revealHandled);
   const renderTable = tableDelimiter !== null && renderTablePreferred && revealHandled;
+  if (
+    pagedDraft &&
+    (pagedDraft.threadId !== threadRef.threadId ||
+      pagedDraft.relativePath !== relativePath ||
+      renderTable ||
+      !canReadFiles ||
+      isFolder ||
+      attachment ||
+      draft)
+  )
+    setPagedDraft(null);
   const renderedMode = isMermaid
     ? ("mermaid" as const)
     : isMarkdown
@@ -1374,12 +1393,44 @@ export default function FilePreviewPanel({
         : crumbPath;
     onNavigateFolder(path, retainedBreadcrumbTrail(breadcrumbTrail ?? undefined, path), !isFolder);
   };
+  // Older servers echo ~/ paths. Browse resolves the parent on the destination environment.
+  const legacyHomePath =
+    canReadFiles &&
+    file.data &&
+    !file.data.absolutePath &&
+    relativePath &&
+    /^~[\\/]/.test(relativePath)
+      ? relativePath.slice(2)
+      : null;
+  const legacyParent = useEnvironmentQuery(
+    legacyHomePath !== null
+      ? filesystemEnvironment.browse({
+          environmentId,
+          input: { partialPath: `~/${legacyHomePath}` },
+        })
+      : null,
+  ).data?.parentPath;
+  const legacyAbsolutePath =
+    legacyParent && legacyHomePath !== null
+      ? joinHostPath(
+          legacyParent,
+          legacyHomePath.split(isWindowsAbsolutePath(legacyParent) ? /[\\/]/ : "/").at(-1)!,
+        )
+      : null;
+  const hostFilePath = file.data?.absolutePath ?? legacyAbsolutePath;
+  const commentPath = hostFilePath ?? (legacyHomePath === null ? relativePath : null);
   const absolutePath =
     breadcrumbPath === ""
       ? cwd
       : relativePath && attachment === undefined
-        ? (file.data?.absolutePath ?? resolvePathLinkTarget(relativePath, cwd))
+        ? (hostFilePath ??
+          (legacyHomePath !== null ? relativePath : resolvePathLinkTarget(relativePath, cwd)))
         : null;
+  const pagedFile =
+    pagedDraft ??
+    (file.data?.truncated && relativePath && absolutePath
+      ? { threadId: threadRef.threadId, relativePath, absolutePath, filePath: commentPath }
+      : null);
   const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
   // Mounting the file read under the workspace mutation id refetches it after each mutation.
   useAtomMount(
@@ -1649,26 +1700,25 @@ export default function FilePreviewPanel({
               title={relativePath}
               workspaceMutationId={workspaceMutationId}
             />
-          ) : relativePath &&
-            absolutePath &&
-            file.data?.truncated &&
-            !isDocument &&
-            !draft &&
-            !isMarkdown &&
-            !isMermaid &&
-            !isHtml ? (
+          ) : pagedFile && !isDocument && !draft && !isMarkdown && !isMermaid && !isHtml ? (
             <WorkspaceLargeTextPreview
-              commentTarget={{
-                environmentId,
-                projectId,
-                composerDraftTarget,
-                filePath: file.data.absolutePath ?? relativePath,
-              }}
-              key={`${absolutePath}:${renderTable}:${fileRefreshRevision}`}
+              commentTarget={
+                pagedFile.filePath
+                  ? {
+                      environmentId,
+                      projectId,
+                      composerDraftTarget,
+                      filePath: pagedFile.filePath,
+                      onDraftChange: (open) => setPagedDraft(open ? pagedFile : null),
+                    }
+                  : undefined
+              }
+              key={`${threadRef.threadId}:${pagedFile.relativePath}:${renderTable}`}
+              refreshRevision={fileRefreshRevision}
               environmentId={environmentId}
               threadRef={threadRef}
-              absolutePath={absolutePath}
-              name={relativePath}
+              absolutePath={pagedFile.absolutePath}
+              name={pagedFile.relativePath}
               delimiter={renderTable ? tableDelimiter : null}
               workspaceMutationId={workspaceMutationId}
               revealLine={revealLine}
@@ -1751,18 +1801,27 @@ export default function FilePreviewPanel({
                 delimiter={tableDelimiter}
               />
             ) : file.data.truncated || isHostFile || !canWriteFiles ? (
-              <ReadOnlyFileSurface
-                key={relativePath}
-                filePath={file.data.absolutePath ?? relativePath}
-                environmentId={environmentId}
-                composerDraftTarget={composerDraftTarget}
-                projectId={projectId}
-                revealRequestId={revealRequestId}
-                contents={file.data.contents}
-                cacheKey={projectFileCacheKey(cwd, relativePath, file.data.contents)}
-                onPostRender={onFilePostRender}
-                wordWrap={wordWrap}
-              />
+              commentPath ? (
+                <ReadOnlyFileSurface
+                  key={`${threadRef.threadId}:${relativePath}`}
+                  filePath={commentPath}
+                  environmentId={environmentId}
+                  composerDraftTarget={composerDraftTarget}
+                  projectId={projectId}
+                  revealRequestId={revealRequestId}
+                  contents={file.data.contents}
+                  cacheKey={projectFileCacheKey(cwd, relativePath, file.data.contents)}
+                  onPostRender={onFilePostRender}
+                  wordWrap={wordWrap}
+                />
+              ) : (
+                <SourceFilePreview
+                  name={relativePath}
+                  text={file.data.contents}
+                  wordWrap={wordWrap}
+                  onPostRender={onFilePostRender}
+                />
+              )
             ) : (
               <DiffWorkerPoolProvider>
                 <EditableFileSurface
@@ -1827,7 +1886,8 @@ export default function FilePreviewPanel({
 
 const LargeTextViewer = lazy(() => import("./LargeTextViewer"));
 export function WorkspaceLargeTextPreview(props: {
-  commentTarget?: FileCommentTarget;
+  commentTarget?: FileCommentTarget | undefined;
+  refreshRevision?: number;
   environmentId: EnvironmentId;
   threadRef: ScopedThreadRef;
   absolutePath: string;
@@ -1851,6 +1911,7 @@ export function WorkspaceLargeTextPreview(props: {
   });
   const [saving, setSaving] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [commentOpen, setCommentOpen] = useState(false);
   const showError = (cause: unknown) => {
     toastManager.add({
       type: "error",
@@ -1870,12 +1931,13 @@ export function WorkspaceLargeTextPreview(props: {
     resource,
     assetUrl._tag === "Success" ? (assetUrl.fileRevision ?? props.workspaceMutationId) : null,
     revision,
+    props.refreshRevision,
   ]);
   const [loaded, setLoaded] = useState<{ revision: string; url: string } | null>(null);
-  if (assetUrl._tag === "Success" && loaded?.revision !== contentRevision) {
+  if (!commentOpen && assetUrl._tag === "Success" && loaded?.revision !== contentRevision) {
     setLoaded({ revision: contentRevision, url: assetUrl.url });
   }
-  if (assetUrl._tag === "Failure")
+  if (!commentOpen && assetUrl._tag === "Failure")
     return (
       <FileSurfaceFailure
         message={gt("Unable to load file preview.")}
@@ -1885,7 +1947,7 @@ export function WorkspaceLargeTextPreview(props: {
         }}
       />
     );
-  if (assetUrl._tag !== "Success" || loaded === null)
+  if ((!commentOpen && assetUrl._tag !== "Success") || loaded === null)
     return (
       <div className="p-6 text-xs text-muted-foreground">
         <T>Loading…</T>
@@ -1944,7 +2006,15 @@ export function WorkspaceLargeTextPreview(props: {
         <LargeTextViewer
           key={`${src}:${revision}`}
           name={props.name}
-          commentTarget={props.commentTarget}
+          commentTarget={
+            props.commentTarget && {
+              ...props.commentTarget,
+              onDraftChange: (open) => {
+                setCommentOpen(open);
+                props.commentTarget?.onDraftChange?.(open);
+              },
+            }
+          }
           copyContents={copyContents}
           onRetry={() => {
             void refreshAssetUrl()

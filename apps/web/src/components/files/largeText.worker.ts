@@ -26,7 +26,7 @@ function set(index: number, value: number) {
   offsets[index >>> 16] ??= new Uint32Array(65536);
   offsets[index >>> 16]![index & 65535] = value;
 }
-async function read(start: number, end: number) {
+async function read(start: number, end: number, partial = false) {
   let low = 0;
   let high = chunks.length;
   while (low + 1 < high) {
@@ -40,7 +40,28 @@ async function read(start: number, end: number) {
     if (part.start >= end) break;
     parts.push(part.blob.slice(Math.max(0, start - part.start), end - part.start));
   }
-  return new TextDecoder("utf-8", { fatal: true }).decode(await new Blob(parts).arrayBuffer());
+  return new TextDecoder("utf-8", { fatal: true }).decode(await new Blob(parts).arrayBuffer(), {
+    stream: partial,
+  });
+}
+async function excerpt({
+  firstLine,
+  lastLine,
+  maxChars,
+}: Extract<TextPreviewRequest, { type: "excerpt" }>) {
+  if (firstLine < 1 || lastLine < firstLine || lastLine >= entries)
+    throw new PreviewError({ code: "file-unavailable" });
+  const start = at(firstLine - 1);
+  const end = at(lastLine);
+  // Bound decoding before allocation, including four-byte UTF-8 and CRLF line endings.
+  const limit = Math.min(end, start + 4 * maxChars);
+  const text = (await read(start, limit, limit < end)).replace(/\r\n|\r/g, "\n");
+  reply({
+    type: "excerpt",
+    firstLine,
+    lastLine,
+    text: (limit === end ? text.replace(/\n$/, "") : text).slice(0, maxChars),
+  });
 }
 async function page(index: number) {
   const start = index * PREVIEW_PAGE_ROWS;
@@ -196,9 +217,11 @@ self.addEventListener("message", (event: MessageEvent<TextPreviewRequest>) => {
       ? open(input)
       : input.type === "page"
         ? page(input.index)
-        : complete
-          ? read(0, size).then((text) => reply({ type: "copy", text }))
-          : Promise.reject(new PreviewError({ code: "text-copy-before-loaded" }))
+        : input.type === "excerpt"
+          ? excerpt(input)
+          : complete
+            ? read(0, size).then((text) => reply({ type: "copy", text }))
+            : Promise.reject(new PreviewError({ code: "text-copy-before-loaded" }))
   ).catch((cause: unknown) =>
     reply({
       type: "error",

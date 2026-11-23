@@ -26,6 +26,7 @@ export interface FileCommentTarget {
   projectId?: ProjectId | undefined;
   composerDraftTarget: ScopedThreadRef | DraftId;
   filePath: string;
+  onDraftChange?: ((open: boolean) => void) | undefined;
 }
 
 export function useFileComments({
@@ -36,10 +37,13 @@ export function useFileComments({
   contents,
   revealRequestId,
   onBeginComment,
+  onDraftChange,
+  anchorAtPointer,
 }: FileCommentTarget & {
   contents: string | FileReviewExcerpt;
   revealRequestId: number;
   onBeginComment?: () => void;
+  anchorAtPointer?: boolean;
 }) {
   const messages = useMessages();
   const addReviewComment = useComposerDraftStore((store) => store.addReviewComment);
@@ -84,7 +88,9 @@ export function useFileComments({
     }
   };
 
-  const removeAnnotationEntry = (entryId: string) => {
+  const removeAnnotationEntry = (entry: FileCommentAnnotationEntry) => {
+    const entryId = entry.id;
+    if (entry.kind === "draft") onDraftChange?.(false);
     setSelectedRange(null);
     removeReviewComment(composerDraftTarget, entryId);
     setLineAnnotations((current) => {
@@ -96,6 +102,7 @@ export function useFileComments({
   };
 
   const submitAnnotationEntry = (entry: FileCommentAnnotationEntry, text: string) => {
+    onDraftChange?.(false);
     setSelectedRange(null);
     addReviewComment(
       composerDraftTarget,
@@ -125,7 +132,9 @@ export function useFileComments({
   const beginComment = (range: SelectedLineRange) => {
     setDraftText("");
     onBeginComment?.();
+    onDraftChange?.(true);
     const { startLine, endLine } = normalizeFileCommentRange(range);
+    const anchorLine = anchorAtPointer ? range.end : endLine;
     const draftEntry: FileCommentAnnotationEntry = {
       id: nextFileCommentId(),
       kind: "draft",
@@ -139,13 +148,13 @@ export function useFileComments({
         return entries.length > 0 ? [{ ...annotation, metadata: { entries } }] : [];
       });
       const existingIndex = withoutDraft.findIndex(
-        (annotation) => annotation.lineNumber === endLine,
+        (annotation) => annotation.lineNumber === anchorLine,
       );
       if (existingIndex < 0) {
         return [
           ...withoutDraft,
           {
-            lineNumber: endLine,
+            lineNumber: anchorLine,
             metadata: { entries: [draftEntry] },
           },
         ];
@@ -186,9 +195,9 @@ export function useFileComments({
             rangeLabel={formatFileCommentRange(entry.startLine, entry.endLine, messages)}
             text={entry.kind === "draft" ? draftText : entry.text}
             onTextChange={setDraftText}
-            onCancel={() => removeAnnotationEntry(entry.id)}
+            onCancel={() => removeAnnotationEntry(entry)}
             onComment={(text) => submitAnnotationEntry(entry, text)}
-            onDelete={() => removeAnnotationEntry(entry.id)}
+            onDelete={() => removeAnnotationEntry(entry)}
           />
         ))}
       </div>
@@ -209,6 +218,23 @@ export function useFileComments({
     },
     hasOpenCommentForm,
     setSelectedRange,
+    retainUnchangedAnnotations: (before: string, after: string) => {
+      if (!lineAnnotations.length) return;
+      const oldLines = before.split(/\r\n|\r|\n/);
+      const newLines = after.split(/\r\n|\r|\n/);
+      setLineAnnotations(
+        lineAnnotations.flatMap((annotation) => {
+          const entries = annotation.metadata.entries.filter(
+            ({ startLine, endLine }) =>
+              endLine <= newLines.length &&
+              oldLines
+                .slice(startLine - 1, endLine)
+                .every((line, index) => newLines[startLine - 1 + index] === line),
+          );
+          return entries.length ? [{ ...annotation, metadata: { entries } }] : [];
+        }),
+      );
+    },
     remapAfterEdit,
   };
 }

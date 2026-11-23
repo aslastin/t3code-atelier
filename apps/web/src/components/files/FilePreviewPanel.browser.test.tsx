@@ -39,10 +39,16 @@ vi.mock(import("~/state/session"), async (original) => ({
   readEnvironmentScope: () => true,
   useEnvironmentScope: () => true,
 }));
-vi.mock(import("~/state/filesystem"), async (original) => ({
-  ...(await original()),
-  useFilesystemReadAccess: () => ({ canReadFiles: true, isPending: false, error: null }),
-}));
+vi.mock(import("~/state/filesystem"), async (original) => {
+  const actual = await original();
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const browse = Atom.make(AsyncResult.success({ parentPath: "/tmp", entries: [] }));
+  return {
+    ...actual,
+    filesystemEnvironment: { ...actual.filesystemEnvironment, browse: (() => browse) as never },
+    useFilesystemReadAccess: () => ({ canReadFiles: true, isPending: false, error: null }),
+  };
+});
 vi.mock(import("~/state/use-atom-command"), async (original) => ({
   ...(await original()),
   useAtomCommand: (() => state.writeFile) as never,
@@ -274,7 +280,6 @@ describe("read-only source comments", () => {
     const contents = "first\nsecond\nthird\nfourth";
     state.file = {
       relativePath: "~/notes.txt",
-      absolutePath: filePath,
       contents,
       byteLength: contents.length,
       truncated: false,
@@ -310,7 +315,7 @@ describe("read-only source comments", () => {
       screen.getByRole("textbox", { name: /Comment on lines/ }),
       "Explain this.",
     );
-    state.file = { ...state.file!, contents: "replaced", byteLength: 8 };
+    state.file = { ...state.file!, absolutePath: filePath, contents: "replaced", byteLength: 8 };
     await screen.rerender(panel());
     await expect
       .element(screen.getByRole("textbox", { name: /Comment on lines/ }))
@@ -330,6 +335,20 @@ describe("read-only source comments", () => {
     await expect
       .element(screen.getByRole("textbox", { name: "Comment on lines L1" }))
       .toBeVisible();
+    await userEvent.fill(
+      screen.getByRole("textbox", { name: "Comment on lines L1" }),
+      "Old first line",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Comment", exact: true }));
+    await expect.element(screen.getByText("Old first line", { exact: true })).toBeVisible();
+    state.file = { ...state.file, contents: "inserted\nreplaced", byteLength: 17 };
+    await screen.rerender(panel());
+    await expect
+      .element(screen.getByText("Old first line", { exact: true }))
+      .not.toBeInTheDocument();
+    expect(
+      useComposerDraftStore.getState().getComposerDraft(threadRef)!.reviewComments.at(-1)?.diff,
+    ).toBe("replaced");
     expect(state.writeFile).not.toHaveBeenCalled();
   });
 });
