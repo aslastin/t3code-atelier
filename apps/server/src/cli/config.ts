@@ -6,7 +6,7 @@ import {
   type SignalExport,
 } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
-import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
+import * as TelemetrySettingsFile from "@t3tools/shared/telemetrySettingsFile";
 import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
@@ -251,19 +251,6 @@ const resolveOptionPrecedence = <Value>(
   ...values: ReadonlyArray<Option.Option<Value>>
 ): Option.Option<Value> => Option.firstSomeOf(values);
 
-const loadPersistedObservabilitySettings = Effect.fn(function* (settingsPath: string) {
-  const fs = yield* FileSystem.FileSystem;
-  return yield* fs.readFileString(settingsPath).pipe(
-    Effect.match({
-      onSuccess: parsePersistedServerObservabilitySettings,
-      onFailure: (cause) =>
-        cause.reason._tag === "NotFound"
-          ? { otlpTracesUrl: undefined, otlpMetricsUrl: undefined, otlpLogsUrl: undefined }
-          : parsePersistedServerObservabilitySettings(""),
-    }),
-  );
-});
-
 export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(function* (
   flags: CliServerFlags,
   cliLogLevel: Option.Option<LogLevel.LogLevel>,
@@ -371,9 +358,8 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
   }
   yield* fs.makeDirectory(cwd, { recursive: true });
   yield* ServerConfig.ensureServerDirectories(derivedPaths);
-  const persistedObservabilitySettings = yield* loadPersistedObservabilitySettings(
-    derivedPaths.settingsPath,
-  );
+  const telemetryFile = yield* TelemetrySettingsFile.reader;
+  const persistedObservabilitySettings = yield* telemetryFile.read(derivedPaths.settingsPath);
   const serverTracePath = env.traceFile ?? derivedPaths.serverTracePath;
   yield* fs.makeDirectory(path.dirname(serverTracePath), { recursive: true });
   const startupPresentation = options?.startupPresentation ?? "browser";

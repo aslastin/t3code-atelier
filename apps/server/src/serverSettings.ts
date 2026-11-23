@@ -4,6 +4,7 @@ import {
   ProjectId,
   ProjectScript,
   keepUnknownOverrideKeys,
+  legacyTelemetryPreferences,
   ProjectSettingsOverrides,
   type ProviderInstanceConfig,
   type ProviderInstanceMutation,
@@ -45,6 +46,7 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { resolveSymlinkTarget } from "@t3tools/shared/symlink";
+import * as TelemetrySettingsFile from "@t3tools/shared/telemetrySettingsFile";
 import * as ServerConfig from "./config.ts";
 import { type DeepPartial, deepMerge } from "@t3tools/shared/Struct";
 import { fromJsonStringPretty, fromLenientJson } from "@t3tools/shared/schemaJson";
@@ -671,6 +673,7 @@ function foldLegacyProjectSettings(
 
 const make = Effect.gen(function* () {
   const { settingsPath, telemetry } = yield* ServerConfig.ServerConfig;
+  const telemetryFile = yield* TelemetrySettingsFile.reader;
   const fs = yield* FileSystem.FileSystem;
   const pathService = yield* Path.Path;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
@@ -792,6 +795,7 @@ const make = Effect.gen(function* () {
     let legacyProviders: Readonly<Record<string, unknown>> | undefined;
     let legacySourceControl: Parameters<typeof migrateLegacySourceControlSettings>[1] = {};
     let parseFailure = Option.none<unknown>();
+    let settingsUnavailable = false;
 
     if (yield* readConfigExists) {
       const raw = yield* readRawConfig;
@@ -830,6 +834,12 @@ const make = Effect.gen(function* () {
       } else {
         settings = decoded.value;
       }
+    } else if (!(yield* telemetryFile.isAbsent(settingsPath))) {
+      settingsUnavailable = true;
+      settings = {
+        ...settings,
+        observability: { ...settings.observability, telemetry: legacyTelemetryPreferences(false) },
+      };
     }
     // Settings saved by a server that kept the mode in `compactIdleThreads` move
     // it to `idleCompaction`, so that switch goes to clients as a boolean. The
@@ -837,7 +847,7 @@ const make = Effect.gen(function* () {
     settings = withIdleCompaction(settings, globalIdleCompaction(settings));
 
     // A file that failed to decode must stay on disk for the user to repair.
-    const settingsFileTrusted = Option.isNone(parseFailure);
+    const settingsFileTrusted = !settingsUnavailable && Option.isNone(parseFailure);
     const providerHistory = yield* sql<{
       readonly providerName: string;
       readonly providerInstanceId: string | null;

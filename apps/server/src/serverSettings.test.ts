@@ -351,10 +351,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       const service = yield* ServerSettingsModule.ServerSettingsService;
       const dotfiles = yield* fs.makeTempDirectoryScoped({ prefix: "t3-settings-dotfiles-" });
       const linkedSettingsPath = path.join(dotfiles, "settings.json");
-      yield* fs.writeFileString(linkedSettingsPath, `{ "responseStreamingMode": "turn" }`);
       yield* fs.remove(config.settingsPath, { force: true });
       yield* fs.symlink(linkedSettingsPath, config.settingsPath);
 
+      assert.isFalse((yield* service.getSettings).observability.telemetry?.enabled);
+      assert.isFalse(yield* fs.exists(linkedSettingsPath));
+      yield* fs.writeFileString(linkedSettingsPath, `{ "responseStreamingMode": "turn" }`);
       yield* service.updateSettings({ responseStreamingMode: "paragraph" });
 
       assert.equal(yield* fs.readLink(config.settingsPath), linkedSettingsPath);

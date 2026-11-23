@@ -16,6 +16,32 @@ const disabled = {
   telemetry: { enabled: false, analytics: false, connect: false, otlp: false },
 };
 
+export const reader = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
+  // A missing target behind an existing settings symlink may hold an explicit opt-out.
+  const isAbsent = (file: string) =>
+    fs.lstat(file).pipe(
+      Effect.matchEffect({
+        onSuccess: () => Effect.succeed(false),
+        onFailure: (error) =>
+          error.reason._tag === "NotFound"
+            ? fs.exists(paths.dirname(file)).pipe(Effect.orElseSucceed(() => false))
+            : Effect.succeed(false),
+      }),
+    );
+  const read = (file: string) =>
+    fs.readFileString(file).pipe(
+      Effect.map(parsePersistedServerObservabilitySettings),
+      Effect.catch((error) =>
+        error.reason._tag === "NotFound"
+          ? isAbsent(file).pipe(Effect.map((absent) => (absent ? empty : disabled)))
+          : Effect.succeed(disabled),
+      ),
+    );
+  return { isAbsent, read };
+});
+
 // Desktop main and standalone CLI processes do not share the environment's in-memory settings service.
 export const follow = Effect.fn("TelemetrySettingsFile.follow")(function* (
   source: string | SubscriptionRef.SubscriptionRef<string | null>,
@@ -23,6 +49,7 @@ export const follow = Effect.fn("TelemetrySettingsFile.follow")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
+  const { isAbsent, read } = yield* reader;
   const lock = yield* Semaphore.make(1);
   const currentPath = () =>
     typeof source === "string" ? source : SubscriptionRef.getUnsafe(source);
@@ -34,17 +61,7 @@ export const follow = Effect.fn("TelemetrySettingsFile.follow")(function* (
       previousPath = path;
     }
     if (!path) return update(disabled);
-    const settings = yield* fs.readFileString(path).pipe(
-      Effect.map(parsePersistedServerObservabilitySettings),
-      Effect.catch((error) =>
-        error.reason._tag !== "NotFound"
-          ? Effect.succeed(disabled)
-          : fs.exists(paths.dirname(path)).pipe(
-              Effect.map((exists) => (exists ? empty : disabled)),
-              Effect.orElseSucceed(() => disabled),
-            ),
-      ),
-    );
+    const settings = yield* read(path);
     update(path === currentPath() ? settings : disabled);
   }).pipe(lock.withPermit, Effect.withTracerEnabled(false));
   const watch = (path: string | null) => {
@@ -68,7 +85,9 @@ export const follow = Effect.fn("TelemetrySettingsFile.follow")(function* (
               info.mode,
             ].join("/"),
           ),
-          Effect.orElseSucceed(() => undefined),
+          Effect.catch((error) =>
+            error.reason._tag === "NotFound" ? isAbsent(path) : Effect.succeed(false),
+          ),
         ),
       ),
       Stream.changes,
