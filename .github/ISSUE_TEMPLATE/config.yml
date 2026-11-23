@@ -3,6 +3,6 @@ contact_links:
   - name: Idea
     url: https://github.com/aslastin/t3code-atelier/discussions/categories/ideas
     about: Discuss an idea for the fork before it becomes an issue.
-  - name: Problem in official T3 Code
+  - name: Official T3 Code
     url: https://github.com/pingdotgg/t3code/issues
-    about: Report problems that also happen in the official app upstream.
+    about: Offer a fork fix upstream. Report problems you hit in the fork here first.

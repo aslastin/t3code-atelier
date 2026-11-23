@@ -162,8 +162,10 @@ sync. It never touches the build branch.
    internal refactors, CI, and tests, and say so plainly when nothing notable arrives. Then: how
    many upstream commits arrive, the files both sides changed, any conflicts, the identity scan hits
    that need attention, and the check results with the output of anything that failed. Name fork
-   features without tests as unverified. End with a recommendation that weighs what the sync brings
-   against its risk: sync now, sync after resolving the listed conflicts together, or wait.
+   features without tests as unverified. List open `upstream-candidate` issues the incoming commits
+   appear to fix, so the user can label them `upstream-merged` and drop the fork's copy in the sync.
+   End with a recommendation that weighs what the sync brings against its risk: sync now, sync
+   after resolving the listed conflicts together, or wait.
 7. If the user does not go on to sync, remove the worktree and branch:
    `git worktree remove ../t3code-atelier-sync && git branch -D atelier/sync-preview`.
 
