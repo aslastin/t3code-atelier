@@ -198,9 +198,14 @@ New fork features follow the same path, so Issues and pull requests keep their h
 4. **Finish.** A finished feature gets the next number in `atelier-build-number` and an entry in
    "Differences from upstream". Follow-ups extend the existing entry and keep the number.
 
-Fixes, docs, and upstream syncs need no issue and no label. Problems that also happen in the
-official app belong in [upstream's issues](https://github.com/pingdotgg/t3code/issues).
-`label:atelier-feature` in Issues or pull requests lists every fork feature.
+Fork-only fixes, docs, and upstream syncs need no issue and no label.
+
+Problems that also happen in the official app are fixed here first and offered upstream later.
+Their issues live in this repository too and carry `upstream-candidate`. When upstream ships an
+equivalent change, the issue gets `upstream-merged`, and the next sync drops the fork's copy.
+
+`label:atelier-feature` lists every fork feature, and `label:upstream-candidate` lists what is
+waiting to go upstream.
 
 ## Known limitations
 
