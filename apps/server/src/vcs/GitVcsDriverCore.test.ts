@@ -663,8 +663,8 @@ it.effect.each(["branch", "detached", "nested", "aliased-root", "aliased-nested"
         const current = refs.refs.find((ref) => ref.current);
         assert.equal(current?.name, "feature/cold");
         assert.equal(
-          current?.projectPath,
-          isNested ? path.join(worktreePath, "nested") : worktreePath,
+          current?.projectPath && (yield* fs.realPath(current.projectPath)),
+          yield* fs.realPath(isNested ? path.join(worktreePath, "nested") : worktreePath),
         );
         assert.equal(
           yield* git(worktreePath, ["rev-parse", "HEAD"]),
