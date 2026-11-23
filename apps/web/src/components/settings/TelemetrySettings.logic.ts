@@ -11,6 +11,16 @@ export function telemetryTargetIssue(
   return undefined;
 }
 
+export function nextTelemetryChoice(
+  targets: ReadonlyArray<{
+    status: TelemetryStatus | undefined;
+    issue: ReturnType<typeof telemetryTargetIssue>;
+  }>,
+  key: keyof TelemetryPreferences,
+) {
+  return !targets.some(({ status, issue }) => !issue && status?.preferences[key]);
+}
+
 export async function saveTelemetryChoice(
   target: { status: TelemetryStatus | undefined; issue: ReturnType<typeof telemetryTargetIssue> },
   key: keyof TelemetryPreferences,

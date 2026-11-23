@@ -365,7 +365,7 @@ const resolveOtlpEndpoints = Effect.gen(function* () {
   const traces = new ExportChannel();
   const logs = new ExportChannel();
   const refresh = yield* TelemetrySettingsFile.follow(
-    environment.serverSettingsPath,
+    environment.telemetrySettingsPath,
     (settings) => {
       const endpoints = resolve(settings);
       const status = resolveTelemetry(settings.telemetry, {

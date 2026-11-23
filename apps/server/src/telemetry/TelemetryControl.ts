@@ -112,19 +112,15 @@ export class TelemetryControl {
     } satisfies ServerObservability;
   }
 
-  readonly limitChanges = Stream.callback<void>((queue) =>
-    Effect.acquireRelease(
-      Effect.sync(() => {
-        const listener = () => Queue.offerUnsafe(queue, undefined);
-        this.limitListeners.add(listener);
-        return listener;
-      }),
-      (listener) =>
-        Effect.sync(() => {
-          this.limitListeners.delete(listener);
-        }),
-    ),
-  );
+  readonly subscribeLimitChanges = Effect.gen({ self: this }, function* () {
+    const queue = yield* Queue.sliding<void>(1);
+    const notify = () => Queue.offerUnsafe(queue, undefined);
+    yield* Effect.acquireRelease(
+      Effect.sync(() => this.limitListeners.add(notify)),
+      () => Effect.sync(() => this.limitListeners.delete(notify)),
+    );
+    return Stream.fromQueue(queue);
+  });
 
   refresh() {
     const limitKey = JSON.stringify([

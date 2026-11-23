@@ -388,7 +388,7 @@ export const layerOtlpTracesProxyRoute = HttpRouter.add(
     if (
       !lease ||
       config.telemetry.traces.current !== lease ||
-      (revision !== undefined && revision !== String(lease.revision ?? 0))
+      revision !== String(lease.revision ?? 0)
     ) {
       return HttpServerResponse.empty({ status: 204 });
     }

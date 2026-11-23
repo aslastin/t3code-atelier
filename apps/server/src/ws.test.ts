@@ -1027,6 +1027,7 @@ it.effect.each([
   "direct-cached",
   "direct-failed",
   "direct-interrupted",
+  "telemetry",
 ] as const)(
   "%s endpoint discovery preserves initial config and updates through discovery and ACK",
   (discovery) =>
@@ -1175,7 +1176,10 @@ it.effect.each([
       yield* Deferred.await(discoveryStarted);
       assert.isTrue(yield* Deferred.isDone(remoteDiscoveryStarted));
 
-      const duringDiscovery = yield* settings.updateSettings({ defaultAutoPull: true });
+      const duringDiscovery =
+        discovery === "telemetry"
+          ? yield* settings.getSettings
+          : yield* settings.updateSettings({ defaultAutoPull: true });
       yield* Deferred.succeed(finishDiscovery, undefined);
       const snapshot = yield* Queue.take(responses);
       assert.equal(snapshot.type, "snapshot");
@@ -1190,6 +1194,18 @@ it.effect.each([
       );
       assert.isFalse(snapshot.config.settings.defaultAutoPull);
       assert.deepEqual(snapshot.config.keybindings, initialKeybindings);
+      if (discovery === "telemetry") {
+        const { telemetry } = yield* ServerConfigModule.ServerConfig;
+        const blocked = snapshot.config.observability.telemetry?.analytics === "policy";
+        telemetry.setManaged(!blocked);
+        yield* acknowledge;
+        const update = yield* Queue.take(responses);
+        assert.equal(update.type, "settingsUpdated");
+        if (update.type === "settingsUpdated") {
+          assert.equal(update.payload.observability?.telemetry?.analytics === "policy", !blocked);
+        }
+        return yield* server.write(0, { _tag: "Interrupt", requestId, interruptors: [] });
+      }
       const duringAck = yield* keybindings.upsertKeybindingRule({
         key: "mod+alt+y",
         command: "terminal.toggle",

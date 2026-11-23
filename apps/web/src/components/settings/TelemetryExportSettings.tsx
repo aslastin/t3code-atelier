@@ -138,14 +138,7 @@ function TelemetryExportForm() {
     canEdit &&
     environment?.serverConfig?.environment.capabilities.otlpEndpointCheck === true;
   const running = environment?.serverConfig?.observability;
-  const [checks, setChecks] = useState<Partial<Record<SignalKey, EndpointCheck>>>(() =>
-    Object.fromEntries(
-      SIGNALS.flatMap((descriptor) => {
-        const url = runningOverride(running, descriptor)?.url ?? saved[descriptor.key];
-        return isHttpUrl(url) ? [[descriptor.key, { url, result: null }]] : [];
-      }),
-    ),
-  );
+  const [checks, setChecks] = useState<Partial<Record<SignalKey, EndpointCheck>>>({});
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: true });
   const checkOtlpEndpoint = useAtomCommand(serverEnvironment.checkOtlpEndpoint);
   const values = { ...saved, ...draft };
@@ -172,17 +165,21 @@ function TelemetryExportForm() {
     void sendCheck(key, signal, attempt);
   };
 
-  const sendPendingChecks = useEffectEvent(() => {
-    for (const { key, signal } of SIGNALS) {
-      const check = checks[key];
-      if (check?.result === null) void sendCheck(key, signal, check);
+  const checkSavedEndpoints = useEffectEvent((enabled: boolean) => {
+    setChecks({});
+    if (enabled) {
+      for (const descriptor of SIGNALS) {
+        const url = runningOverride(running, descriptor)?.url ?? saved[descriptor.key];
+        checkEndpoint(descriptor.key, descriptor.signal, url);
+      }
     }
   });
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- sends pending endpoint check requests once the environment can run them
+  const checkRevision = canCheck ? (running?.telemetry?.revisions?.otlp ?? 0) : null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- start new probes for the currently authorized endpoints and invalidate prior replies
   useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect -- State changes only after the response arrives.
-    if (canCheck) sendPendingChecks();
-  }, [canCheck]);
+    // oxlint-disable-next-line react/set-state-in-effect -- checks are responses from the environment for this consent period
+    checkSavedEndpoints(checkRevision !== null);
+  }, [checkRevision]);
 
   return (
     <SettingsSection title={gt("OpenTelemetry export")} id="telemetry-endpoints">

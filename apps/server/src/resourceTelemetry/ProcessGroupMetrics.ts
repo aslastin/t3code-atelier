@@ -103,6 +103,8 @@ export const layer = Layer.effectDiscard(
     const telemetry = yield* ResourceTelemetry.ResourceTelemetry;
     // A group that empties reads zero rather than holding its last value.
     const seen = new Set<string>();
+    const unsubscribe = config.telemetry.metrics.subscribe(() => seen.clear());
+    yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
     const sample = Effect.fn("ProcessGroupMetrics.sample")(function* () {
       const lease = config.telemetry.metrics.current;
       if (!lease) return;

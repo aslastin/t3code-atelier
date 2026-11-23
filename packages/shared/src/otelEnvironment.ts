@@ -394,12 +394,11 @@ export const resolveSignalEndpoint = (
     }),
     Off: () => undefined,
     Unset: (): SignalEndpoint | undefined => {
-      const settingsUrl = blankAsUnset(fallback.settingsUrl);
-      // The desktop forwards the saved setting as its bootstrap URL, so only a differing one is
-      // the desktop's own.
-      const url = blankAsUnset(fallback.bootstrapUrl) ?? settingsUrl;
-      if (url === undefined) return undefined;
-      return { url, export: t3.export, source: url === settingsUrl ? "settings" : "bootstrap" };
+      const bootstrap = blankAsUnset(fallback.bootstrapUrl);
+      if (bootstrap !== undefined)
+        return { url: bootstrap, export: t3.export, source: "bootstrap" };
+      const url = blankAsUnset(fallback.settingsUrl);
+      return url === undefined ? undefined : { url, export: t3.export, source: "settings" };
     },
   });
 };

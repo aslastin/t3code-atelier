@@ -72,11 +72,12 @@ export const connect = new ExportChannel();
 
 export function configureClientTracing(state?: ServerObservability) {
   const status = state?.telemetry;
+  const forward = status?.otlp === "on" && state?.otlpTracesEnabled;
   traces.set(
-    status?.otlp === "on" && state?.otlpTracesEnabled
+    status && (state?.localTracingEnabled || forward)
       ? resolvePrimaryEnvironmentHttpUrl("/api/observability/v1/traces")
       : undefined,
-    status?.revisions?.otlp,
+    forward ? (status.revisions?.otlp ?? 0) : undefined,
   );
   connect.set(
     (status?.rendererConnect ?? status?.connect) === "on" && relayTelemetryEnabled() === true
@@ -91,7 +92,7 @@ export const layer = Layer.effectDiscard(
     const read = yield* bindExporter(traces, (url, revision) =>
       OtlpTracer.make({
         url,
-        headers: { "x-t3-telemetry-revision": String(revision ?? 0) },
+        headers: { "x-t3-telemetry-revision": revision === undefined ? "local" : String(revision) },
         exportInterval: `${DEFAULT_EXPORT_INTERVAL_MS} millis`,
         resource: CLIENT_TRACING_RESOURCE,
       }),

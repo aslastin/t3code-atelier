@@ -14,7 +14,13 @@ import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Tracer from "effect/Tracer";
-import { HttpClient, HttpClientRequest, HttpRouter, HttpServerResponse } from "effect/http";
+import {
+  HttpClient,
+  HttpClientRequest,
+  HttpClientResponse,
+  HttpRouter,
+  HttpServerResponse,
+} from "effect/http";
 import { openMediaFile } from "./assets/MediaFile.ts";
 
 import {
@@ -23,9 +29,16 @@ import {
   injectMcpAppThemeBootstrap,
   MCP_APP_MAX_HTML_BYTES,
 } from "@t3tools/shared/mcpApp";
-import { ORCHESTRATION_PROTOCOL_HEADER } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  AuthSessionId,
+  ORCHESTRATION_PROTOCOL_HEADER,
+} from "@t3tools/contracts";
 import { FILE_PREVIEW_SCROLL_SCRIPT } from "@t3tools/shared/htmlRender";
 
+import { OtlpSerialization } from "effect/observability";
+import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as ServerConfig from "./config.ts";
 
 import { assetResponseHeaders, assetFileResponse, downloadContentDisposition } from "./http.ts";
@@ -126,6 +139,83 @@ describe("workspace page preview responses", () => {
       expect(yield* read({ path: style, renderIntent: "file-preview" })).toBe("body{}");
     }).pipe(Effect.provide(layerFileResponse)),
   );
+});
+
+describe("renderer trace proxy", () => {
+  it("records every authenticated batch locally and forwards only the current export revision", async () => {
+    const local: string[] = [];
+    const forwarded: string[] = [];
+    const receiver = "http://localhost/v1/traces";
+    const config = ServerConfig.layerTest(process.cwd(), { prefix: "trace-proxy-" }).pipe(
+      Layer.tap((services) =>
+        Effect.sync(() => {
+          Context.get(services, ServerConfig.ServerConfig).telemetry.update({
+            otlpTracesUrl: receiver,
+            telemetryRevisions: { connect: 0, otlp: 2 },
+          });
+        }),
+      ),
+      Layer.provide(NodeServices.layer),
+    );
+    const { handler, dispose } = HttpRouter.toWebHandler(
+      ServerHttp.layerOtlpTracesProxyRoute.pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            config,
+            OtlpSerialization.layerJson,
+            Layer.mock(EnvironmentAuth.EnvironmentAuth)({
+              authenticateHttpRequest: () =>
+                Effect.succeed({
+                  sessionId: AuthSessionId.make("test"),
+                  subject: "test",
+                  method: "bearer-access-token",
+                  scopes: [AuthOrchestrationOperateScope],
+                }),
+            }),
+            Layer.succeed(BrowserTraceCollector.BrowserTraceCollector, {
+              record: (records) =>
+                Effect.sync(() => {
+                  for (const record of records) local.push(record.name);
+                }),
+            }),
+            Layer.succeed(
+              HttpClient.HttpClient,
+              HttpClient.make((request) =>
+                Effect.sync(() => {
+                  forwarded.push(request.url);
+                  return HttpClientResponse.fromWeb(request, new Response(null, { status: 204 }));
+                }),
+              ),
+            ),
+          ),
+        ),
+      ),
+      { disableLogger: true },
+    );
+    try {
+      for (const revision of [undefined, "local", "1", "2"]) {
+        const name = revision ?? "legacy";
+        const response = await handler(
+          new Request("http://localhost/api/observability/v1/traces", {
+            method: "POST",
+            headers: revision === undefined ? {} : { "x-t3-telemetry-revision": revision },
+            body: JSON.stringify({
+              resourceSpans: [
+                {
+                  scopeSpans: [{ spans: [{ name, startTimeUnixNano: "0", endTimeUnixNano: "1" }] }],
+                },
+              ],
+            }),
+          }),
+        );
+        expect(response.status).toBe(204);
+        expect(local.at(-1)).toBe(name);
+        expect(forwarded).toEqual(revision === "2" ? [receiver] : []);
+      }
+    } finally {
+      await dispose();
+    }
+  });
 });
 
 describe("browser API CORS", () => {

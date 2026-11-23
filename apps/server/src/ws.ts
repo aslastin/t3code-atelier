@@ -3425,6 +3425,7 @@ export const layerWsRpc = (
               // Buffer changes through discovery and the initial snapshot's send.
               const keybindingsChanges = yield* keybindings.subscribeChanges;
               const settingsChanges = yield* serverSettings.subscribeChanges;
+              const telemetryLimitChanges = yield* telemetry.subscribeLimitChanges;
               const remoteTargets = yield* Effect.forkScoped(remoteOpenTargets.resolveTargets(), {
                 startImmediately: true,
               });
@@ -3515,7 +3516,7 @@ export const layerWsRpc = (
                   : Stream.empty;
               const settingsUpdates = Stream.merge(
                 settingsChanges,
-                telemetry.limitChanges.pipe(Stream.mapEffect(() => serverSettings.getSettings)),
+                telemetryLimitChanges.pipe(Stream.mapEffect(() => serverSettings.getSettings)),
               ).pipe(
                 Stream.map((settings) =>
                   ServerSettings.redactServerSettingsForClient(settings, settingsClient),

@@ -3,6 +3,7 @@ import type { ResourceTelemetryProcess, ResourceTelemetrySnapshot } from "@t3too
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Logger from "effect/Logger";
 import * as References from "effect/References";
 import * as Ref from "effect/Ref";
@@ -78,12 +79,12 @@ describe("ProcessGroupMetrics.layer", () => {
   const logsAfter = (
     refresh: ResourceTelemetry.ResourceTelemetry["Service"]["refresh"],
     afterStart: Effect.Effect<void>,
+    metrics = new ExportChannel(),
   ) => {
     const logs: Array<string> = [];
     const logger = Logger.make(({ logLevel, message }) => {
       logs.push(`${logLevel.toUpperCase()} ${String([message].flat()[0])}`);
     });
-    const metrics = new ExportChannel();
     metrics.set("http://localhost:4318/v1/metrics");
     const telemetry = { refresh } as unknown as ResourceTelemetry.ResourceTelemetry["Service"];
     return Effect.gen(function* () {
@@ -125,6 +126,33 @@ describe("ProcessGroupMetrics.layer", () => {
         "DEBUG process group metrics sample failed",
         "INFO process group metrics sample recovered",
       ]);
+    }),
+  );
+
+  it.effect("forgets retired process groups when the metrics destination changes", () =>
+    Effect.gen(function* () {
+      const channel = new ExportChannel();
+      const processes = [process(10, 1, "node", "server"), process(11, 10, "claude")];
+      const registry: Metric.MetricRegistry = new Map();
+      const groups = Metric.snapshot.pipe(
+        Effect.map((series) =>
+          series.filter((s) => s.id === "t3_process_group_count").map((s) => s.attributes?.group),
+        ),
+      );
+      yield* logsAfter(
+        Effect.sync(() => ({ ...emptySnapshot, processes })),
+        Effect.gen(function* () {
+          yield* TestClock.adjust("1 minute");
+          assert.include(yield* groups, "claude");
+          channel.set();
+          processes.pop();
+          channel.set("http://new/v1/metrics");
+          registry.clear();
+          yield* TestClock.adjust("1 minute");
+          assert.deepEqual(yield* groups, ["server"]);
+        }),
+        channel,
+      ).pipe(Effect.provideService(Metric.MetricRegistry, registry));
     }),
   );
 

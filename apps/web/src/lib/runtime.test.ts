@@ -62,7 +62,13 @@ describe("web runtime relay telemetry policy", () => {
       vi.stubEnv("VITE_RELAY_OTLP_TRACES_TOKEN", "test-token");
       vi.stubGlobal("window", {
         location: new URL("http://localhost/"),
-        desktopBridge: desktopBridge && { ...desktopBridge, getAppBranding: () => null },
+        desktopBridge: desktopBridge && {
+          ...desktopBridge,
+          getAppBranding: () => null,
+          getLocalEnvironmentBootstraps: () => [],
+          getLocalEnvironmentEnabled: () => true,
+          getLocalEnvironmentBearerToken: async () => null,
+        },
       });
       const fetchFn = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }));
       vi.stubGlobal("fetch", fetchFn);
@@ -99,6 +105,7 @@ describe("web runtime relay telemetry policy", () => {
           ),
         ).toBe("relay operation completed");
 
+        await freshRuntime.runPromise(Effect.void.pipe(Effect.withSpan("local-diagnostic")));
         setDelegate(
           Tracer.make({
             span(options) {
@@ -115,13 +122,27 @@ describe("web runtime relay telemetry policy", () => {
         await freshRuntime.dispose();
       }
 
+      const relayRequests = fetchFn.mock.calls.filter(([url]) =>
+        String(url).startsWith("https://telemetry.example.test"),
+      );
       if (exports) {
-        expect(fetchFn).toHaveBeenCalledOnce();
-        expect(String(fetchFn.mock.calls[0]?.[0])).toBe("https://telemetry.example.test/v1/traces");
-        const payload = new TextDecoder().decode(fetchFn.mock.calls[0]?.[1]?.body as Uint8Array);
+        expect(relayRequests).toHaveLength(1);
+        const payload = new TextDecoder().decode(relayRequests[0]?.[1]?.body as Uint8Array);
         expect(payload).toContain('"name":"relay.first-operation"');
       } else {
-        expect(fetchFn).not.toHaveBeenCalled();
+        expect(relayRequests).toHaveLength(0);
+      }
+      if (!desktopBridge) {
+        const local = fetchFn.mock.calls.filter(([url]) =>
+          String(url).includes("/api/observability/v1/traces"),
+        );
+        expect(local).toHaveLength(preAuth ? 0 : 1);
+        if (!preAuth) {
+          expect(new Headers(local[0]?.[1]?.headers).get("x-t3-telemetry-revision")).toBe("local");
+          expect(new TextDecoder().decode(local[0]?.[1]?.body as Uint8Array)).toContain(
+            "local-diagnostic",
+          );
+        }
       }
     },
   );

@@ -1,3 +1,7 @@
+import * as NodePath from "@effect/platform-node/NodePath";
+import * as Path from "effect/Path";
+import * as SubscriptionRef from "effect/SubscriptionRef";
+import { isValidDistroName } from "../wsl/wslPathParsing.ts";
 import * as NodeOS from "node:os";
 
 import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
@@ -688,9 +692,8 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       ...devUrlArgs,
     ],
     preflightFailure: Option.none(),
-    ...(preflight.runtimeId === undefined
-      ? {}
-      : { wslRuntimeId: preflight.runtimeId, wslT3Home: preflight.t3Home }),
+    wslT3Home: preflight.t3Home,
+    ...(preflight.runtimeId === undefined ? {} : { wslRuntimeId: preflight.runtimeId }),
   } satisfies DesktopBackendManager.DesktopBackendStartConfig;
 });
 
@@ -803,13 +806,44 @@ export const make = Effect.gen(function* () {
     resolvePrimary: Effect.gen(function* () {
       const { useWsl, wslRequested } = yield* describePrimary;
       if (useWsl) {
-        return yield* buildWslPrimaryConfig;
+        const config = yield* buildWslPrimaryConfig;
+        let path: string | null = null;
+        if (
+          Option.isNone(config.preflightFailure) &&
+          config.runningDistro &&
+          isValidDistroName(config.runningDistro)
+        ) {
+          const explicitHome = config.wslT3Home;
+          const home =
+            explicitHome ??
+            Option.getOrNull(
+              (yield* wslEnvironment.getUserHome(config.runningDistro)).pipe(
+                Option.map((value) => `${value}/.t3`),
+              ),
+            );
+          if (home) {
+            const stateDir = environment.isDevelopment && !explicitHome ? "dev" : "userdata";
+            const windows = yield* Effect.service(Path.Path).pipe(
+              Effect.provide(NodePath.layerWin32),
+            );
+            path = windows.join(
+              String.raw`\\wsl.localhost`,
+              config.runningDistro,
+              home,
+              stateDir,
+              "settings.json",
+            );
+          }
+        }
+        yield* SubscriptionRef.set(environment.telemetrySettingsPath, path);
+        return config;
       }
       if (wslRequested) {
         yield* Effect.logWarning(
           "WSL-only backend requested but WSL is unavailable; starting the Windows primary instead.",
         );
       }
+      yield* SubscriptionRef.set(environment.telemetrySettingsPath, environment.serverSettingsPath);
       return yield* buildWindowsPrimaryConfig;
     }).pipe(Effect.withSpan("desktop.backendConfiguration.resolvePrimary")),
     resolvePrimaryLabel: Effect.gen(function* () {

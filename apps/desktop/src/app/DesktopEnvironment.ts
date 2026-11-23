@@ -6,6 +6,7 @@ import type {
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -50,6 +51,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly clientSettingsPath: string;
     readonly savedEnvironmentRegistryPath: string;
     readonly serverSettingsPath: string;
+    readonly telemetrySettingsPath: SubscriptionRef.SubscriptionRef<string | null>;
     readonly logDir: string;
     readonly browserArtifactsDir: string;
     readonly rootDir: string;
@@ -203,6 +205,10 @@ const make = Effect.fn("desktop.environment.make")(function* (
     clientSettingsPath: path.join(stateDir, "client-settings.json"),
     savedEnvironmentRegistryPath: path.join(stateDir, "saved-environments.json"),
     serverSettingsPath: path.join(stateDir, "settings.json"),
+    // Windows can start either its native backend or a WSL distro as primary.
+    telemetrySettingsPath: yield* SubscriptionRef.make<string | null>(
+      input.platform === "win32" ? null : path.join(stateDir, "settings.json"),
+    ),
     logDir: path.join(stateDir, "logs"),
     browserArtifactsDir: path.join(stateDir, "browser-artifacts"),
     rootDir,

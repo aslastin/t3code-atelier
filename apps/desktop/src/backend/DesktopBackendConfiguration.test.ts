@@ -10,6 +10,7 @@ import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
 
@@ -460,6 +461,16 @@ describe("DesktopBackendConfiguration", () => {
           assert.equal(config.wslRuntimeId, `sha256-${archiveHash}`);
           assert.equal(config.wslT3Home, t3Home);
           assert.equal(legacyCleanupCount, 1);
+          const env = yield* DesktopEnvironment.DesktopEnvironment;
+          const settings = yield* DesktopAppSettings.DesktopAppSettings;
+          assert.isNull(SubscriptionRef.getUnsafe(env.telemetrySettingsPath));
+          yield* settings.setWslBackendEnabled(true);
+          yield* settings.setWslOnly(true);
+          yield* configuration.resolvePrimary;
+          assert.equal(
+            SubscriptionRef.getUnsafe(env.telemetrySettingsPath),
+            String.raw`\\wsl.localhost\Ubuntu\home\test\.config\t3\userdata\settings.json`,
+          );
           assert.isTrue(Option.isNone(config.preflightFailure));
         }),
     );

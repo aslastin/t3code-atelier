@@ -310,14 +310,14 @@ describe("OtelEnvironment", () => {
         },
       },
       {
-        name: "a desktop bootstrap URL that forwards the setting counts as the setting",
+        name: "a desktop bootstrap URL keeps precedence when the saved setting has the same value",
         otel: withLogs(OtelEnvironment.OtelSignal.Unset()),
         t3Url: undefined,
         bootstrapUrl: " http://settings:4318/v1/logs ",
         expected: {
           url: "http://settings:4318/v1/logs",
           export: t3Export,
-          source: "settings" as const,
+          source: "bootstrap" as const,
         },
       },
     ])("$name", ({ otel, t3Url, bootstrapUrl = "", expected }) => {

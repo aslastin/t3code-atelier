@@ -16,7 +16,11 @@ import { useSettingsScope } from "./SettingsScopeContext";
 import { SettingsSection } from "./settingsLayout";
 import { TelemetryExportSettings } from "./TelemetryExportSettings";
 
-import { saveTelemetryChoice, telemetryTargetIssue } from "./TelemetrySettings.logic";
+import {
+  nextTelemetryChoice,
+  saveTelemetryChoice,
+  telemetryTargetIssue,
+} from "./TelemetrySettings.logic";
 
 const outcomes = {
   unavailable: msg("Unavailable"),
@@ -165,7 +169,7 @@ export function TelemetrySettings() {
           checked={anyOn}
           mixed={mixed}
           disabled={saving || !eligible.some((t) => !t.issue)}
-          onCheckedChange={() => void write(key, !anyOn)}
+          onCheckedChange={() => void write(key, nextTelemetryChoice(eligible, key))}
         />
       </label>
     );

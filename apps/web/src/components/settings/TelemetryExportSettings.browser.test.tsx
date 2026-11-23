@@ -5,6 +5,7 @@ import { userEvent } from "vite-plus/test/browser";
 
 const { state, updateSettings, checkOtlpEndpoint, checkOtlpEndpointCommand } = vi.hoisted(() => ({
   state: {
+    listeners: new Set<() => void>(),
     observability: {} as typeof DEFAULT_SERVER_SETTINGS.observability,
     serverConfig: { environment: { capabilities: {} } } as {
       environment: { capabilities: { otlpEndpointCheck?: boolean } };
@@ -43,17 +44,29 @@ vi.mock(import("../../state/server"), async (original) => {
     } as unknown as typeof actual.serverEnvironment,
   };
 });
-vi.mock(import("./SettingsScopeContext"), async (original) => ({
-  ...(await original()),
-  useSettingsScope: (() => ({
-    scope: { kind: "environment" },
-    environment: {
-      environmentId: "env",
-      label: "MAC1",
-      serverConfig: state.serverConfig,
-    },
-  })) as never,
-}));
+vi.mock(import("./SettingsScopeContext"), async (original) => {
+  const { useSyncExternalStore } = await import("react");
+  const subscribe = (listener: () => void) => {
+    state.listeners.add(listener);
+    return () => {
+      state.listeners.delete(listener);
+    };
+  };
+  return {
+    ...(await original()),
+    useSettingsScope: (() => {
+      const running = useSyncExternalStore(subscribe, () => state.serverConfig.observability);
+      return {
+        scope: { kind: "environment" },
+        environment: {
+          environmentId: "env",
+          label: "MAC1",
+          serverConfig: { ...state.serverConfig, observability: running },
+        },
+      };
+    }) as never,
+  };
+});
 vi.mock(import("./useScopedSettings"), async (original) => ({
   ...(await original()),
   useScopedSettings: ((select: (settings: typeof state) => unknown) => select(state)) as never,
@@ -152,6 +165,50 @@ describe("TelemetryExportSettings", () => {
       environmentId: "env",
       input: { signal: "traces", url: "http://collector/v1/traces" },
     });
+  });
+
+  it("checks the current saved endpoint when permission returns and discards pending manual probes", async () => {
+    setup();
+    const oldUrl = "http://old/v1/traces";
+    const newUrl = "http://new/v1/traces";
+    const manualUrl = "http://draft/v1/traces";
+    state.observability = { ...DEFAULT_SERVER_SETTINGS.observability, otlpTracesUrl: oldUrl };
+    const disabled = {
+      ...activeExport,
+      telemetry: { ...activeExport.telemetry!, otlp: "off" as const },
+    };
+    state.serverConfig = {
+      environment: { capabilities: { otlpEndpointCheck: true } },
+      observability: disabled,
+    };
+    await using screen = await render(<TelemetryExportSettings />);
+    expect(checkOtlpEndpoint).not.toHaveBeenCalled();
+    state.observability = { ...state.observability, otlpTracesUrl: newUrl };
+    state.serverConfig.observability = activeExport;
+    for (const listener of state.listeners) listener();
+    await screen.rerender(<TelemetryExportSettings />);
+    await expect.element(screen.getByText("Connected · 12 ms")).toBeInTheDocument();
+    expect(checkOtlpEndpoint).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "env",
+      input: { signal: "traces", url: newUrl },
+    });
+    const pending = Promise.withResolvers<Awaited<ReturnType<typeof checkOtlpEndpoint>>>();
+    checkOtlpEndpoint.mockReturnValueOnce(pending.promise);
+    await userEvent.fill(screen.getByRole("textbox", { name: "Traces endpoint" }), manualUrl);
+    await userEvent.click(screen.getByRole("button", { name: "Test" }).first());
+    state.serverConfig.observability = disabled;
+    for (const listener of state.listeners) listener();
+    await screen.rerender(<TelemetryExportSettings />);
+    state.serverConfig.observability = activeExport;
+    for (const listener of state.listeners) listener();
+    await screen.rerender(<TelemetryExportSettings />);
+    pending.resolve({ _tag: "Success", value: { _tag: "Accepted", latencyMs: 800 } });
+    expect(checkOtlpEndpoint.mock.calls.map(([request]) => request)).toEqual(
+      [newUrl, manualUrl, newUrl].map((url) => ({
+        environmentId: "env",
+        input: { signal: "traces", url },
+      })),
+    );
   });
 
   it("can test a corrected URL and reports only the latest attempt when a URL is reused", async () => {

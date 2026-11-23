@@ -1,5 +1,9 @@
 import { expect, it } from "vite-plus/test";
-import { saveTelemetryChoice, telemetryTargetIssue } from "./TelemetrySettings.logic";
+import {
+  nextTelemetryChoice,
+  saveTelemetryChoice,
+  telemetryTargetIssue,
+} from "./TelemetrySettings.logic";
 
 it("reports individual results when applying a switch to several environments", async () => {
   const preferences = { enabled: true, analytics: true, connect: true, otlp: false };
@@ -12,6 +16,12 @@ it("reports individual results when applying a switch to several environments", 
     { connected: true, status, writable: true, reply: preferences },
     { connected: true, status, writable: true },
   ];
+  const selection = [
+    { status, issue: "denied" as const },
+    { status: { ...status, preferences: { ...preferences, enabled: false } }, issue: undefined },
+  ];
+  expect(nextTelemetryChoice(selection, "enabled")).toBe(true);
+  expect(nextTelemetryChoice([{ status, issue: undefined }, ...selection], "enabled")).toBe(false);
   const requests: number[] = [];
   const result = await Promise.all(
     hosts.map((host, index) =>
