@@ -244,6 +244,13 @@ describe("searchSettings", () => {
 
 describe("settings search targets", () => {
   it("finds telemetry controls for a single environment or all environments", () => {
+    expect(SETTINGS_NAV_GROUPS.flatMap((group) => group.paths)).toContain("/settings/diagnostics");
+    const translate = (message: string) => (message === "Diagnostics" ? "診断" : message);
+    expect(searchSettings("診断", SETTINGS_SEARCH_ITEMS, translate)[0]).toMatchObject({
+      id: "diagnostics",
+      to: "/settings/diagnostics",
+    });
+    expect(getSettingsSearchTargetScope("diagnostics")).toBeNull();
     const result = searchSettings("OpenTelemetry export").find(
       (item) => item.id === "telemetry-export",
     )!;

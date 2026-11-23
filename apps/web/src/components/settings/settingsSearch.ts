@@ -54,7 +54,8 @@ export interface SettingsSearchItem {
   readonly id: string;
   readonly title: string;
   readonly to: SettingsPath;
-  readonly targetId?: string;
+  /** Defaults to the result id. Use null to open a page without focusing a row. */
+  readonly targetId?: string | null;
   readonly searchTerms?: ReadonlyArray<string>;
   readonly scope?: SettingsSearchScope;
   readonly desktopOnly?: boolean;
@@ -172,7 +173,13 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   {
     heading: msg("More"),
     headingHidden: true,
-    paths: ["/settings/maintenance", "/settings/labs", "/settings/about", "/settings/archived"],
+    paths: [
+      "/settings/maintenance",
+      "/settings/diagnostics",
+      "/settings/labs",
+      "/settings/about",
+      "/settings/archived",
+    ],
   },
 ];
 
@@ -985,6 +992,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "telemetry-export",
     scope: "environment-defaults",
     searchTerms: [
+      msg("What to send"),
       msg("OpenTelemetry export"),
       msg("OpenTelemetry OTLP PostHog Axiom T3 Connect traces metrics logs"),
     ],
@@ -992,7 +1000,8 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "diagnostics",
     title: msg("Diagnostics"),
-    to: "/settings/maintenance",
+    to: "/settings/diagnostics",
+    targetId: null,
     searchTerms: [msg("logs traces processes resource history failures spans cpu memory")],
   },
   {
@@ -1556,7 +1565,7 @@ export function getSettingsSearchTargetScope(targetId: string) {
   const item =
     items.find((candidate) => candidate.id === targetId) ??
     items.find((candidate) => candidate.targetId === targetId);
-  return item
+  return item && item.targetId !== null
     ? {
         title: item.title,
         scope: item.scope ?? SETTINGS_CATEGORY_SCOPES[item.to],
@@ -1683,12 +1692,13 @@ export function searchSettings(
 
   return settingsForThisPlatform(items)
     .flatMap((item, index) => {
-      const title = normalizeSearchText(decodeMsg(item.title));
-      const fields = [
-        title,
-        normalizeSearchText(SETTINGS_SECTION_LABELS[item.to]),
-        // The labels as displayed, so search also works in the active language.
+      const titles = [
+        normalizeSearchText(decodeMsg(item.title)),
         normalizeSearchText(translate(item.title)),
+      ];
+      const fields = [
+        ...titles,
+        normalizeSearchText(SETTINGS_SECTION_LABELS[item.to]),
         normalizeSearchText(translate(SETTINGS_SECTION_LABELS[item.to])),
         ...(item.searchTerms ?? []).map(normalizeSearchText),
         ...(item.searchTerms ?? []).map((term) => normalizeSearchText(translate(term))),
@@ -1696,18 +1706,17 @@ export function searchSettings(
       if (!queryTokens.every((token) => fields.some((field) => field.includes(token)))) return [];
 
       const exactPhraseField = fields.findIndex((field) => field.includes(normalizedQuery));
-      const rank =
-        title === normalizedQuery
-          ? 5
-          : title.startsWith(normalizedQuery)
-            ? 4
-            : title.includes(normalizedQuery)
-              ? 3
-              : queryTokens.every((token) => title.includes(token))
-                ? 2
-                : exactPhraseField >= 0
-                  ? 1
-                  : 0;
+      const rank = titles.includes(normalizedQuery)
+        ? 5
+        : titles.some((title) => title.startsWith(normalizedQuery))
+          ? 4
+          : titles.some((title) => title.includes(normalizedQuery))
+            ? 3
+            : titles.some((title) => queryTokens.every((token) => title.includes(token)))
+              ? 2
+              : exactPhraseField >= 0
+                ? 1
+                : 0;
       return [{ item, index, rank }];
     })
     .toSorted(

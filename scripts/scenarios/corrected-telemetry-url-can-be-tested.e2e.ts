@@ -7,7 +7,7 @@ import { environmentId, runPromise, test, WEB } from "./t3.ts";
 test(
   "The corrected traces endpoint can be tested while the previous URL is still checking",
   WEB,
-  async ({ t3, app, browser }) => {
+  async ({ t3, app, browser, screen }) => {
     const firstProbe = Promise.withResolvers<void>();
     let slowProbeClosed = false;
     const collector = NodeHttp.createServer((request, response) => {
@@ -29,9 +29,11 @@ test(
 
       await t3.project("demo");
       const environment = await runPromise(environmentId(app.baseUrl ?? ""));
-      await t3.open(
-        `/settings/diagnostics?machine=${encodeURIComponent(environment)}#telemetry-export`,
-      );
+      await t3.open(`/settings/general?machine=${encodeURIComponent(environment)}`);
+      const diagnostics = screen.getByRole("button", "Diagnostics", { exact: true });
+      await screen.getByRole("button", "General", { exact: true }).waitFor();
+      expect(await diagnostics.isVisible(), "Diagnostics is in the settings sidebar").toBe(true);
+      await diagnostics.tap();
 
       const traces = browser.locator("#otlpTracesUrl");
       const exportSection = browser.locator("#telemetry-export");
