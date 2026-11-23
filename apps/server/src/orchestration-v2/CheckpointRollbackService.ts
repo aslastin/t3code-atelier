@@ -25,10 +25,13 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import type * as ServerConfig from "../config.ts";
 import type * as ServerSettings from "../serverSettings.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
-import { worktreeRootForProject } from "../workspace/worktreeProjectPath.ts";
+import {
+  restoreWorktreeProjectFolder,
+  worktreeRootForProject,
+} from "../workspace/worktreeProjectPath.ts";
 import * as TaskFolders from "../workspace/TaskFolders.ts";
 import {
-  withCheckpointRestoreReservation,
+  withExclusiveWorkspaceReservation,
   withWorkspaceLease,
 } from "../workspace/workspaceLease.ts";
 import {
@@ -358,6 +361,16 @@ export const layer: Layer.Layer<
 
       if (restoreFiles && !(yield* isolated())) return yield* sharedWorkspace();
 
+      if (
+        restoreFiles &&
+        folder !== null &&
+        worktreePath !== null &&
+        worktreePath !== folder &&
+        (yield* fileSystem.exists(path.join(worktreePath, ".git")))
+      ) {
+        yield* restoreWorktreeProjectFolder(fileSystem, path, worktreePath, folder);
+      }
+
       // Before the provider conversation changes: a rewind with nothing to restore is refused.
       const readable =
         restoreFiles && taskFolder !== null
@@ -613,7 +626,7 @@ export const layer: Layer.Layer<
           // slow provider rollback for nothing.
           yield* input.restoreFiles === false
             ? rollback
-            : withCheckpointRestoreReservation(fileSystem, path, worktreePath, rollback);
+            : withExclusiveWorkspaceReservation(fileSystem, path, worktreePath, rollback);
         },
         (effect, input) =>
           effect.pipe(

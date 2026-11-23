@@ -64,6 +64,7 @@ import {
   normalizeThreadPullRequestKey,
   threadPullRequestKeyOf,
 } from "../sourceControl/threadPullRequests.ts";
+import { worktreeProjectFolder } from "../workspace/worktreeProjectPath.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 
 import { GitManagerError, GitPullRequestMaterializationError } from "@t3tools/contracts";
@@ -3397,7 +3398,7 @@ export const make = Effect.gen(function* () {
     };
     return yield* Effect.gen(function* () {
       const normalizedReference = normalizePullRequestReference(input.reference);
-      const rootWorktreePath = yield* canonicalizeExistingPath(input.cwd);
+
       const pullRequestSummary = yield* (yield* sourceControlProvider(input.cwd)).getChangeRequest({
         cwd: input.cwd,
         reference: normalizedReference,
@@ -3428,6 +3429,23 @@ export const make = Effect.gen(function* () {
         };
       }
 
+      const sourceFolder = yield* canonicalizeExistingPath(input.cwd);
+      const rootWorktreePath = (yield* fileSystem
+        .exists(path.join(sourceFolder, ".git"))
+        .pipe(Effect.orElseSucceed(() => false)))
+        ? sourceFolder
+        : yield* gitCore
+            .execute({
+              operation: "GitManager.preparePullRequestThread.repositoryRoot",
+              cwd: sourceFolder,
+              args: ["rev-parse", "--show-toplevel"],
+            })
+            .pipe(Effect.flatMap((result) => canonicalizeExistingPath(result.stdout.trimEnd())));
+      const projectRelative = path.relative(rootWorktreePath, sourceFolder);
+      const projectFolderIn = (checkout: string) =>
+        worktreeProjectFolder(fileSystem, path, projectRelative, checkout).pipe(
+          Effect.map((folder) => folder ?? checkout),
+        );
       const ensureExistingWorktreeUpstream = Effect.fn("ensureExistingWorktreeUpstream")(function* (
         worktreePath: string,
       ) {
@@ -3473,7 +3491,7 @@ export const make = Effect.gen(function* () {
           return {
             pullRequest,
             branch: localPullRequestBranch,
-            worktreePath,
+            worktreePath: yield* projectFolderIn(worktreePath),
             isOnPullRequestHead: false,
           };
         }
@@ -3536,14 +3554,15 @@ export const make = Effect.gen(function* () {
         );
 
         // Setup can disrupt other threads using this worktree; rerun only when the checkout moved.
+        const projectFolder = yield* projectFolderIn(worktreePath);
         if (refreshed.moved) {
-          yield* maybeRunSetupScript(worktreePath);
+          yield* maybeRunSetupScript(projectFolder);
         }
 
         return {
           pullRequest,
           branch: localPullRequestBranch,
-          worktreePath,
+          worktreePath: projectFolder,
           isOnPullRequestHead: refreshed.onTarget,
         };
       });
@@ -3664,6 +3683,7 @@ export const make = Effect.gen(function* () {
           },
           {
             ...(onWorktreeClaimed ? { progress: { onWorktreeClaimed } } : {}),
+            repositoryRoot: rootWorktreePath,
             ...(yield* readWorktreeCreationSettings),
             submodules: yield* projectSettingsFor(input).pipe(
               Effect.map(({ settings }) => settings.worktreeSubmodules),
@@ -3716,11 +3736,12 @@ export const make = Effect.gen(function* () {
             Effect.asVoid,
           ),
         );
-        yield* maybeRunSetupScript(worktree.worktree.path);
+        const projectFolder = worktree.worktree.projectPath ?? worktree.worktree.path;
+        yield* maybeRunSetupScript(projectFolder);
         return {
           pullRequest,
           branch: worktree.worktree.refName,
-          worktreePath: worktree.worktree.path,
+          worktreePath: projectFolder,
           isOnPullRequestHead,
         };
       }
@@ -3755,12 +3776,13 @@ export const make = Effect.gen(function* () {
 
       const worktree = yield* createPullRequestWorktree();
       yield* ensureExistingWorktreeUpstream(worktree.worktree.path);
-      yield* maybeRunSetupScript(worktree.worktree.path);
+      const projectFolder = worktree.worktree.projectPath ?? worktree.worktree.path;
+      yield* maybeRunSetupScript(projectFolder);
 
       return {
         pullRequest,
         branch: worktree.worktree.refName,
-        worktreePath: worktree.worktree.path,
+        worktreePath: projectFolder,
         isOnPullRequestHead: true,
       };
     }).pipe(

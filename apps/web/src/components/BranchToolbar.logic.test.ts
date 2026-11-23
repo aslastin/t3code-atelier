@@ -285,6 +285,18 @@ describe("resolveBranchSelectionTarget", () => {
     }
   });
 
+  it("keeps the project folder when picking the current worktree branch", () => {
+    expect(
+      resolveBranchSelectionTarget({
+        activeProjectCwd: "/repo/my-project",
+        activeProjectCheckoutRoot: "/repo",
+        activeCheckoutRoot: "/worktree",
+        activeWorktreePath: "/worktree/my-project",
+        refName: { isDefault: false, worktreePath: "/worktree" },
+      }),
+    ).toMatchObject({ nextWorktreePath: "/worktree/my-project", staysInActiveCheckout: true });
+  });
+
   it("keeps checkout in the current worktree for non-default refs", () => {
     expect(
       resolveBranchSelectionTarget({

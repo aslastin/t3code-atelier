@@ -14,7 +14,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 import { isWithinRoot } from "./KnownWorkspaces.ts";
 import { withWorkspaceLease } from "./workspaceLease.ts";
-import { worktreeRootForProject } from "./worktreeProjectPath.ts";
+import { restoreWorktreeProjectFolder, worktreeRootForProject } from "./worktreeProjectPath.ts";
 import * as TaskFolders from "./TaskFolders.ts";
 import { TerminalCwdRecovery } from "../terminal/Manager.ts";
 
@@ -255,6 +255,7 @@ export const makeRestoreMissingWorktree = Effect.gen(function* () {
     });
     yield* (leftover ? clearLeftovers(worktreePath) : Effect.void).pipe(
       Effect.andThen(recreateMissingWorktree({ cwd: project.workspaceRoot, worktreePath, branch })),
+      Effect.andThen(restoreWorktreeProjectFolder(fileSystem, path, worktreePath, folder)),
       Effect.mapError((cause) =>
         cause._tag === "WorktreeRecreateNoBaseError"
           ? cause

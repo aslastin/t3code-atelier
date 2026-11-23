@@ -529,7 +529,12 @@ it.layer(
           Effect.succeed({
             id: ThreadId.make("thread-1"),
             projectId: ProjectId.make("project-1"),
-            worktreePath: location === "no-worktree" ? null : threadFolder,
+            worktreePath:
+              location === "no-worktree"
+                ? null
+                : subfolder
+                  ? threadFolder + path.sep
+                  : threadFolder,
             branch: "feature",
           }),
         ).pipe(
@@ -550,7 +555,9 @@ it.layer(
                   Effect.gen(function* () {
                     assert.equal(input.path, worktreePath);
                     creations++;
-                    yield* fs.makeDirectory(cwd, { recursive: true }).pipe(Effect.orDie);
+                    yield* fs
+                      .makeDirectory(subfolder ? worktreePath : cwd, { recursive: true })
+                      .pipe(Effect.orDie);
                     const cleanup = yield* withWorkspaceLease(
                       worktreePath,
                       Effect.sync(() => {

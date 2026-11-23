@@ -34,6 +34,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import { withSharedWorkspaceReservation } from "../workspace/workspaceLease.ts";
 import { relativeProjectFolder, worktreeProjectFolder } from "../workspace/worktreeProjectPath.ts";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -1533,6 +1534,9 @@ const make = Effect.gen(function* () {
                 commandId: input.commandId,
                 threadId: candidateThreadId,
                 expectedEmpty: true,
+                ...(initialWorktreePath === null
+                  ? {}
+                  : { worktreePath: initialWorktreePath, branch: initialBranch }),
               })
             : threads.dispatch({
                 type: "thread.create",
@@ -1558,7 +1562,31 @@ const make = Effect.gen(function* () {
                   ? {}
                   : { initialMessage: { ...initialMessage, workspaceStrategy } }),
               });
-        const claim = yield* Effect.result(claimDispatch);
+        const bindExisting =
+          input.workspaceStrategy.type === "existing_worktree" &&
+          initialWorktreePath !== null &&
+          !initialMessage?.sourcePlanRef &&
+          Option.isNone(launchReceipt);
+        const claim = bindExisting
+          ? yield* withSharedWorkspaceReservation(
+              fs,
+              path,
+              initialWorktreePath,
+              Effect.gen(function* () {
+                const available = yield* fs.stat(initialWorktreePath).pipe(
+                  Effect.map((info) => info.type === "Directory"),
+                  Effect.orElseSucceed(() => false),
+                );
+                if (!available)
+                  return yield* mapError(
+                    input,
+                    "provision-worktree",
+                    candidateThreadId,
+                  )("The selected worktree folder no longer exists.");
+                return yield* Effect.result(claimDispatch);
+              }),
+            )
+          : yield* Effect.result(claimDispatch);
         if (claim._tag === "Failure") {
           const failure = mapError(
             input,

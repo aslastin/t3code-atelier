@@ -62,7 +62,10 @@ import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import { isNonRepositoryGitStderr } from "./vcs/GitVcsDriverCore.ts";
 import { isLinkedWorktree, removeLinkedWorktree } from "./vcs/worktreeRemoval.ts";
 import * as TaskFolders from "./workspace/TaskFolders.ts";
-import { withWorkspaceLease } from "./workspace/workspaceLease.ts";
+import {
+  withWorkspaceLease,
+  withExclusiveWorkspaceReservation,
+} from "./workspace/workspaceLease.ts";
 import { worktreeRootForProject } from "./workspace/worktreeProjectPath.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
@@ -391,61 +394,109 @@ const make = Effect.gen(function* () {
     });
     return { canonical, occupies };
   };
-  const worktreeThreadIds = Effect.fn("StorageCleanup.worktreeThreadIds")(
-    function* (folder: string, projectCwd?: string) {
-      const target = path.resolve(projectCwd ?? "", folder);
-      const taskFolder = yield* taskFolders.find(target);
-      const root =
-        taskFolder?.root ??
-        (projectCwd === undefined
-          ? ((yield* gitWorkflow.repositoryRoot(target)) ?? target)
-          : yield* worktreeRootForProject(fs, path, target, projectCwd));
-      const { canonical, occupies } = worktreePathsForCheck();
-      const paths = [root, yield* canonical(root)];
-      const bindings = yield* projections.getThreadWorktreePaths({ includeArchived: true });
-      const occupants = yield* Effect.filter(bindings, (binding) =>
-        occupies(paths, binding.worktreePath),
-      );
-      return occupants.map((binding) => binding.threadId);
-    },
-    (effect, folder, _projectCwd?: string) =>
-      Effect.mapError(
-        effect,
-        (cause) =>
-          new GitCommandError({
-            operation: "StorageCleanup.worktreeThreadIds",
-            cwd: folder,
-            command: "git worktree remove",
-            detail: "Could not check which threads use this worktree.",
-            cause,
-          }),
-      ),
-  );
+  const removalRoot = Effect.fn("StorageCleanup.removalRoot")(function* (
+    folder: string,
+    projectCwd?: string,
+  ) {
+    const target = path.resolve(projectCwd ?? "", folder);
+    const taskFolder = yield* taskFolders.find(target);
+    return (
+      taskFolder?.root ??
+      (projectCwd === undefined
+        ? ((yield* gitWorkflow.repositoryRoot(target)) ?? target)
+        : yield* worktreeRootForProject(fs, path, target, projectCwd))
+    );
+  });
+  const boundThreads = Effect.fn("StorageCleanup.boundThreads")(function* (root: string) {
+    const { canonical, occupies } = worktreePathsForCheck();
+    const paths = [root, yield* canonical(root)];
+    const bindings = yield* projections.getThreadWorktreePaths({ includeArchived: true });
+    const occupants = yield* Effect.filter(bindings, (binding) =>
+      occupies(paths, binding.worktreePath),
+    );
+    return occupants.map((binding) => binding.threadId);
+  });
+  const checkFailed = (cwd: string) => (cause: unknown) =>
+    new GitCommandError({
+      operation: "StorageCleanup.worktreeThreadIds",
+      cwd,
+      command: "git worktree remove",
+      detail: "Could not check which threads use this worktree.",
+      cause,
+    });
+  const worktreeThreadIds = Effect.fn("StorageCleanup.worktreeThreadIds")(function* (
+    folder: string,
+    projectCwd?: string,
+  ) {
+    return yield* Effect.gen(function* () {
+      const root = yield* removalRoot(folder, projectCwd);
+      const threadIds = yield* boundThreads(root);
+      const paths = [root, yield* worktreePathsForCheck().canonical(root)];
+      for (const project of yield* projectStore.listShells()) {
+        if (!(yield* containsProjectRoot(paths, [project]))) continue;
+        const snapshot = yield* projections.getShellSnapshot({ projectId: project.id });
+        for (const thread of [...snapshot.threads, ...snapshot.archivedThreads]) {
+          if (thread.worktreePath === null) threadIds.push(thread.id);
+        }
+      }
+      return threadIds;
+    }).pipe(Effect.mapError(checkFailed(folder)));
+  });
+
+  const withCleanupLease = <A, E, R>(
+    root: string,
+    effect: Effect.Effect<A, E, R>,
+    protectedRoot = root,
+  ) => withExclusiveWorkspaceReservation(fs, path, protectedRoot, withWorkspaceLease(root, effect));
 
   const removeWorktree = Effect.fn("StorageCleanup.removeWorktree")(function* (
     input: VcsRemoveWorktreeInput,
   ) {
-    if (input.onlyIfUnused && (yield* worktreeThreadIds(input.path, input.cwd)).length > 0)
-      return yield* new GitCommandError({
-        operation: "StorageCleanup.removeWorktree",
-        cwd: input.cwd,
-        command: "git worktree remove",
-        detail: "Another thread uses this worktree.",
-      });
-    const removed = yield* taskFolders
-      .removeIfTaskFolder({ path: input.path, force: input.force === true })
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new GitCommandError({
-              operation: "TaskFolders.remove",
-              command: "git worktree remove",
-              cwd: input.cwd,
-              detail: cause.detail,
-            }),
-        ),
-      );
-    if (!removed) yield* gitWorkflow.removeWorktree(input);
+    const remove = Effect.gen(function* () {
+      const removed = yield* taskFolders
+        .removeIfTaskFolder({ path: input.path, force: input.force === true })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new GitCommandError({
+                operation: "TaskFolders.remove",
+                command: "git worktree remove",
+                cwd: input.cwd,
+                detail: cause.detail,
+              }),
+          ),
+        );
+      if (!removed) yield* gitWorkflow.removeWorktree(input);
+    });
+    if (!input.onlyIfUnused) return yield* remove;
+    const root = yield* removalRoot(input.path, input.cwd).pipe(
+      Effect.mapError(checkFailed(input.cwd)),
+    );
+    return yield* withCleanupLease(
+      root,
+      Effect.gen(function* () {
+        const refuse = (detail: string) =>
+          new GitCommandError({
+            operation: "StorageCleanup.removeWorktree",
+            cwd: input.cwd,
+            command: "git worktree remove",
+            detail,
+          });
+        if ((yield* boundThreads(root).pipe(Effect.mapError(checkFailed(input.cwd)))).length > 0)
+          return yield* refuse("Another thread uses this worktree.");
+        const projects = yield* projectStore
+          .listShells()
+          .pipe(Effect.mapError(checkFailed(input.cwd)));
+        if (
+          yield* containsProjectRoot(
+            [root, yield* worktreePathsForCheck().canonical(root)],
+            projects,
+          )
+        )
+          return yield* refuse("A project uses this worktree.");
+        yield* remove;
+      }),
+    );
   });
   // pnpm imports packages by clone or reflink when its store shares a device
   // with the worktree. Those files have one link but share blocks with the
@@ -1594,7 +1645,7 @@ const make = Effect.gen(function* () {
           if (blocked !== null) return keep(blocked);
           const inspection = yield* measureWorktree(worktreePath, "plain-folder");
           if (inspection.reason !== null) return keep(inspection.reason);
-          return yield* withWorkspaceLease(
+          return yield* withCleanupLease(
             worktreePath,
             Effect.gen(function* () {
               // Walked again under the lease: a repository deleted with the folder is gone for good.
@@ -1626,7 +1677,7 @@ const make = Effect.gen(function* () {
           if (!eligible) return keep(notDueReason);
           const blockedTaskFolder = yield* blockedSinceCheck();
           if (blockedTaskFolder !== null) return keep(blockedTaskFolder);
-          return yield* withWorkspaceLease(
+          return yield* withCleanupLease(
             worktreePath,
             Effect.gen(function* () {
               const blockedSinceLease = yield* blockedSinceCheck();
@@ -1675,6 +1726,7 @@ const make = Effect.gen(function* () {
                 kept: result.kept.length,
               });
             }),
+            guardedPath,
           );
         }
         const pathReason = yield* worktreePathReason(worktreePath);
@@ -1803,7 +1855,7 @@ const make = Effect.gen(function* () {
         const inspection = yield* measureWorktree(worktreePath, true);
         if (inspection.reason !== null) return keep(inspection.reason);
         const bytes = inspection.bytes;
-        yield* withWorkspaceLease(
+        yield* withCleanupLease(
           worktreePath,
           Effect.gen(function* () {
             const pathReason = yield* worktreePathReason(worktreePath);

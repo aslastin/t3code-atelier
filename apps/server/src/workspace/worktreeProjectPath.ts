@@ -2,6 +2,8 @@ import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 
+import { WorkspacePathOutsideRootError } from "./WorkspacePaths.ts";
+
 export const relativeProjectFolder = Effect.fn("relativeProjectFolder")(function* (
   fs: FileSystem.FileSystem,
   path: Path.Path,
@@ -36,7 +38,16 @@ export const worktreeRootForProject = Effect.fn("worktreeRootForProject")(
     projectCwd: string | Effect.Effect<string | undefined>,
     isManagedRoot?: (candidate: string) => Effect.Effect<boolean>,
   ) {
-    if (path.resolve(folder) !== folder) return folder;
+    const resolved = path.resolve(folder);
+    if (resolved !== folder) {
+      const trailing = folder.slice(resolved.length);
+      if (
+        !folder.startsWith(resolved) ||
+        ![...trailing].every((char) => char === "/" || char === path.sep)
+      )
+        return folder;
+      folder = resolved;
+    }
     const hasGit = (dir: string) => fs.exists(path.join(dir, ".git"));
     if (yield* hasGit(folder)) return folder;
     const cwd = typeof projectCwd === "string" ? projectCwd : yield* projectCwd;
@@ -59,3 +70,29 @@ export const worktreeRootForProject = Effect.fn("worktreeRootForProject")(
   },
   (effect, _fs, _path, folder) => effect.pipe(Effect.orElseSucceed(() => folder)),
 );
+
+export const restoreWorktreeProjectFolder = Effect.fn("restoreWorktreeProjectFolder")(function* (
+  fs: FileSystem.FileSystem,
+  path: Path.Path,
+  root: string,
+  folder: string,
+) {
+  const relative = path.relative(root, folder);
+  if (!relative) return;
+  const outside = () =>
+    new WorkspacePathOutsideRootError({ workspaceRoot: root, relativePath: relative });
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+    return yield* outside();
+  const realRoot = yield* fs.realPath(root);
+  let current = realRoot;
+  // A branch can replace any ancestor of the missing directory with a symlink.
+  for (const part of relative.split(path.sep)) {
+    current = path.join(current, part);
+    if (!(yield* fs.exists(current))) yield* fs.makeDirectory(current);
+    if (
+      path.relative(current, yield* fs.realPath(current)) !== "" ||
+      (yield* fs.stat(current)).type !== "Directory"
+    )
+      return yield* outside();
+  }
+});

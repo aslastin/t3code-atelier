@@ -623,8 +623,8 @@ it.effect("a launch binds only an existing checkout that is one of the project's
       });
     }
     expect(launched.map((launch) => launch.workspaceStrategy)).toEqual([
-      { type: "existing_worktree", worktreePath: worktree },
-      { type: "existing_worktree", worktreePath: repo },
+      { type: "existing_worktree", worktreePath: threadFolder },
+      { type: "existing_worktree", worktreePath: projectFolder },
       { type: "existing_worktree", worktreePath: threadFolder },
     ]);
 

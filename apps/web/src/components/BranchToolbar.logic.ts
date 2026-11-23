@@ -340,6 +340,7 @@ export function resolveConfirmedSelectedRef(
 export function resolveBranchSelectionTarget(input: {
   activeProjectCwd: string;
   activeProjectCheckoutRoot?: string | undefined;
+  activeCheckoutRoot?: string | undefined;
   activeWorktreePath: string | null;
   refName: Pick<VcsRef, "isDefault" | "worktreePath">;
 }): {
@@ -356,7 +357,17 @@ export function resolveBranchSelectionTarget(input: {
       input.activeProjectCheckoutRoot === undefined
         ? workspaceRelativeFilePath(activeProjectCwd, refName.worktreePath) !== null
         : workspaceRelativeFilePath(input.activeProjectCheckoutRoot, refName.worktreePath) === ".";
-    const nextWorktreePath = isProjectCheckout ? null : refName.worktreePath;
+    const activeRoot = input.activeCheckoutRoot;
+    const sameWorktree =
+      activeWorktreePath !== null &&
+      (activeRoot === undefined
+        ? workspaceRelativeFilePath(activeWorktreePath, refName.worktreePath) !== null
+        : workspaceRelativeFilePath(activeRoot, refName.worktreePath) === ".");
+    const nextWorktreePath = isProjectCheckout
+      ? null
+      : sameWorktree
+        ? activeWorktreePath
+        : refName.worktreePath;
     return {
       checkoutCwd: refName.worktreePath,
       nextWorktreePath,

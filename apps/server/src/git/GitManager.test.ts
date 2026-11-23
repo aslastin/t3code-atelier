@@ -7236,6 +7236,12 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
       yield* initRepo(repoDir);
+      const project = NodePath.join(repoDir, "my-project");
+      NodeFS.mkdirSync(project);
+      NodeFS.writeFileSync(NodePath.join(project, "README.md"), "project");
+      yield* runGit(repoDir, ["add", "."]);
+      yield* runGit(repoDir, ["commit", "-m", "Add project"]);
+      let setupCwd: string | undefined;
       const remoteDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
       yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
@@ -7259,27 +7265,30 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           },
         },
         setupScriptRunner: {
-          runForThread: (input) =>
-            Effect.fail(
+          runForThread: (input) => {
+            setupCwd = input.worktreePath;
+            return Effect.fail(
               new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
                 threadId: input.threadId,
                 worktreePath: input.worktreePath,
                 operation: "openTerminal",
                 cause: new Error("terminal start failed"),
               }),
-            ),
+            );
+          },
         },
       });
 
       const result = yield* preparePullRequestThread(manager, {
-        cwd: repoDir,
+        cwd: project,
         reference: "184",
         mode: "worktree",
         threadId: asThreadId("thread-pr-setup-failure"),
       });
 
       expect(result.branch).toBe("feature/pr-setup-failure");
-      expect(result.worktreePath).not.toBeNull();
+      expect(result.worktreePath).toBe(setupCwd);
+      expect(NodePath.basename(result.worktreePath!)).toBe("my-project");
       expect(NodeFS.existsSync(result.worktreePath as string)).toBe(true);
     }),
   );

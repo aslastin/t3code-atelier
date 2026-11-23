@@ -42,6 +42,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import { withExclusiveWorkspaceReservation } from "../workspace/workspaceLease.ts";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -1880,6 +1881,52 @@ it.live.each(["present", "excluded"] as const)(
         }).pipe(Effect.provide(launch.layer));
       }),
     ),
+);
+
+it.live("refuses to bind an existing checkout removed during launch", () =>
+  withRealGitRepo(({ cwd, command, worktreePath, harness }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* command(cwd, ["commit", "--allow-empty", "-m", "initial"]);
+      yield* command(cwd, ["worktree", "add", "-b", "feature", worktreePath]);
+      const selecting = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const test = harness({
+        git: { repositoryRoot: () => Deferred.succeed(selecting, undefined).pipe(Effect.as(cwd)) },
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const removalEntered = yield* Deferred.make<void>();
+        const removal = yield* withExclusiveWorkspaceReservation(
+          fs,
+          path,
+          worktreePath,
+          Effect.gen(function* () {
+            yield* Deferred.succeed(removalEntered, undefined);
+            yield* Deferred.await(release);
+            yield* command(cwd, ["worktree", "remove", worktreePath]);
+          }),
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(removalEntered);
+        const launch = yield* launches
+          .launch(
+            launchInput({
+              command: "launch:during-removal",
+              thread: "thread:removed",
+              workspace: { type: "existing_worktree", worktreePath },
+            }),
+          )
+          .pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(selecting);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(removal);
+        assert.isTrue(Result.isFailure(yield* Fiber.join(launch)));
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        assert.isNull(yield* threads.getThreadShell(ThreadId.make("thread:removed")));
+      }).pipe(Effect.provide(test.layer));
+    }),
+  ),
 );
 
 it.effect("re-bases a stored base that no longer exists on the remote default branch", () =>

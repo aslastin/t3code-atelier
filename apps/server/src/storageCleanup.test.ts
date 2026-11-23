@@ -2194,6 +2194,26 @@ describe("orphan worktree reports", () => {
         );
         expect(removal.detail).toBe("Another thread uses this worktree.");
         expect(yield* fixture.fs.exists(threadFolder)).toBe(true);
+        fixture.setThreads([]);
+        const sibling = `${fixture.worktree}/sibling`;
+        yield* fixture.fs.makeDirectory(sibling);
+        yield* fixture.fs.writeFileString(`${sibling}/draft`, "unsaved");
+        fixture.setProjectRoots([projectFolder, sibling]);
+        const localThread = ThreadId.make("sibling-local-thread");
+        fixture.setThreads([
+          shell({ id: localThread, projectId: ProjectId.make("project-2"), worktreePath: null }),
+        ]);
+        expect(yield* fixture.service.worktreeThreadIds(threadFolder)).toEqual([localThread]);
+        const protectedProject = yield* Effect.flip(
+          fixture.service.removeWorktree({
+            cwd: projectFolder,
+            path: threadFolder,
+            force: true,
+            onlyIfUnused: true,
+          }),
+        );
+        expect(protectedProject.detail).toContain("project");
+        expect(yield* fixture.fs.readFileString(`${sibling}/draft`)).toBe("unsaved");
       }),
     ),
   );

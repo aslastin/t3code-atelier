@@ -52,7 +52,7 @@ import * as PreviewAgentActivity from "../preview/PreviewAgentActivity.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import {
-  withCheckpointRestoreReservation,
+  withExclusiveWorkspaceReservation,
   withWorkspaceLease,
 } from "../workspace/workspaceLease.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
@@ -2976,7 +2976,7 @@ effectIt.effect.each([
       );
       // The reservation CheckpointRollbackServiceV2.execute holds around its
       // isolation check, provider rollback, and git restore of `restorePath`.
-      const restore = yield* withCheckpointRestoreReservation(
+      const restore = yield* withExclusiveWorkspaceReservation(
         fileSystem,
         yield* Path.Path,
         restorePath,
