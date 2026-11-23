@@ -187,6 +187,10 @@ and whether it is safe. Keep fork changes in separate files where possible (like
   neither to work in an unsigned Atelier build. For remote access, use your local network or
   Tailscale.
 - The mobile app is not supported.
+- Thread topics don't merge across environments. When one repository is open on several
+  machines, same-named topics show twice in its folder, and a thread can't join another
+  machine's topic. Setting the project's grouping to **Keep separate** gives each machine its own
+  folder. See [#6](https://github.com/aslastin/t3code-atelier/issues/6).
 
 ## License and trademarks
 
