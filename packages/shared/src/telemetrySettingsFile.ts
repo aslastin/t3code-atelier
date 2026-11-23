@@ -19,6 +19,7 @@ const disabled = {
 export const reader = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
+  let cached: { raw: string; settings: PersistedServerObservabilitySettings } | undefined;
   // A missing target behind an existing settings symlink may hold an explicit opt-out.
   const isAbsent = (file: string) =>
     fs.lstat(file).pipe(
@@ -32,7 +33,11 @@ export const reader = Effect.gen(function* () {
     );
   const read = (file: string) =>
     fs.readFileString(file).pipe(
-      Effect.map(parsePersistedServerObservabilitySettings),
+      Effect.map((raw) => {
+        if (cached?.raw !== raw)
+          cached = { raw, settings: parsePersistedServerObservabilitySettings(raw) };
+        return cached.settings;
+      }),
       Effect.catch((error) =>
         error.reason._tag === "NotFound"
           ? isAbsent(file).pipe(Effect.map((absent) => (absent ? empty : disabled)))

@@ -1,11 +1,8 @@
 import {
   DEFAULT_SERVER_SETTINGS,
   ModelSelection,
-  ProjectId,
   ProjectScript,
-  keepUnknownOverrideKeys,
-  legacyTelemetryPreferences,
-  ProjectSettingsOverrides,
+  type ProjectSettingsOverrides,
   type ProviderInstanceConfig,
   type ProviderInstanceMutation,
   defaultInstanceIdForDriver,
@@ -13,7 +10,6 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
-  ResponseStreamingMode,
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
@@ -39,7 +35,6 @@ import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -49,9 +44,13 @@ import { resolveSymlinkTarget } from "@t3tools/shared/symlink";
 import * as TelemetrySettingsFile from "@t3tools/shared/telemetrySettingsFile";
 import * as ServerConfig from "./config.ts";
 import { type DeepPartial, deepMerge } from "@t3tools/shared/Struct";
-import { fromJsonStringPretty, fromLenientJson } from "@t3tools/shared/schemaJson";
+import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import {
   applyServerSettingsPatch,
+  decodeSettingsFileJsonExit,
+  decodePersistedSettings,
+  decodeLegacySettings,
+  unreadableObservability,
   deriveLegacyProjectOverrides,
   fallbackTextGenerationModelSelection,
   isModelSelectionProviderEnabled,
@@ -352,46 +351,6 @@ export const layerTest = (
   overrides: DeepPartial<ServerSettings> = {},
   managedPolicy?: ManagedPolicySummary,
 ) => Layer.effect(ServerSettingsService, makeTest(overrides, managedPolicy));
-
-// Accept retired token delivery only on load so one old value cannot reset all settings.
-const PersistedResponseStreamingMode = Schema.Union([
-  ResponseStreamingMode,
-  Schema.Literal("token"),
-]).pipe(
-  Schema.decodeTo(
-    ResponseStreamingMode,
-    SchemaTransformation.transform({
-      decode: (mode) => (mode === "token" ? "paragraph" : mode),
-      encode: (mode) => mode,
-    }),
-  ),
-);
-const PersistedServerSettings = Schema.Struct({
-  ...ServerSettings.fields,
-  responseStreamingMode: PersistedResponseStreamingMode.pipe(
-    Schema.withDecodingDefault(Effect.succeed("paragraph" as const)),
-  ),
-  projectSettingsOverrides: Schema.Record(
-    ProjectId,
-    keepUnknownOverrideKeys(
-      Schema.Struct({
-        ...ProjectSettingsOverrides.fields,
-        responseStreamingMode: Schema.optionalKey(PersistedResponseStreamingMode),
-      }),
-    ),
-  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-});
-// Parse first and decode second, so a managed policy can fill its defaults in between.
-const decodeSettingsFileJsonExit = Schema.decodeUnknownExit(fromLenientJson(Schema.Unknown));
-const decodePersistedServerSettingsExit = Schema.decodeUnknownExit(PersistedServerSettings);
-const LegacyProviderSettingsJson = fromLenientJson(
-  Schema.Struct({
-    providers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
-    bitbucket: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
-    github: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
-  }),
-);
-const decodeLegacyProviderSettingsJsonExit = Schema.decodeUnknownExit(LegacyProviderSettingsJson);
 
 const LEGACY_BITBUCKET_SECRET_NAMES: Readonly<Record<string, string>> = {
   accessToken: "bitbucket-access-token",
@@ -800,46 +759,44 @@ const make = Effect.gen(function* () {
     if (yield* readConfigExists) {
       const raw = yield* readRawConfig;
       const parsed = decodeSettingsFileJsonExit(raw);
-      const decoded = Exit.isFailure(parsed)
-        ? parsed
-        : decodePersistedServerSettingsExit(managed.withDefaults(parsed.value));
-      const legacySettings = decodeLegacyProviderSettingsJsonExit(raw);
-      if (legacySettings._tag === "Success") {
-        legacyProviders = legacySettings.value.providers;
-        legacySourceControl = {
-          bitbucket: legacySettings.value.bitbucket,
-          github: legacySettings.value.github,
-        };
-      }
-      if (decoded._tag === "Failure" || legacySettings._tag === "Failure") {
-        const failure = decoded._tag === "Failure" ? decoded : legacySettings;
+      const stored = Exit.isFailure(parsed) ? parsed : decodePersistedSettings(parsed.value);
+      const withDefaults = Exit.isSuccess(parsed) ? managed.withDefaults(parsed.value) : undefined;
+      const decoded =
+        Exit.isSuccess(parsed) && withDefaults !== parsed.value
+          ? decodePersistedSettings(withDefaults)
+          : stored;
+      if (Exit.isFailure(decoded)) {
+        if (Exit.isSuccess(parsed)) {
+          legacyProviders = Option.getOrUndefined(decodeLegacySettings(parsed.value))?.providers;
+        }
         // The file may hold an opt-out we can no longer read; never resume threads on a guess.
         settings = {
           ...managed.defaults,
           continueThreadsAfterServerUpdate: false,
-          observability: {
-            ...managed.defaults.observability,
-            telemetry: { enabled: false, analytics: false, connect: false, otlp: false },
-          },
           usageHistoryRetentionDays: "unlimited",
         };
-        if (failure._tag === "Failure") {
-          parseFailure = Option.some(Cause.squash(failure.cause));
-          yield* Effect.logWarning("failed to parse settings.json, using defaults", {
-            path: settingsPath,
-            issues: Cause.pretty(failure.cause),
-            cause: failure.cause,
-          });
-        }
+        parseFailure = Option.some(Cause.squash(decoded.cause));
+        yield* Effect.logWarning("failed to parse settings.json, using defaults", {
+          path: settingsPath,
+          issues: Cause.pretty(decoded.cause),
+          cause: decoded.cause,
+        });
       } else {
-        settings = decoded.value;
+        const { providers, bitbucket, github, ...current } = decoded.value;
+        legacyProviders = providers;
+        legacySourceControl = { bitbucket, github };
+        settings = current;
       }
-    } else if (!(yield* telemetryFile.isAbsent(settingsPath))) {
-      settingsUnavailable = true;
+      // Standalone exporters see the stored file before managed defaults are available.
       settings = {
         ...settings,
-        observability: { ...settings.observability, telemetry: legacyTelemetryPreferences(false) },
+        observability: Exit.isSuccess(stored)
+          ? stored.value.observability
+          : unreadableObservability,
       };
+    } else if (!(yield* telemetryFile.isAbsent(settingsPath))) {
+      settingsUnavailable = true;
+      settings = { ...settings, observability: unreadableObservability };
     }
     // Settings saved by a server that kept the mode in `compactIdleThreads` move
     // it to `idleCompaction`, so that switch goes to clients as a boolean. The

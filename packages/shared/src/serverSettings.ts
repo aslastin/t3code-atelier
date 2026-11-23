@@ -1,6 +1,7 @@
 import type { ModelPreferences } from "@t3tools/contracts/settings";
 import {
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_SERVER_SETTINGS,
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
@@ -16,7 +17,9 @@ import {
   textGeneratorForSelection,
   isProviderTextGenerationCapable,
   type ModelSelection,
-  type ProjectId,
+  ProjectId,
+  keepUnknownOverrideKeys,
+  ResponseStreamingMode,
   type ProjectScopedServerSettingKey,
   ProjectSettingsOverrides,
   ProviderDriverKind,
@@ -26,7 +29,9 @@ import {
   type ServerSettingsPatch,
   withIdleCompaction,
 } from "@t3tools/contracts";
-import * as Option from "effect/Option";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { deepMerge } from "./Struct.ts";
@@ -39,13 +44,47 @@ import {
   resolveBackgroundActivitySettings,
 } from "./backgroundActivitySettings.ts";
 
-// Only observability: a value the server migrates on load elsewhere in the file must not drop it.
-const ServerObservabilitySettingsJson = fromLenientJson(
-  Schema.Struct({ observability: ServerSettings.fields.observability }),
+// Accept retired token delivery only on load so one old value cannot reset all settings.
+const PersistedResponseStreamingMode = Schema.Union([
+  ResponseStreamingMode,
+  Schema.Literal("token"),
+]).pipe(
+  Schema.decodeTo(
+    ResponseStreamingMode,
+    SchemaTransformation.transform({
+      decode: (mode) => (mode === "token" ? "paragraph" : mode),
+      encode: (mode) => mode,
+    }),
+  ),
 );
-const decodeServerObservabilitySettingsJson = Schema.decodeUnknownOption(
-  ServerObservabilitySettingsJson,
-);
+const LegacySettings = Schema.Struct({
+  providers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  bitbucket: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  github: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+});
+export const decodeLegacySettings = Schema.decodeUnknownOption(LegacySettings);
+const PersistedServerSettings = Schema.Struct({
+  ...LegacySettings.fields,
+  ...ServerSettings.fields,
+  responseStreamingMode: PersistedResponseStreamingMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("paragraph" as const)),
+  ),
+  projectSettingsOverrides: Schema.Record(
+    ProjectId,
+    keepUnknownOverrideKeys(
+      Schema.Struct({
+        ...ProjectSettingsOverrides.fields,
+        responseStreamingMode: Schema.optionalKey(PersistedResponseStreamingMode),
+      }),
+    ),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+});
+export const decodeSettingsFileJsonExit = Schema.decodeUnknownExit(fromLenientJson(Schema.Unknown));
+export const decodePersistedSettings = Schema.decodeUnknownExit(PersistedServerSettings);
+export const unreadableObservability = {
+  ...DEFAULT_SERVER_SETTINGS.observability,
+  telemetry: legacyTelemetryPreferences(false),
+};
 
 export function isModelSelectionProviderEnabled(
   settings: ServerSettings,
@@ -191,33 +230,28 @@ function normalizePersistedServerSettingString(
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
-function extractPersistedServerObservabilitySettings(input: {
-  readonly observability?: ServerSettings["observability"];
-}): PersistedServerObservabilitySettings {
+function extractPersistedServerObservabilitySettings(
+  observability: ServerSettings["observability"],
+): PersistedServerObservabilitySettings {
   return {
-    ...(input.observability?.telemetry ? { telemetry: input.observability.telemetry } : {}),
-    ...(input.observability?.telemetryRevisions
-      ? { telemetryRevisions: input.observability.telemetryRevisions }
+    ...(observability.telemetry ? { telemetry: observability.telemetry } : {}),
+    ...(observability.telemetryRevisions
+      ? { telemetryRevisions: observability.telemetryRevisions }
       : {}),
-    otlpTracesUrl: normalizePersistedServerSettingString(input.observability?.otlpTracesUrl),
-    otlpMetricsUrl: normalizePersistedServerSettingString(input.observability?.otlpMetricsUrl),
-    otlpLogsUrl: normalizePersistedServerSettingString(input.observability?.otlpLogsUrl),
+    otlpTracesUrl: normalizePersistedServerSettingString(observability.otlpTracesUrl),
+    otlpMetricsUrl: normalizePersistedServerSettingString(observability.otlpMetricsUrl),
+    otlpLogsUrl: normalizePersistedServerSettingString(observability.otlpLogsUrl),
   };
 }
 
 export function parsePersistedServerObservabilitySettings(
   raw: string,
 ): PersistedServerObservabilitySettings {
-  const decoded = decodeServerObservabilitySettingsJson(raw);
-  if (Option.isSome(decoded)) {
-    return extractPersistedServerObservabilitySettings(decoded.value);
-  }
-  return {
-    telemetry: { enabled: false, analytics: false, connect: false, otlp: false },
-    otlpTracesUrl: undefined,
-    otlpMetricsUrl: undefined,
-    otlpLogsUrl: undefined,
-  };
+  const parsed = decodeSettingsFileJsonExit(raw);
+  const stored = Exit.isFailure(parsed) ? parsed : decodePersistedSettings(parsed.value);
+  return extractPersistedServerObservabilitySettings(
+    Exit.isSuccess(stored) ? stored.value.observability : unreadableObservability,
+  );
 }
 
 function shouldReplaceTextGenerationModelSelection(

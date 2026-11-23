@@ -316,8 +316,19 @@ describe("serverSettings helpers", () => {
     ).toBe("http://localhost:4318/v1/traces");
   });
 
-  it("falls back cleanly when persisted settings are invalid", () => {
-    expect(parsePersistedServerObservabilitySettings("{")).toEqual({
+  it.each([
+    "{",
+    ...[{ usageHistoryRetentionDays: 0 }, { providers: [] }, { github: 42 }].map((invalid) =>
+      JSON.stringify({
+        ...invalid,
+        observability: {
+          otlpTracesUrl: "http://localhost/v1/traces",
+          telemetry: { enabled: true, analytics: true, connect: true, otlp: true },
+        },
+      }),
+    ),
+  ])("keeps export disabled when the persisted settings cannot be decoded", (raw) => {
+    expect(parsePersistedServerObservabilitySettings(raw)).toEqual({
       telemetry: { enabled: false, analytics: false, connect: false, otlp: false },
       otlpTracesUrl: undefined,
       otlpMetricsUrl: undefined,
