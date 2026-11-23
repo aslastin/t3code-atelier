@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Feature request
-    url: https://github.com/pingdotgg/t3code/discussions/categories/ideas
-    about: Suggest an improvement or new capability in Discussions.
+  - name: Idea
+    url: https://github.com/aslastin/t3code-atelier/discussions/categories/ideas
+    about: Discuss an idea for the fork before it becomes an issue.
+  - name: Problem in official T3 Code
+    url: https://github.com/pingdotgg/t3code/issues
+    about: Report problems that also happen in the official app upstream.
