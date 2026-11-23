@@ -71,6 +71,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import { ThreadWorktreeRestore } from "../workspace/restoreMissingWorktree.ts";
 import * as TaskFolders from "../workspace/TaskFolders.ts";
 import {
   layerTaskFoldersWithGit,
@@ -139,6 +140,7 @@ const claudeAdapter = {
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 
 interface HarnessOptions {
+  readonly restoreWorktree?: ThreadWorktreeRestore["Service"]["restore"];
   readonly workspaceRoot?: string;
   readonly closeTerminal?: TerminalManager.TerminalManager["Service"]["close"];
   readonly adapters?: ReadonlyArray<ProviderAdapter.ProviderAdapterV2["Service"]>;
@@ -266,6 +268,7 @@ function makeHarness(options: HarnessOptions = {}) {
     }),
     layerServerSettings,
     ProviderRegistryMock.layer(options.providers),
+    Layer.mock(ThreadWorktreeRestore)({ restore: options.restoreWorktree ?? (() => Effect.void) }),
     options.taskFolders ??
       Layer.mock(TaskFolders.TaskFolders)({ plan: () => Effect.succeed(null) }),
     options.managedFolders ??
@@ -1846,7 +1849,16 @@ it.live.each(["present", "excluded"] as const)(
         }
         yield* command(cwd, ["add", "."]);
         yield* command(cwd, ["commit", "-m", "add subfolder project"]);
-        const launch = harness({ workspaceRoot });
+        const launch = harness({
+          workspaceRoot,
+          restoreWorktree: (owner) => {
+            assert.equal(owner.worktreePath, `${worktreePath}/my-project`);
+            return command(cwd, ["worktree", "add", worktreePath, "feature"]).pipe(
+              Effect.asVoid,
+              Effect.orDie,
+            );
+          },
+        });
         yield* Effect.gen(function* () {
           const launches = yield* ThreadLaunch.ThreadLaunchService;
           const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
@@ -1878,6 +1890,26 @@ it.live.each(["present", "excluded"] as const)(
             (yield* preparationSettled(existing.threadId)).thread.worktreePath,
             expected,
           );
+          if (folder === "present") {
+            yield* command(cwd, ["worktree", "remove", worktreePath]);
+            const previous = yield* launches.launch(
+              launchInput({
+                command: "launch:previous",
+                thread: "thread:previous",
+                workspace: { type: "existing_worktree", worktreePath: expected, branch: "feature" },
+              }),
+            );
+            assert.equal(
+              (yield* (yield* ThreadManagement.ThreadManagementService).getThreadShell(
+                previous.threadId,
+              ))?.worktreePath,
+              expected,
+            );
+            assert.equal(
+              (yield* command(expected, ["rev-parse", "--show-prefix"])).stdout.trim(),
+              "my-project/",
+            );
+          }
         }).pipe(Effect.provide(launch.layer));
       }),
     ),

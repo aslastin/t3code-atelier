@@ -303,6 +303,7 @@ const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
     Layer.mergeAll(
       layerProjectSetupScriptRunner,
       layerManagedProjectFoldersProvided,
+      layerThreadWorktreeRestore,
       layerThreadManagementProvided,
       layerCommandReceiptStoreProvided,
       layerEventSink,

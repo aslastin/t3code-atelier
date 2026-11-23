@@ -449,7 +449,13 @@ export function BranchToolbarBranchSelector({
   const readSelectedRef = async (worktreePath: string, listedRef: VcsRef): Promise<VcsRef> => {
     const result = await readRefs({
       environmentId,
-      input: { cwd: worktreePath, query: listedRef.name, refKind: "local", limit: 1 },
+      input: {
+        cwd: worktreePath,
+        projectCwd: activeProjectCwd ?? undefined,
+        query: listedRef.name,
+        refKind: "local",
+        limit: 1,
+      },
     });
     return resolveConfirmedSelectedRef(listedRef, result._tag === "Success" ? result.value : null);
   };

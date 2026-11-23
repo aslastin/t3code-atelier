@@ -501,6 +501,7 @@ it.layer(
     { method: "attach", location: "managed" },
     { method: "open", location: "subdirectory" },
     { method: "open", location: "subfolder-project" },
+    { method: "open", location: "missing-project-folder" },
     { method: "open", location: "unmanaged" },
     { method: "open", location: "no-worktree" },
   ] as const)(
@@ -515,12 +516,15 @@ it.layer(
           location === "unmanaged"
             ? path.join(baseDir, "missing")
             : path.join(worktreesDir, "project", "feature");
-        const subfolder = location === "subfolder-project";
+        const insideCheckout = location === "missing-project-folder";
+        const subfolder = location === "subfolder-project" || insideCheckout;
         const workspaceRoot = subfolder ? path.join(baseDir, "my-project") : baseDir;
         const threadFolder = subfolder ? path.join(worktreePath, "my-project") : worktreePath;
         if (subfolder) {
           yield* fs.makeDirectory(path.join(baseDir, ".git"));
-          yield* fs.makeDirectory(workspaceRoot);
+          if (insideCheckout)
+            yield* fs.makeDirectory(path.join(worktreePath, ".git"), { recursive: true });
+          else yield* fs.makeDirectory(workspaceRoot);
         }
         const cwd = location === "subdirectory" ? path.join(worktreePath, "src") : threadFolder;
         const cleanupQueued = yield* Deferred.make<Fiber.Fiber<void>>();
@@ -592,8 +596,8 @@ it.layer(
           return;
         }
         yield* launch;
-        yield* Fiber.join(yield* Deferred.await(cleanupQueued));
-        assert.equal(creations, 1);
+        if (!insideCheckout) yield* Fiber.join(yield* Deferred.await(cleanupQueued));
+        assert.equal(creations, insideCheckout ? 0 : 1);
         assert.equal(ptyAdapter.spawnInputs.length, 1);
         assert.equal(ptyAdapter.spawnInputs[0]?.cwd, cwd);
         assert.equal(ptyAdapter.spawnInputs[0]?.env.T3CODE_WORKTREE_PATH, threadFolder);

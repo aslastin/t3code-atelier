@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 
+import { resolveWorkspaceLocation } from "./workspaceLease.ts";
 import { WorkspacePathOutsideRootError } from "./WorkspacePaths.ts";
 
 export const relativeProjectFolder = Effect.fn("relativeProjectFolder")(function* (
@@ -49,10 +50,25 @@ export const worktreeRootForProject = Effect.fn("worktreeRootForProject")(
       folder = resolved;
     }
     const hasGit = (dir: string) => fs.exists(path.join(dir, ".git"));
-    if (yield* hasGit(folder)) return folder;
+    const gitDirectory = (dir: string) =>
+      fs.stat(path.join(dir, ".git")).pipe(
+        Effect.flatMap((info) =>
+          info.type === "File" && info.size <= 1024n * 1024n
+            ? fs.readFileString(path.join(dir, ".git"))
+            : Effect.succeed(""),
+        ),
+        Effect.map((file) => {
+          const value = /^gitdir: (.+)$/m.exec(file)?.[1]?.trim();
+          return value ? path.resolve(dir, value) : null;
+        }),
+        Effect.orElseSucceed(() => null),
+      );
+    const hasMarker = yield* hasGit(folder);
+    const moduleDirectory = hasMarker ? yield* gitDirectory(folder) : null;
+    if (hasMarker && !moduleDirectory?.split(path.sep).includes("modules")) return folder;
     const cwd = typeof projectCwd === "string" ? projectCwd : yield* projectCwd;
     if (cwd === undefined) return folder;
-    let source = yield* fs.realPath(cwd);
+    let source = yield* resolveWorkspaceLocation(fs, path, cwd);
     let target = folder;
     if (yield* hasGit(source)) return folder;
     while (path.relative(path.basename(source), path.basename(target)) === "") {
@@ -60,6 +76,17 @@ export const worktreeRootForProject = Effect.fn("worktreeRootForProject")(
       source = path.dirname(source);
       target = path.dirname(target);
       if (yield* hasGit(source)) {
+        if (moduleDirectory !== null) {
+          const targetGit = (yield* gitDirectory(target)) ?? path.join(target, ".git");
+          const relative = path.relative(path.join(targetGit, "modules"), moduleDirectory);
+          if (
+            !relative ||
+            relative === ".." ||
+            relative.startsWith(`..${path.sep}`) ||
+            path.isAbsolute(relative)
+          )
+            return folder;
+        }
         if ((yield* hasGit(target)) || (isManagedRoot && (yield* isManagedRoot(target))))
           return target;
         break;

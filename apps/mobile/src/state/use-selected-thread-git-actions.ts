@@ -359,7 +359,15 @@ export function useSelectedThreadGitActions(repository?: GitRepositoryTarget) {
             worktreePath,
           },
         });
-        return AsyncResult.isFailure(syncResult) ? AsyncResult.failure(syncResult.cause) : result;
+        if (AsyncResult.isFailure(syncResult)) return AsyncResult.failure(syncResult.cause);
+        if (result.value.worktree.projectPath === null) {
+          showGitActionResult({
+            type: "success",
+            title: m(msg("Project folder is missing in this checkout. Using the worktree root.")),
+            description: worktreePath,
+          });
+        }
+        return result;
       },
       { changesThreadBranch: true },
     );

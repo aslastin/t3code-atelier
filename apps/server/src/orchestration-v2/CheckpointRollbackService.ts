@@ -61,6 +61,7 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
       "provider-turn-unavailable",
       "unexpected-failure",
       "shared-workspace",
+      "worktree-has-files",
     ]),
     threadId: ThreadId,
     providerThreadId: ProviderThreadId,
@@ -78,6 +79,8 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
         return `Provider turn for rollback target ${this.checkpointId} is unavailable on provider thread ${this.providerThreadId}.`;
       case "shared-workspace":
         return SHARED_WORKSPACE_RESTORE_MESSAGE;
+      case "worktree-has-files":
+        return "Move the remaining files out of the worktree before restoring this project folder.";
       case "unexpected-failure":
         return ROLLBACK_FAILED_MESSAGE;
     }
@@ -95,6 +98,7 @@ const isRuntimePolicyAboveCeilingError = Schema.is(RuntimePolicyAboveCeilingErro
  * output, so they fall back to the generic message.
  */
 export function rollbackFailureClientMessage(error: CheckpointRollbackExecutionError): string {
+  if (error.reason === "worktree-has-files") return error.message;
   if (isRuntimePolicyAboveCeilingError(error.cause)) return error.cause.message;
   const restoreCause = isCheckpointRestoreError(error.cause) ? error.cause.cause : undefined;
   return isVcsProcessExitError(restoreCause) && restoreCause.detail === GIT_INDEX_LOCKED_DETAIL
@@ -318,8 +322,17 @@ export const layer: Layer.Layer<
                 }),
               ),
             );
-            if (leftover) {
-              if (!(yield* isolated(worktreePath))) return yield* sharedWorkspace();
+            const nested = folder !== null && path.relative(worktreePath, folder) !== "";
+            if (leftover && !(yield* isolated(worktreePath))) return yield* sharedWorkspace();
+            if (leftover && nested && (yield* fileSystem.readDirectory(worktreePath)).length > 0) {
+              return yield* new CheckpointRollbackExecutionError({
+                reason: "worktree-has-files",
+                threadId: input.threadId,
+                providerThreadId: input.providerThreadId,
+                checkpointId: input.checkpointId,
+              });
+            }
+            if (leftover && !nested) {
               // Set aside, not removed: a checkout that fails puts the folder and its files back.
               yield* Effect.acquireUseRelease(
                 Effect.gen(function* () {

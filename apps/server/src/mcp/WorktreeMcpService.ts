@@ -433,6 +433,10 @@ const make = Effect.gen(function* () {
             );
         }
 
+        const note =
+          continuation.status === "scheduled"
+            ? "Handoff recorded. Changing the workspace detaches this provider session, so the current turn ends shortly after this call; the queued continuation prompt then starts the next turn inside the worktree with the conversation preserved. The worktree is not removed automatically when the thread is deleted."
+            : "Handoff recorded. Changing the workspace detaches this provider session, so the current turn ends shortly after this call; the conversation continues inside the worktree when the thread receives its next message. Pass continuationPrompt to resume automatically. The worktree is not removed automatically when the thread is deleted.";
         const result: WorktreeMcpHandoffResult = {
           worktreePath,
           branch: worktree.refName,
@@ -441,9 +445,9 @@ const make = Effect.gen(function* () {
           setupScript,
           continuation,
           note:
-            continuation.status === "scheduled"
-              ? "Handoff recorded. Changing the workspace detaches this provider session, so the current turn ends shortly after this call; the queued continuation prompt then starts the next turn inside the worktree with the conversation preserved. The worktree is not removed automatically when the thread is deleted."
-              : "Handoff recorded. Changing the workspace detaches this provider session, so the current turn ends shortly after this call; the conversation continues inside the worktree when the thread receives its next message. Pass continuationPrompt to resume automatically. The worktree is not removed automatically when the thread is deleted.",
+            worktree.projectPath === null
+              ? `Project folder is missing in this checkout. Using the worktree root. ${note}`
+              : note,
         };
         return result;
       }),

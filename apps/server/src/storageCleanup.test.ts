@@ -2170,10 +2170,10 @@ describe("orphan worktree reports", () => {
             worktreePath: threadFolder,
           }),
         ]);
-        expect(yield* fixture.service.worktreeThreadIds(threadFolder)).toEqual([
-          ThreadId.make("root-thread"),
-          ThreadId.make("folder-thread"),
-        ]);
+        expect(yield* fixture.service.worktreeThreadIds(threadFolder, projectFolder)).toEqual({
+          worktreeRoot: fixture.worktree,
+          threadIds: [ThreadId.make("root-thread"), ThreadId.make("folder-thread")],
+        });
         fixture.setStoredWorktreePaths([threadFolder]);
         yield* fixture.fs.utimes(fixture.worktree, 1, 1);
         const report = yield* fixture.service.runNow;
@@ -2194,7 +2194,20 @@ describe("orphan worktree reports", () => {
         );
         expect(removal.detail).toBe("Another thread uses this worktree.");
         expect(yield* fixture.fs.exists(threadFolder)).toBe(true);
-        fixture.setThreads([]);
+        const alias = `${fixture.repo}/checkout-alias`;
+        yield* fixture.fs.symlink(fixture.worktree, alias);
+        fixture.setThreads([
+          shell({ id: ThreadId.make("aliased-thread"), worktreePath: `${alias}/missing` }),
+        ]);
+        const occupied = yield* fixture.service
+          .removeWorktree({
+            cwd: projectFolder,
+            path: threadFolder,
+            force: true,
+            onlyIfUnused: true,
+          })
+          .pipe(Effect.flip);
+        expect(occupied.detail).toContain("Another thread");
         const sibling = `${fixture.worktree}/sibling`;
         yield* fixture.fs.makeDirectory(sibling);
         yield* fixture.fs.writeFileString(`${sibling}/draft`, "unsaved");
@@ -2203,7 +2216,9 @@ describe("orphan worktree reports", () => {
         fixture.setThreads([
           shell({ id: localThread, projectId: ProjectId.make("project-2"), worktreePath: null }),
         ]);
-        expect(yield* fixture.service.worktreeThreadIds(threadFolder)).toEqual([localThread]);
+        expect((yield* fixture.service.worktreeThreadIds(threadFolder)).threadIds).toEqual([
+          localThread,
+        ]);
         const protectedProject = yield* Effect.flip(
           fixture.service.removeWorktree({
             cwd: projectFolder,

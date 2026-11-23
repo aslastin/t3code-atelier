@@ -69,6 +69,7 @@ import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import { DispatchModeLimit } from "./DispatchModeLimit.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
+import { ThreadWorktreeRestore } from "../workspace/restoreMissingWorktree.ts";
 import * as TaskFolders from "../workspace/TaskFolders.ts";
 
 // The agent waits for its branch name; a rate-limited provider would hold it for minutes.
@@ -296,6 +297,7 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const eventSink = yield* EventSink.EventSinkV2;
   const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
+  const worktreeRestore = yield* ThreadWorktreeRestore;
   const taskFolders = yield* TaskFolders.TaskFolders;
   // A project-folder launch that names no branch records the folder's checkout, as the composer does.
   const launchBranch = (strategy: ThreadLaunchWorkspaceStrategy, workspaceRoot: string) =>
@@ -1573,9 +1575,27 @@ const make = Effect.gen(function* () {
               path,
               initialWorktreePath,
               Effect.gen(function* () {
-                const available = yield* fs.stat(initialWorktreePath).pipe(
-                  Effect.map((info) => info.type === "Directory"),
-                  Effect.orElseSucceed(() => false),
+                const isDirectory = fs
+                  .stat(initialWorktreePath)
+                  .pipe(Effect.map((info) => info.type === "Directory"));
+                const available = yield* isDirectory.pipe(
+                  Effect.catchReason("PlatformError", "NotFound", () =>
+                    Effect.gen(function* () {
+                      const snapshot = yield* threads.getShellSnapshot({
+                        projectId: input.projectId,
+                        worktreePath: initialWorktreePath,
+                      });
+                      const owner = snapshot.threads.find(
+                        (thread) =>
+                          thread.worktreePath === initialWorktreePath &&
+                          thread.branch === initialBranch,
+                      );
+                      if (owner === undefined) return false;
+                      yield* worktreeRestore.restore(owner);
+                      return yield* isDirectory;
+                    }),
+                  ),
+                  Effect.mapError(mapError(input, "provision-worktree", candidateThreadId)),
                 );
                 if (!available)
                   return yield* mapError(

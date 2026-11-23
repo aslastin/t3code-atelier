@@ -105,7 +105,7 @@ vi.mock("./vcs", () => ({
       state.worktrees.push("/repo-worktree");
       state.afterGitAction?.();
       return AsyncResult.success({
-        worktree: { path: "/repo-worktree", refName: input.newRefName },
+        worktree: { path: "/repo-worktree", refName: input.newRefName, projectPath: null },
       });
     },
     pull: async () => AsyncResult.success({ status: "pulled", refName: state.branch }),
@@ -160,8 +160,15 @@ describe("thread Git mutation permissions", () => {
         newBranch: "feature/task",
       });
       expect(result).toEqual(
-        canOperate ? { worktree: { path: "/repo-worktree", refName: "feature/task" } } : null,
+        canOperate
+          ? { worktree: { path: "/repo-worktree", refName: "feature/task", projectPath: null } }
+          : null,
       );
+      expect(
+        state.results.some(
+          (result) => result.type === "success" && result.description === "/repo-worktree",
+        ),
+      ).toBe(canOperate);
       expect(state.worktrees).toEqual(canOperate ? ["/repo-worktree"] : []);
       expect(state.thread.worktreePath).toBe(canOperate ? "/repo-worktree" : null);
       expect(state.thread.branch).toBe(canOperate ? "feature/task" : "main");

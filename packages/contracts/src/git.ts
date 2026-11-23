@@ -89,6 +89,7 @@ export const VcsRef = Schema.Struct({
   current: Schema.Boolean,
   isDefault: Schema.Boolean,
   worktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  projectPath: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyStringSchema)),
 });
 export type VcsRef = typeof VcsRef.Type;
 
@@ -145,6 +146,7 @@ export const GitRunStackedActionInput = Schema.Struct({
 export type GitRunStackedActionInput = typeof GitRunStackedActionInput.Type;
 
 export const VcsListRefsInput = Schema.Struct({
+  projectCwd: Schema.optional(TrimmedNonEmptyStringSchema),
   cwd: TrimmedNonEmptyStringSchema,
   query: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(256))),
   cursor: Schema.optional(NonNegativeInt),

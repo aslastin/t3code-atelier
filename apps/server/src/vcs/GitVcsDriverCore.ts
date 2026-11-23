@@ -5431,11 +5431,31 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         limit: input.limit,
       });
 
+      let selectedRefs = refs.refs;
+      if (input.projectCwd && worktreeRoot && selectedRefs.some((ref) => ref.current)) {
+        const source = yield* resolveRepositoryPaths(input.projectCwd).pipe(
+          Effect.orElseSucceed(() => null),
+        );
+        if (source?.worktreeRoot && source.gitCommonDir === repositoryPaths.gitCommonDir) {
+          const projectPath = yield* relativeProjectFolder(
+            fileSystem,
+            path,
+            source.worktreeRoot,
+            input.projectCwd,
+          ).pipe(
+            Effect.flatMap((relative) =>
+              worktreeProjectFolder(fileSystem, path, relative, worktreeRoot),
+            ),
+            Effect.orElseSucceed(() => null),
+          );
+          selectedRefs = selectedRefs.map((ref) => (ref.current ? { ...ref, projectPath } : ref));
+        }
+      }
       return {
         ...(repositoryPaths.isAtRepositoryRoot === undefined
           ? {}
           : { isAtRepositoryRoot: repositoryPaths.isAtRepositoryRoot }),
-        refs: [...refs.refs],
+        refs: [...selectedRefs],
         isRepo: true,
         hasPrimaryRemote: snapshot.hasPrimaryRemote,
         nextCursor: refs.nextCursor,

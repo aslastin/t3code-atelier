@@ -242,7 +242,21 @@ export const makeRestoreMissingWorktree = Effect.gen(function* () {
     const worktreePath = yield* rootForThread(thread, folder);
     const exists = yield* fileSystem.exists(worktreePath).pipe(Effect.orElseSucceed(() => true));
     const leftover = exists && (yield* isLeftoverFolder(worktreePath));
-    if ((exists && !leftover) || !(yield* isManagedWorktreePath(worktreePath))) return;
+    if (exists && !leftover) {
+      if (
+        folder !== worktreePath &&
+        !(yield* fileSystem.exists(folder).pipe(Effect.orElseSucceed(() => true))) &&
+        (yield* fileSystem
+          .exists(path.join(worktreePath, ".git"))
+          .pipe(Effect.orElseSucceed(() => false)))
+      ) {
+        yield* restoreWorktreeProjectFolder(fileSystem, path, worktreePath, folder).pipe(
+          Effect.mapError((cause) => new WorktreeRecreateError({ worktreePath, branch, cause })),
+        );
+      }
+      return;
+    }
+    if (!(yield* isManagedWorktreePath(worktreePath))) return;
     const project = yield* projects.getById(thread.projectId).pipe(
       Effect.map(Option.getOrUndefined),
       Effect.orElseSucceed(() => undefined),

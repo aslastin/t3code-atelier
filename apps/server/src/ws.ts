@@ -2161,8 +2161,7 @@ export const layerWsRpc = (
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.getWorktreeThreadIds]: (input) =>
-          storageCleanup.worktreeThreadIds(input.worktreePath).pipe(
-            Effect.map((threadIds) => ({ threadIds })),
+          storageCleanup.worktreeThreadIds(input.worktreePath, input.projectCwd).pipe(
             Effect.mapError(
               (cause) =>
                 new OrchestrationV2GetShellSnapshotError({

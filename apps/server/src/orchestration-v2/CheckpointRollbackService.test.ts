@@ -179,6 +179,7 @@ it.effect.each([
   { order: "cleanup-first", restoreFiles: true },
   { order: "rollback-first", restoreFiles: true },
   { order: "cleanup-first", restoreFiles: true, subfolderOnly: true },
+  { order: "cleanup-first", restoreFiles: true, subfolderOnly: true, leavesFolder: true },
   { order: "cleanup-first", restoreFiles: false, unmanaged: true },
   { order: "cleanup-first", restoreFiles: true, leavesFolder: true },
   { order: "cleanup-first", restoreFiles: false, leavesFolder: true },
@@ -345,7 +346,10 @@ it.effect.each([
         Effect.gen(function* () {
           cleanupEntered = true;
           if (order === "cleanup-first") yield* Deferred.await(release);
-          yield* fileSystem.remove(threadCwd, { recursive: true, force: true });
+          yield* fileSystem.remove(leavesFolder ? worktreePath : threadCwd, {
+            recursive: true,
+            force: true,
+          });
           // A failed `git worktree remove` can leave the folder without its checkout.
           if (leavesFolder) {
             yield* fileSystem.makeDirectory(worktreePath);
@@ -370,6 +374,16 @@ it.effect.each([
       if (order === "rollback-first") assert.isFalse(cleanupEntered);
       yield* Deferred.succeed(release, undefined);
       if (cleanup !== undefined) yield* Fiber.join(cleanup);
+      if (row.subfolderOnly && leavesFolder) {
+        const error = yield* Fiber.join(rollback).pipe(Effect.flip);
+        assert.equal(error.reason, "worktree-has-files");
+        assert.equal(
+          yield* fileSystem.readFileString(path.join(worktreePath, "unsaved.txt")),
+          "keep",
+        );
+        assert.deepEqual(calls, ["cleanup"]);
+        return;
+      }
       if (unmanaged || shared) {
         const error = yield* Fiber.join(rollback).pipe(Effect.flip);
         assert.equal(error._tag, "CheckpointRollbackExecutionError");

@@ -331,10 +331,13 @@ export function resolveConfirmedSelectedRef(
   listedRef: VcsRef,
   freshRead: { readonly refs: ReadonlyArray<VcsRef> } | null,
 ): VcsRef {
-  const checkedOut =
-    freshRead?.refs.some((ref) => ref.name === listedRef.name && !ref.isRemote && ref.current) ??
-    false;
-  return checkedOut ? listedRef : { ...listedRef, worktreePath: null };
+  const current = freshRead?.refs.find(
+    (ref) => ref.name === listedRef.name && !ref.isRemote && ref.current,
+  );
+  if (!current) return { ...listedRef, worktreePath: null };
+  return current.projectPath === undefined
+    ? listedRef
+    : { ...listedRef, projectPath: current.projectPath };
 }
 
 export function resolveBranchSelectionTarget(input: {
@@ -342,7 +345,7 @@ export function resolveBranchSelectionTarget(input: {
   activeProjectCheckoutRoot?: string | undefined;
   activeCheckoutRoot?: string | undefined;
   activeWorktreePath: string | null;
-  refName: Pick<VcsRef, "isDefault" | "worktreePath">;
+  refName: Pick<VcsRef, "isDefault" | "worktreePath" | "projectPath">;
 }): {
   checkoutCwd: string;
   nextWorktreePath: string | null;
@@ -367,7 +370,7 @@ export function resolveBranchSelectionTarget(input: {
       ? null
       : sameWorktree
         ? activeWorktreePath
-        : refName.worktreePath;
+        : (refName.projectPath ?? refName.worktreePath);
     return {
       checkoutCwd: refName.worktreePath,
       nextWorktreePath,

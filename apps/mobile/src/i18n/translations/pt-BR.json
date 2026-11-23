@@ -1654,6 +1654,7 @@
   "5f98b86d8e48ef11": "Trocando de branch",
   "27cfa56d7623cb78": "Criando branch",
   "ed5f7f63e1ee633e": "Criando worktree",
+  "3c7591cb256c62a7": "A pasta do projeto não está neste checkout. Será usada a raiz do worktree.",
   "5521de0732509b7c": "Fazendo pull das alterações mais recentes",
   "adb9c574404d1db8": "Já está atualizado",
   "84964b49287ced17": "Pull mais recente feito em {branch}",

@@ -658,8 +658,14 @@ it.effect.each(["branch", "detached", "nested", "aliased-root", "aliased-nested"
           location === "detached" ? [] : [initialBranch],
         );
         assert.equal(spawnedArgs.filter((args) => args.includes("--git-common-dir")).length, 1);
-        const refs = yield* driver.listRefs({ cwd: worktreePath });
-        assert.isTrue(refs.refs.find((ref) => ref.name === "feature/cold")?.current);
+        if (isNested) yield* fs.makeDirectory(path.join(worktreePath, "nested"));
+        const refs = yield* driver.listRefs({ cwd: worktreePath, projectCwd: creationCwd });
+        const current = refs.refs.find((ref) => ref.current);
+        assert.equal(current?.name, "feature/cold");
+        assert.equal(
+          current?.projectPath,
+          isNested ? path.join(worktreePath, "nested") : worktreePath,
+        );
         assert.equal(
           yield* git(worktreePath, ["rev-parse", "HEAD"]),
           yield* git(cwd, ["rev-parse", "HEAD"]),
@@ -7838,6 +7844,40 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           } else {
             assert.equal(yield* fileSystem.exists(worktreePath), false);
           }
+        }),
+    );
+
+    it.effect(
+      "removes the containing worktree when the project became a submodule on the worktree branch",
+      () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          const { initialBranch } = yield* initRepoWithCommit(cwd);
+          yield* writeTextFile(cwd, "my-project/tracked.txt", "tracked");
+          yield* git(cwd, ["add", "."]);
+          yield* git(cwd, ["commit", "-m", "add project"]);
+          const nested = yield* makeTmpDir("git-submodule-");
+          yield* initRepoWithCommit(nested);
+          const path = yield* Path.Path;
+          const root = path.join(yield* makeTmpDir("git-worktrees-"), "feature");
+          yield* git(cwd, ["worktree", "add", "-b", "feature/module", root, initialBranch]);
+          yield* git(root, ["rm", "-r", "my-project"]);
+          yield* git(root, [
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            nested,
+            "my-project",
+          ]);
+          yield* git(root, ["commit", "-m", "replace directory with submodule"]);
+          const driver = yield* GitVcsDriver.GitVcsDriver;
+          yield* driver.removeWorktree({
+            cwd: path.join(cwd, "my-project"),
+            path: path.join(root, "my-project"),
+            force: true,
+          });
+          assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), root);
         }),
     );
 

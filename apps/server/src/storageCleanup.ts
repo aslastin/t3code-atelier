@@ -63,6 +63,7 @@ import { isNonRepositoryGitStderr } from "./vcs/GitVcsDriverCore.ts";
 import { isLinkedWorktree, removeLinkedWorktree } from "./vcs/worktreeRemoval.ts";
 import * as TaskFolders from "./workspace/TaskFolders.ts";
 import {
+  resolveWorkspaceLocation,
   withWorkspaceLease,
   withExclusiveWorkspaceReservation,
 } from "./workspace/workspaceLease.ts";
@@ -319,7 +320,7 @@ export class StorageCleanup extends Context.Service<
     readonly worktreeThreadIds: (
       folder: string,
       projectCwd?: string,
-    ) => Effect.Effect<ThreadId[], GitCommandError>;
+    ) => Effect.Effect<{ threadIds: ThreadId[]; worktreeRoot: string }, GitCommandError>;
     readonly removeWorktree: (
       input: VcsRemoveWorktreeInput,
     ) => Effect.Effect<void, GitCommandError>;
@@ -377,7 +378,9 @@ const make = Effect.gen(function* () {
       const resolved = path.resolve(target);
       const cached = canonicalPaths.get(resolved);
       if (cached !== undefined) return cached;
-      const realPath = yield* fs.realPath(resolved).pipe(Effect.orElseSucceed(() => resolved));
+      const realPath = yield* resolveWorkspaceLocation(fs, path, resolved).pipe(
+        Effect.orElseSucceed(() => resolved),
+      );
       const key = pathKey(realPath);
       canonicalPaths.set(resolved, key);
       return key;
@@ -439,7 +442,7 @@ const make = Effect.gen(function* () {
           if (thread.worktreePath === null) threadIds.push(thread.id);
         }
       }
-      return threadIds;
+      return { threadIds, worktreeRoot: root };
     }).pipe(Effect.mapError(checkFailed(folder)));
   });
 
@@ -673,9 +676,9 @@ const make = Effect.gen(function* () {
     for (const project of projects) {
       const projectPath = path.resolve(project.workspaceRoot);
       if (contains(projectPath)) return true;
-      const realPath = yield* fs
-        .realPath(projectPath)
-        .pipe(Effect.orElseSucceed(() => projectPath));
+      const realPath = yield* resolveWorkspaceLocation(fs, path, projectPath).pipe(
+        Effect.orElseSucceed(() => projectPath),
+      );
       if (contains(realPath)) return true;
     }
     return false;
@@ -698,7 +701,11 @@ const make = Effect.gen(function* () {
       const resolved = path.resolve(row.worktreePath);
       referenced.add(pathKey(resolved));
       referenced.add(
-        pathKey(yield* fs.realPath(resolved).pipe(Effect.orElseSucceed(() => resolved))),
+        pathKey(
+          yield* resolveWorkspaceLocation(fs, path, resolved).pipe(
+            Effect.orElseSucceed(() => resolved),
+          ),
+        ),
       );
     }
     const referencedAncestors = new Set<string>();
