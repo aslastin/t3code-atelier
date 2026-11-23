@@ -7655,7 +7655,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* writeTextFile(repo, "sparse-patterns.txt", "/*\n!/assets/\n");
         yield* writeTextFile(
           repo,
-          "t3.json",
+          "src/t3.json",
           `{ "worktreeSparsePatternsPath": "./sparse-patterns.txt" }`,
         );
         yield* git(repo, ["add", "."]);
@@ -7664,7 +7664,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* git(repo, ["checkout", "-q", initialBranch]);
         const driver = yield* GitVcsDriver.GitVcsDriver;
         const worktrees = yield* makeTmpDir("git-worktrees-");
-        // A project opened at a subdirectory still reads both files from the repository root.
+        // The project owns t3.json. Its sparse pattern path is repository-relative.
         const cwd = pathService.join(repo, "src");
 
         const assertSparse = Effect.fn(function* (worktreePath: string, branch: string) {
@@ -7845,6 +7845,9 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
         const { initialBranch } = yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, "my-project/tracked.txt", "tracked");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "add project"]);
         const pathService = yield* Path.Path;
         const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "hidden");
         const driver = yield* GitVcsDriver.GitVcsDriver;
@@ -7858,7 +7861,11 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* writeTextFile(worktreePath, "notes.txt", "draft\n");
         assert.equal(yield* git(worktreePath, ["status", "--porcelain"]), "");
 
-        const result = yield* Effect.result(driver.removeWorktree({ cwd, path: worktreePath }));
+        const removal = {
+          cwd: pathService.join(cwd, "my-project"),
+          path: pathService.join(worktreePath, "my-project"),
+        };
+        const result = yield* Effect.result(driver.removeWorktree(removal));
 
         assert.isTrue(Result.isFailure(result));
         const fileSystem = yield* FileSystem.FileSystem;
@@ -7866,6 +7873,10 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           yield* fileSystem.readFileString(pathService.join(worktreePath, "notes.txt")),
           "draft\n",
         );
+        yield* fileSystem.remove(pathService.join(worktreePath, "notes.txt"));
+        yield* driver.removeWorktree(removal);
+        assert.isFalse(yield* fileSystem.exists(worktreePath));
+        assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), worktreePath);
       }),
     );
 

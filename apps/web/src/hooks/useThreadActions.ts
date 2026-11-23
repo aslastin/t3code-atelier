@@ -681,6 +681,7 @@ export function useThreadActions() {
           input: {
             cwd: threadProject.workspaceRoot,
             path: orphanedWorktreePath,
+            onlyIfUnused: true,
             force: true,
           },
         })

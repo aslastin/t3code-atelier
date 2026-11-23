@@ -32,6 +32,7 @@ export const isCheckpointRestoreIsolated = Effect.fn("orchestrationV2.isCheckpoi
       readonly projects: ProjectStore.ProjectStoreV2["Service"];
       readonly path: Path.Path;
     },
+    replacedCheckoutRoot?: string,
   ) {
     const { fileSystem, projections, projects, path } = dependencies;
     const contains = (parent: string, child: string) => {
@@ -57,7 +58,7 @@ export const isCheckpointRestoreIsolated = Effect.fn("orchestrationV2.isCheckpoi
       shared = cwd !== worktreeCwd;
       if (!shared) {
         const restored = [
-          cwd,
+          replacedCheckoutRoot === undefined ? cwd : yield* resolve(replacedCheckoutRoot),
           ...(yield* Effect.forEach(taskFolder?.repositories ?? [], (repository) =>
             resolve(repository.worktreePath),
           )),

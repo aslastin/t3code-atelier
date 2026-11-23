@@ -465,6 +465,10 @@ const cleanupFixture = (
           }),
       } as unknown as ThreadManagement.ThreadManagementService["Service"]),
       Effect.provideService(GitWorkflowService.GitWorkflowService, {
+        repositoryRoot: (cwd: string) =>
+          command(cwd, ["rev-parse", "--show-toplevel"]).pipe(
+            Effect.map((result) => result.stdout.trim()),
+          ),
         currentBranch: (cwd: string) =>
           command(cwd, ["branch", "--show-current"]).pipe(
             Effect.map((result) => result.stdout.trim() || null),
@@ -2145,6 +2149,54 @@ describe("deleted thread worktrees", () => {
 });
 
 describe("orphan worktree reports", () => {
+  it.live("keeps a checkout shared by a root thread and a subfolder thread", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const fixture = yield* cleanupFixture();
+        const projectFolder = `${fixture.repo}/my-project`;
+        const threadFolder = `${fixture.worktree}/my-project`;
+        yield* fixture.fs.makeDirectory(projectFolder);
+        yield* fixture.fs.makeDirectory(threadFolder);
+        fixture.setProjectRoots([projectFolder]);
+        fixture.setThreads([
+          shell({
+            id: ThreadId.make("root-thread"),
+            branch: "feature",
+            worktreePath: fixture.worktree,
+          }),
+          shell({
+            id: ThreadId.make("folder-thread"),
+            branch: "feature",
+            worktreePath: threadFolder,
+          }),
+        ]);
+        expect(yield* fixture.service.worktreeThreadIds(threadFolder)).toEqual([
+          ThreadId.make("root-thread"),
+          ThreadId.make("folder-thread"),
+        ]);
+        fixture.setStoredWorktreePaths([threadFolder]);
+        yield* fixture.fs.utimes(fixture.worktree, 1, 1);
+        const report = yield* fixture.service.runNow;
+        expect(report.entries).toEqual([
+          expect.objectContaining({
+            path: fixture.worktree,
+            outcome: "kept",
+            reason: "Shared by 2 threads",
+          }),
+        ]);
+        const removal = yield* Effect.flip(
+          fixture.service.removeWorktree({
+            cwd: projectFolder,
+            path: threadFolder,
+            force: true,
+            onlyIfUnused: true,
+          }),
+        );
+        expect(removal.detail).toBe("Another thread uses this worktree.");
+        expect(yield* fixture.fs.exists(threadFolder)).toBe(true);
+      }),
+    ),
+  );
   it.live("keeps orphan results visible when thread results fill the report", () =>
     runCleanupTest(
       Effect.gen(function* () {

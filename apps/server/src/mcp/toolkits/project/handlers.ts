@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { OrchestratorRuntimeModeAboveCeilingError } from "../../../orchestration-v2/Orchestrator.ts";
 import { outputRequestProblem } from "../../../orchestration-v2/runOutput.ts";
@@ -27,6 +28,7 @@ import * as ProjectCloneTracker from "../../../project/ProjectCloneTracker.ts";
 import { mutateProjectWithClone } from "../../../project/ProjectMutation.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
+import { worktreeRootForProject } from "../../../workspace/worktreeProjectPath.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
@@ -100,7 +102,16 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
     Effect.flatMap((paths) => Effect.forEach(paths, real)),
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
-  if (!worktrees.includes(yield* real(worktreePath)))
+  const folder = yield* real(worktreePath);
+  const root = yield* worktreeRootForProject(fileSystem, yield* Path.Path, folder, workspaceRoot);
+  if (
+    !worktrees.includes(root) ||
+    (root !== folder &&
+      !(yield* fileSystem.stat(folder).pipe(
+        Effect.map((entry) => entry.type === "Directory"),
+        Effect.orElseSucceed(() => false),
+      )))
+  )
     return yield* new OrchestratorMcpFailure({
       code: "invalid_request",
       message:

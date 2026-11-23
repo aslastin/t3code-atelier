@@ -264,6 +264,7 @@ const make = Effect.gen(function* () {
                 readonly path: string;
                 readonly refName: string;
                 readonly taskFolder: string | null;
+                readonly projectPath?: string | null;
               },
               GitCommandError | TaskFolderError
             > =>
@@ -300,7 +301,7 @@ const make = Effect.gen(function* () {
                     ),
           ).pipe(asOperationFailed("Unable to create the worktree")),
         );
-        const worktreePath = worktree.path;
+        const worktreePath = worktree.projectPath ?? worktree.path;
 
         const reportFailed = (logMessage: string) =>
           Effect.catchCause((cause: Cause.Cause<unknown>) => {
@@ -316,7 +317,7 @@ const make = Effect.gen(function* () {
           (): Effect.Effect<unknown, GitCommandError | TaskFolderError> =>
             worktree.taskFolder === null
               ? gitWorkflow
-                  .removeWorktree({ cwd: projectCwd, path: worktreePath, force: true })
+                  .removeWorktree({ cwd: projectCwd, path: worktree.path, force: true })
                   .pipe(
                     Effect.andThen(
                       Effect.suspend(() =>

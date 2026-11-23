@@ -44,7 +44,10 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { makeRestoreMissingWorktree } from "../workspace/restoreMissingWorktree.ts";
+import {
+  makeRestoreMissingWorktree,
+  makeThreadWorktreeRoot,
+} from "../workspace/restoreMissingWorktree.ts";
 import type * as TaskFolders from "../workspace/TaskFolders.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProviderUsageAnalytics from "../telemetry/ProviderUsageAnalytics.ts";
@@ -290,6 +293,7 @@ export const layer: Layer.Layer<
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
     const git = yield* GitWorkflowService.GitWorkflowService;
+    const rootForThread = yield* makeThreadWorktreeRoot;
     const restoreMissingWorktree = yield* makeRestoreMissingWorktree;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
 
@@ -2293,7 +2297,7 @@ export const layer: Layer.Layer<
                   thread.worktreePath === null
                     ? start(input, captureStartingRun)
                     : withWorkspaceLease(
-                        path.resolve(thread.worktreePath),
+                        yield* rootForThread(thread, thread.worktreePath),
                         start(input, captureStartingRun),
                       ),
                 );

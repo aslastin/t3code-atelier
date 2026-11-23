@@ -14,6 +14,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 import { isWithinRoot } from "./KnownWorkspaces.ts";
 import { withWorkspaceLease } from "./workspaceLease.ts";
+import { worktreeRootForProject } from "./worktreeProjectPath.ts";
 import * as TaskFolders from "./TaskFolders.ts";
 import { TerminalCwdRecovery } from "../terminal/Manager.ts";
 
@@ -49,11 +50,30 @@ interface WorktreeThread {
   readonly branch: string | null;
 }
 
+export const makeThreadWorktreeRoot = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const projects = yield* ProjectService.ProjectService;
+  const isManagedRoot = yield* makeIsManagedWorktreePath;
+  return (thread: Pick<WorktreeThread, "projectId">, folder: string) =>
+    worktreeRootForProject(
+      fs,
+      path,
+      folder,
+      projects.getById(thread.projectId, { includeDeleted: true }).pipe(
+        Effect.map((project) => Option.getOrUndefined(project)?.workspaceRoot),
+        Effect.orElseSucceed(() => undefined),
+      ),
+      isManagedRoot,
+    );
+});
+
 export const makeRestoreMissingWorktree = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const projects = yield* ProjectService.ProjectService;
+  const rootForThread = yield* makeThreadWorktreeRoot;
   const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
   const serverConfig = yield* ServerConfig.ServerConfig;
 
@@ -182,11 +202,11 @@ export const makeRestoreMissingWorktree = Effect.gen(function* () {
   });
 
   return Effect.fn("restoreMissingWorktree")(function* (thread: WorktreeThread) {
-    const { worktreePath, branch } = thread;
-    if (worktreePath === null) return;
-    if (branch === null) return yield* recreateScratchFolder(thread, worktreePath);
+    const { worktreePath: folder, branch } = thread;
+    if (folder === null) return;
+    if (branch === null) return yield* recreateScratchFolder(thread, folder);
     // A task folder can miss one repository's worktree while the thread's own folder is there.
-    const taskFolder = yield* taskFolders.find(worktreePath).pipe(Effect.orElseSucceed(() => null));
+    const taskFolder = yield* taskFolders.find(folder).pipe(Effect.orElseSucceed(() => null));
     if (taskFolder !== null) {
       return yield* taskFolders
         .restore({
@@ -215,10 +235,11 @@ export const makeRestoreMissingWorktree = Effect.gen(function* () {
           Effect.mapError((cause) =>
             cause._tag === "WorktreeRecreateNoBaseError"
               ? cause
-              : new WorktreeRecreateError({ worktreePath, branch, cause }),
+              : new WorktreeRecreateError({ worktreePath: folder, branch, cause }),
           ),
         );
     }
+    const worktreePath = yield* rootForThread(thread, folder);
     const exists = yield* fileSystem.exists(worktreePath).pipe(Effect.orElseSucceed(() => true));
     const leftover = exists && (yield* isLeftoverFolder(worktreePath));
     if ((exists && !leftover) || !(yield* isManagedWorktreePath(worktreePath))) return;
@@ -256,13 +277,13 @@ export class ThreadWorktreeRestore extends Context.Service<
 export const layerThreadWorktreeRestore = Layer.effect(
   ThreadWorktreeRestore,
   Effect.gen(function* () {
-    const path = yield* Path.Path;
+    const rootForThread = yield* makeThreadWorktreeRoot;
     const restore = yield* makeRestoreMissingWorktree;
     return {
       restore: Effect.fn("ThreadWorktreeRestore.restore")(function* (thread: WorktreeThread) {
         return yield* thread.worktreePath === null
           ? restore(thread)
-          : withWorkspaceLease(path.resolve(thread.worktreePath), restore(thread));
+          : withWorkspaceLease(yield* rootForThread(thread, thread.worktreePath), restore(thread));
       }),
     };
   }),
@@ -275,6 +296,7 @@ export const makePrepareTerminalLaunch = Effect.fn(
   getThreadShell: (threadId: ThreadId) => Effect.Effect<WorktreeThread | null, LookupError>,
 ) {
   const path = yield* Path.Path;
+  const rootForThread = yield* makeThreadWorktreeRoot;
   const restoreMissingWorktree = yield* makeRestoreMissingWorktree;
   return Effect.fn("restoreMissingWorktree.prepareTerminalLaunch")(function* <
     Input extends {
@@ -305,6 +327,9 @@ export const makePrepareTerminalLaunch = Effect.fn(
         ),
       );
     // The lease must cover the worktree root, even when the terminal opens in a subdirectory.
-    return { input: { ...input, worktreePath }, recover };
+    return {
+      input: { ...input, worktreePath, worktreeRoot: yield* rootForThread(thread, worktreePath) },
+      recover,
+    };
   });
 });

@@ -350,12 +350,13 @@ export function useSelectedThreadGitActions(repository?: GitRepositoryTarget) {
         if (AsyncResult.isFailure(result)) {
           return result;
         }
+        const worktreePath = result.value.worktree.projectPath ?? result.value.worktree.path;
         const syncResult = await syncSelectedThreadBranchState({
           thread,
-          cwd: result.value.worktree.path,
+          cwd: worktreePath,
           nextThreadState: {
             branch: result.value.worktree.refName,
-            worktreePath: result.value.worktree.path,
+            worktreePath,
           },
         });
         return AsyncResult.isFailure(syncResult) ? AsyncResult.failure(syncResult.cause) : result;

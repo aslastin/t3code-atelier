@@ -138,6 +138,7 @@ const claudeAdapter = {
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 
 interface HarnessOptions {
+  readonly workspaceRoot?: string;
   readonly closeTerminal?: TerminalManager.TerminalManager["Service"]["close"];
   readonly adapters?: ReadonlyArray<ProviderAdapter.ProviderAdapterV2["Service"]>;
   readonly managedFolders?: Layer.Layer<ManagedProjectFolders.ManagedProjectFolders>;
@@ -222,7 +223,10 @@ function makeHarness(options: HarnessOptions = {}) {
       getById: (id) =>
         Effect.succeed(
           id === projectId
-            ? Option.some(project)
+            ? Option.some({
+                ...project,
+                workspaceRoot: options.workspaceRoot ?? project.workspaceRoot,
+              })
             : id === otherProjectId
               ? Option.some(otherProject)
               : Option.none(),
@@ -289,6 +293,7 @@ function makeHarness(options: HarnessOptions = {}) {
       Layer.mergeAll(
         layerExternalServices,
         layerLaunchThreads,
+        NodeServices.layer,
         layerReceipts,
         layerOrchestrator,
         IdAllocator.layer,
@@ -1777,9 +1782,13 @@ const withRealGitRepo = <A, E, R>(
           ),
         fetchWorktreeBaseCommit: (input) => git.fetchWorktreeBaseCommit({ ...input, cwd }),
         createWorktree: (input, progress) =>
-          git.createWorktree({ ...input, cwd, path: worktreePath }, progress),
+          git.createWorktree(
+            { ...input, cwd: options.workspaceRoot ?? cwd, path: worktreePath },
+            progress,
+          ),
         ...options,
         git: {
+          repositoryRoot: () => Effect.succeed(cwd),
           resolveWorktreeBaseRemote: (input) => git.resolveWorktreeBaseRemote({ ...input, cwd }),
           resolvePrimaryRemoteName: () => git.resolvePrimaryRemoteName(cwd),
           resolveDefaultBranchName: (_cwd, remoteName) =>
@@ -1817,6 +1826,61 @@ const launchFromBase = (harness: ReturnType<typeof makeHarness>, baseRef: string
     const projection = yield* preparationSettled(launched.threadId);
     assert.equal(projection.runs[0]?.status, "starting");
   }).pipe(Effect.provide(harness.layer));
+
+it.live.each(["present", "excluded"] as const)(
+  "launches a subfolder project with the folder %s in the new worktree",
+  (folder) =>
+    withRealGitRepo(({ cwd, command, worktreePath, harness }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const workspaceRoot = `${cwd}/my-project`;
+        yield* fs.makeDirectory(workspaceRoot);
+        yield* fs.writeFileString(`${workspaceRoot}/README.md`, "project\n");
+        if (folder === "excluded") {
+          yield* fs.writeFileString(
+            `${workspaceRoot}/t3.json`,
+            JSON.stringify({ worktreeSparsePatternsPath: "patterns" }),
+          );
+          yield* fs.writeFileString(`${cwd}/patterns`, "/patterns\n");
+        }
+        yield* command(cwd, ["add", "."]);
+        yield* command(cwd, ["commit", "-m", "add subfolder project"]);
+        const launch = harness({ workspaceRoot });
+        yield* Effect.gen(function* () {
+          const launches = yield* ThreadLaunch.ThreadLaunchService;
+          const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+          const { threadId } = yield* launches.launch(
+            launchInput({
+              command: "launch:subfolder",
+              thread: "thread:subfolder",
+              message: "Start",
+              workspace: { type: "worktree", baseRef: "beta", branch: "feature" },
+            }),
+          );
+          const { thread } = yield* preparationSettled(threadId);
+          const expected = folder === "present" ? `${worktreePath}/my-project` : worktreePath;
+          assert.equal(thread.worktreePath, expected);
+          assert.equal(launch.runSetup.mock.calls[0]?.[0].worktreePath, expected);
+          assert.equal(
+            (yield* tracker.get(threadId))?.stages.find((stage) => stage.id === "checkout")?.status,
+            folder === "present" ? "done" : "warning",
+          );
+          const existing = yield* launches.launch(
+            launchInput({
+              command: "launch:reuse-subfolder",
+              thread: "thread:reuse-subfolder",
+              message: "Continue",
+              workspace: { type: "existing_worktree", worktreePath, branch: "feature" },
+            }),
+          );
+          assert.equal(
+            (yield* preparationSettled(existing.threadId)).thread.worktreePath,
+            expected,
+          );
+        }).pipe(Effect.provide(launch.layer));
+      }),
+    ),
+);
 
 it.effect("re-bases a stored base that no longer exists on the remote default branch", () =>
   withRealGitRepo(({ directory, cwd, worktreePath, command, harness }) =>

@@ -303,7 +303,7 @@ it.each([
   expect(harness.createWorktree).toHaveBeenCalledTimes(input.recreated ? 1 : 0);
 });
 
-const restoreLeaseExists = vi.fn(() => Effect.succeed(false));
+const restoreLeaseExists = vi.fn((_path: string) => Effect.succeed(false));
 const restoreLeaseCreateWorktree = vi.fn(() => Effect.succeed({} as never));
 const layerRestoreLeaseTest = layerThreadWorktreeRestore.pipe(
   Layer.provide(
@@ -340,7 +340,7 @@ effectIt.effect("restores a missing worktree before a send only under the worksp
           worktreePath,
           branch: "feature/restore",
         }).pipe(Effect.forkChild({ startImmediately: true }));
-        expect(restoreLeaseExists).not.toHaveBeenCalled();
+        expect(restoreLeaseExists).not.toHaveBeenCalledWith(worktreePath);
         return restoring;
       }),
     ).pipe(Effect.flatMap(Fiber.join));

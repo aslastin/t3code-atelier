@@ -213,6 +213,11 @@ This needs Git 2.35 or newer.
 
 ## Worktree location
 
+When your project is a subfolder of a repository, a new worktree opens in the corresponding
+subfolder. If that folder is missing from the selected branch or sparse checkout, setup shows a
+warning and opens the checkout root. Scripts receive the thread folder in `T3CODE_WORKTREE_PATH`
+and the checkout root in `T3CODE_WORKTREE_ROOT`.
+
 New worktrees go in the `worktrees` folder of the T3 home directory. To put them somewhere else,
 such as another drive, set **Settings → Worktrees → Worktree location** to an absolute path like
 `D:\worktrees` or `~/worktrees`. The setting is per machine. Existing worktrees stay where they

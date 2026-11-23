@@ -94,6 +94,8 @@ export type VcsRef = typeof VcsRef.Type;
 
 const VcsWorktree = Schema.Struct({
   path: TrimmedNonEmptyStringSchema,
+  /** Working directory for a subfolder project, or null if the checkout omits it. */
+  projectPath: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   refName: TrimmedNonEmptyStringSchema,
 });
 const GitResolvedPullRequest = Schema.Struct({
@@ -181,6 +183,7 @@ export type GitPreparePullRequestThreadInput = typeof GitPreparePullRequestThrea
 export const VcsRemoveWorktreeInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   path: TrimmedNonEmptyStringSchema,
+  onlyIfUnused: Schema.optional(Schema.Boolean),
   force: Schema.optional(Schema.Boolean),
 });
 export type VcsRemoveWorktreeInput = typeof VcsRemoveWorktreeInput.Type;

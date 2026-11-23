@@ -32,6 +32,9 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import { relativeProjectFolder, worktreeProjectFolder } from "../workspace/worktreeProjectPath.ts";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -280,6 +283,8 @@ const make = Effect.gen(function* () {
   const cloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
   const terminals = yield* TerminalManager.TerminalManager;
   const git = yield* GitWorkflow.GitWorkflowService;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
   const setupScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
@@ -820,7 +825,12 @@ const make = Effect.gen(function* () {
                     baseRefName,
                     path: null,
                   },
-                  { progress },
+                  {
+                    progress,
+                    repositoryRoot: yield* git
+                      .repositoryRoot(project.workspaceRoot)
+                      .pipe(Effect.orElseSucceed(() => null)),
+                  },
                 )
                 .pipe(
                   Effect.catchIf(
@@ -864,9 +874,10 @@ const make = Effect.gen(function* () {
                   })),
                   Effect.mapError(mapError(input, "provision-worktree", threadId)),
                 );
-        worktreePath = worktree.path;
+        const projectPath = "projectPath" in worktree ? worktree.projectPath : undefined;
+        worktreePath = projectPath ?? worktree.path;
         branch = worktree.refName;
-        createdWorktreePath = worktreePath;
+        createdWorktreePath = worktree.path;
         createdBranch = branch;
         yield* setupTracker.update(threadId, (snapshot) => ({
           ...snapshot,
@@ -878,7 +889,14 @@ const make = Effect.gen(function* () {
               : stage,
           ),
         }));
-        yield* setupTracker.stageStatus(threadId, "checkout", "done");
+        yield* setupTracker.stageStatus(
+          threadId,
+          "checkout",
+          projectPath === null ? "warning" : "done",
+          projectPath === null
+            ? "Project folder is missing in this checkout. Using the worktree root."
+            : undefined,
+        );
       }
 
       // Do not rewrite reused worktrees; that could undo the original branch rename.
@@ -1409,7 +1427,7 @@ const make = Effect.gen(function* () {
           yield* validateReusableThread(input, candidateThreadId);
         }
 
-        const workspaceStrategy: ThreadLaunchWorkspaceStrategy =
+        let workspaceStrategy: ThreadLaunchWorkspaceStrategy =
           input.workspaceStrategy.type === "root" &&
           !input.initialMessage?.sourcePlanRef &&
           Option.isNone(launchReceipt)
@@ -1427,6 +1445,30 @@ const make = Effect.gen(function* () {
                 },
               )
             : input.workspaceStrategy;
+        if (
+          input.workspaceStrategy.type === "existing_worktree" &&
+          workspaceStrategy.type === "existing_worktree" &&
+          !input.initialMessage?.sourcePlanRef &&
+          Option.isNone(launchReceipt) &&
+          (yield* fs
+            .exists(path.join(workspaceStrategy.worktreePath, ".git"))
+            .pipe(Effect.orElseSucceed(() => false)))
+        ) {
+          const root = yield* git
+            .repositoryRoot(project.workspaceRoot)
+            .pipe(Effect.orElseSucceed(() => null));
+          if (root !== null) {
+            const folder = yield* worktreeProjectFolder(
+              fs,
+              path,
+              yield* relativeProjectFolder(fs, path, root, project.workspaceRoot).pipe(
+                Effect.orElseSucceed(() => ""),
+              ),
+              workspaceStrategy.worktreePath,
+            );
+            if (folder !== null) workspaceStrategy = { ...workspaceStrategy, worktreePath: folder };
+          }
+        }
         if (input.initialMessage?.sourcePlanRef && workspaceStrategy.type === "worktree") {
           return yield* mapError(
             input,

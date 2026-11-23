@@ -54,6 +54,11 @@ import {
 } from "./VcsProcess.ts";
 import { makeWorktreeCheckoutCache } from "./worktreeCheckoutCache.ts";
 import { removeLinkedWorktree } from "./worktreeRemoval.ts";
+import {
+  relativeProjectFolder,
+  worktreeProjectFolder,
+  worktreeRootForProject,
+} from "../workspace/worktreeProjectPath.ts";
 import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
 import {
   parseRemoteNames,
@@ -5439,26 +5444,50 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
+  const worktreeProjectPrefix = Effect.fn("GitVcsDriver.worktreeProjectPrefix")(
+    function* (cwd: string, repositoryRoot?: string | null) {
+      if (repositoryRoot)
+        return yield* relativeProjectFolder(fileSystem, path, repositoryRoot, cwd);
+      if (yield* fileSystem.exists(path.join(cwd, ".git"))) return "";
+      const prefix = yield* runGitStdout("GitVcsDriver.createWorktree.projectPrefix", cwd, [
+        "rev-parse",
+        "--show-prefix",
+      ]);
+      return prefix.replace(/\/?\n$/, "");
+    },
+    Effect.orElseSucceed(() => ""),
+  );
+
   // A new worktree has no files yet, so t3.json and its pattern file come from the ref itself.
-  const readWorktreeSparsePatterns = Effect.fn("readWorktreeSparsePatterns")(function* (
+  const readWorktreeProjectFile = Effect.fn("readWorktreeProjectFile")(function* (
     cwd: string,
     refName: string,
+    fileName: string,
   ) {
     // `git show` does not read a lone - as the previous checkout either.
     const ref = refName === "-" ? "@{-1}" : refName;
     const projectFile = yield* executeGit(
       "GitVcsDriver.createWorktree.readProjectFile",
       cwd,
-      ["show", `${ref}:${T3_PROJECT_FILE_NAME}`],
+      ["show", `${ref}:${fileName}`],
       { allowNonZeroExit: true },
     );
     if (projectFile.exitCode !== 0) return null;
     const file = parseT3ProjectFile(projectFile.stdout);
     if (file === null) {
-      yield* Effect.logWarning("t3.json is invalid; checking out the full worktree", { cwd, ref });
+      yield* Effect.logWarning("Ignoring invalid worktree project file", { cwd, ref });
       return null;
     }
-    if (file.worktreeSparsePatternsPath === undefined) return null;
+    return file;
+  });
+  const readWorktreeSparsePatterns = Effect.fn("readWorktreeSparsePatterns")(function* (
+    cwd: string,
+    refName: string,
+    fileName: string,
+  ) {
+    const file = yield* readWorktreeProjectFile(cwd, refName, fileName);
+    if (!file?.worktreeSparsePatternsPath) return null;
+    const ref = refName === "-" ? "@{-1}" : refName;
     // Git reads <ref>:./path from the working directory, so keep the path repository-relative.
     const patternsPath = file.worktreeSparsePatternsPath.replace(/^(?:\.\/)+/, "");
     const patterns = patternsPath.split("/").includes("..")
@@ -5606,7 +5635,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     // Later steps run git inside the worktree, so resolve a relative path the way worktree add does.
     worktreePath = path.resolve(input.cwd, worktreePath);
     // Read before the branch exists, so a missing pattern file leaves nothing behind.
-    const sparsePatterns = yield* readWorktreeSparsePatterns(input.cwd, input.refName);
+    const relative = yield* worktreeProjectPrefix(input.cwd, options?.repositoryRoot);
+    const projectFileName = path.join(relative, T3_PROJECT_FILE_NAME).split(path.sep).join("/");
+    const sparsePatterns = yield* readWorktreeSparsePatterns(
+      input.cwd,
+      input.refName,
+      projectFileName,
+    );
     const newRefName = input.newRefName;
     // Older Git still creates worktrees normally, but cannot prove ownership for cancellation.
     const addHelp = newRefName
@@ -5799,22 +5834,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           options?.submodules ?? null,
           options?.submodules != null
             ? null
-            : // Read HEAD for the same reason: sparse patterns can leave t3.json out too.
-              yield* executeGit(
-                "GitVcsDriver.createWorktree.readProjectFile",
-                worktreePath,
-                ["show", `HEAD:${T3_PROJECT_FILE_NAME}`],
-                { allowNonZeroExit: true },
-              ).pipe(
-                Effect.flatMap((result) => {
-                  if (result.exitCode !== 0) return Effect.succeed(null);
-                  const file = parseT3ProjectFile(result.stdout);
-                  return file === null
-                    ? Effect.logWarning("t3.json is invalid; initializing submodules recursively", {
-                        worktreePath,
-                      }).pipe(Effect.as(null))
-                    : Effect.succeed(file);
-                }),
+            : yield* readWorktreeProjectFile(worktreePath, "HEAD", projectFileName).pipe(
                 Effect.orElseSucceed(() => null),
               ),
         );
@@ -5956,9 +5976,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       );
     }
 
+    const projectPath = relative
+      ? yield* worktreeProjectFolder(fileSystem, path, path.normalize(relative), worktreePath)
+      : undefined;
     return {
       worktree: {
         path: worktreePath,
+        ...(projectPath === undefined ? {} : { projectPath }),
         refName: targetBranch,
       },
     };
@@ -6366,7 +6390,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     // Git also matches a worktree by its short name, which can name a different
     // folder than this path. Resolving it once keeps Git, the Windows deletion
     // in removeLinkedWorktree, and the leftover cleanup below on one directory.
-    const target = path.resolve(input.cwd, input.path);
+    const target = yield* worktreeRootForProject(
+      fileSystem,
+      path,
+      path.resolve(input.cwd, input.path),
+      input.cwd,
+    );
     const result = yield* removeLinkedWorktree({
       operation: "GitVcsDriver.removeWorktree",
       cwd: input.cwd,
