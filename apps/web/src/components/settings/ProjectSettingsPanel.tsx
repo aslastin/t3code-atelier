@@ -4,7 +4,7 @@ import { m as resolveMessage } from "../../i18n/messages";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { useEnvironmentsWithScope } from "../../state/session";
-import { mapAtomCommandResult, settlePromise } from "@t3tools/client-runtime/state/runtime";
+import { mapAtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { planProjectRemoval } from "@t3tools/client-runtime/state/projects";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
@@ -22,7 +22,7 @@ import { T, useGT, useMessages } from "gt-react";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { releaseProjectDraftUploads } from "../../lib/composerDraftUploads";
 import { persistClientSettingsUpdate, useClientSettings } from "../../hooks/useSettings";
-import { readLocalApi } from "../../localApi";
+import { ProjectRemovalDialog, type RemovalPlan } from "./ProjectRemovalDialog";
 import { derivePhysicalProjectKey } from "@t3tools/client-runtime/state/project-grouping";
 import {
   PROJECT_GROUPING_MODE_LABELS,
@@ -253,6 +253,7 @@ export function ProjectSettingsPanel({
     <ProjectDetail
       key={`${selected.projectKey}:${environmentId ?? "all"}:${checkoutKey ?? "all"}`}
       group={scopedGroup}
+      allGroups={groups}
       allMembers={selected.memberProjects}
       hasOtherMembers={members.length < selected.memberProjects.length}
     />
@@ -262,9 +263,11 @@ export function ProjectSettingsPanel({
 function ProjectDetail({
   group,
   allMembers,
+  allGroups,
   hasOtherMembers,
 }: {
   group: SidebarProjectSnapshot;
+  allGroups: readonly SidebarProjectSnapshot[];
   /** Pin and archive belong to the whole project, even when one machine is picked. */
   allMembers: ReadonlyArray<SidebarProjectGroupMember>;
   hasOtherMembers: boolean;
@@ -354,41 +357,28 @@ function ProjectDetail({
     group.memberProjects.every((member) => member.isScratch) &&
     group.memberProjects.some((member) => member.title !== SCRATCH_PROJECT_TITLE);
 
-  const removeMembers = async (members: ReadonlyArray<SidebarProjectGroupMember>) => {
-    if (checkProjectAccess(members, gt("Failed to remove project"))) return;
-    const api = readLocalApi();
-    if (!api) return;
-
-    const { projectThreads, isWholeGroup, confirmationMessage } = planProjectRemoval(
-      {
+  const [removal, setRemoval] = useState<RemovalPlan | null>(null);
+  const [isRemoving, setIsRemoving] = useState(false);
+  const reviewRemoval = (members: readonly SidebarProjectGroupMember[]) => {
+    if (isRemoving || checkProjectAccess(members, gt("Failed to remove project"))) return;
+    setRemoval(
+      planProjectRemoval({
         members,
-        groupMemberCount: group.memberProjects.length,
-        hasOtherMembers,
-        displayName: group.displayName,
+        groupMembers: allMembers,
+        projects: allGroups.flatMap((entry) => entry.memberProjects),
         threads,
-        unloadedThreadCount: readUnloadedThreadCount(members, threads),
-      },
-      resolveMessage,
+        unloadedThreadCount: (member, held) => readUnloadedThreadCount([member], held),
+      }),
     );
-    const confirmed = await settlePromise(() =>
-      api.dialogs.confirm(confirmationMessage, { variant: "destructive" }),
-    );
-    if (confirmed._tag === "Failure" || !confirmed.value) return;
+  };
+  const removeEntries = async (entries: RemovalPlan["entries"]) => {
+    setRemoval(null);
+    const members = entries.map((entry) => entry.member);
     if (checkProjectAccess(members, gt("Failed to remove project"))) return;
-
     const draftStore = useComposerDraftStore.getState();
-    const remainingMember = allMembers.find(
-      (candidate) =>
-        !members.some(
-          (member) =>
-            member.environmentId === candidate.environmentId && member.id === candidate.id,
-        ),
-    );
-    for (const member of members) {
+    const removedKeys = new Set(members.map((member) => member.physicalProjectKey));
+    for (const { member, threads: memberThreads } of entries) {
       if (checkProjectAccess([member], gt("Failed to remove project"))) return;
-      const memberThreads = projectThreads.filter(
-        (thread) => thread.environmentId === member.environmentId && thread.projectId === member.id,
-      );
       const result = mapAtomCommandResult(
         await deleteProject({
           environmentId: member.environmentId,
@@ -410,19 +400,29 @@ function ProjectDetail({
         memberThreads.map((thread) => scopeThreadRef(thread.environmentId, thread.id)),
       );
       const projectDraftThread = draftStore.getDraftThreadByProjectRef(projectRef);
-      if (projectDraftThread && remainingMember) {
-        draftStore.setDraftThreadContext(projectDraftThread.draftId, {
-          projectRef: scopeProjectRef(remainingMember.environmentId, remainingMember.id),
-          environmentSelection: "manual",
-          loadBalancedEnvironmentId: null,
-        });
-      } else if (projectDraftThread) {
-        draftStore.clearDraftThread(projectDraftThread.draftId);
+      if (projectDraftThread) {
+        const ownGroup = allGroups.find((entry) =>
+          entry.memberProjects.some(
+            (candidate) => candidate.physicalProjectKey === member.physicalProjectKey,
+          ),
+        );
+        const remainingMember = ownGroup?.memberProjects.find(
+          (candidate) => !removedKeys.has(candidate.physicalProjectKey),
+        );
+        if (remainingMember) {
+          draftStore.setDraftThreadContext(projectDraftThread.draftId, {
+            projectRef: scopeProjectRef(remainingMember.environmentId, remainingMember.id),
+            environmentSelection: "manual",
+            loadBalancedEnvironmentId: null,
+          });
+        } else {
+          draftStore.clearDraftThread(projectDraftThread.draftId);
+        }
       }
       draftStore.clearProjectDraftThreadId(projectRef);
     }
 
-    if (isWholeGroup && !hasOtherMembers) {
+    if (allMembers.every((member) => removedKeys.has(member.physicalProjectKey))) {
       void navigate({
         to: "/settings/projects",
         search: ({ machine }) => ({ project: undefined, machine, checkout: undefined }),
@@ -448,8 +448,8 @@ function ProjectDetail({
         <Button
           size="sm"
           variant="outline"
-          disabled={!editableIds.has(member.environmentId)}
-          onClick={() => void removeMembers([member])}
+          disabled={isRemoving || !editableIds.has(member.environmentId)}
+          onClick={() => reviewRemoval([member])}
           aria-label={gt("Remove checkout {path}", { path: member.workspaceRoot })}
         >
           {gt("Remove", { $context: "verb, removes a checkout" })}
@@ -698,36 +698,25 @@ function ProjectDetail({
         <SettingsSection title={gt("Danger")}>
           <SettingsRow
             title={
-              hasOtherMembers
-                ? gt("Remove checkout")
-                : group.memberProjects.length > 1
-                  ? gt("Remove this project everywhere")
+              hasMultipleCheckouts
+                ? gt("Remove project entries")
+                : hasOtherMembers
+                  ? gt("Remove checkout")
                   : gt("Remove project")
             }
-            description={
-              hasOtherMembers
-                ? gt(
-                    "Deletes the selected machine's checkout entries and their threads. Other machines and files on disk are not touched.",
-                  )
-                : group.memberProjects.length > 1
-                  ? gt(
-                      "{count, plural, other {Deletes all {count} checkout entries and their threads on every machine. Files on disk are not touched.}}",
-                      { count: group.memberProjects.length },
-                    )
-                  : gt("Deletes the project entry and its threads. Files on disk are not touched.")
-            }
+            description={gt("Review the folders and threads to remove.")}
             control={
               <Button
                 size="sm"
                 variant="destructive-outline"
-                disabled={!canEditGroup}
-                onClick={() => void removeMembers(group.memberProjects)}
+                disabled={isRemoving || !canEditGroup}
+                onClick={() => reviewRemoval(group.memberProjects)}
               >
                 <Trash2Icon />
-                {hasOtherMembers
-                  ? gt("Remove checkout")
-                  : group.memberProjects.length > 1
-                    ? gt("Remove all entries")
+                {hasMultipleCheckouts
+                  ? gt("Review entries")
+                  : hasOtherMembers
+                    ? gt("Remove checkout")
                     : gt("Remove project")}
               </Button>
             }
@@ -735,6 +724,16 @@ function ProjectDetail({
         </SettingsSection>
       </SettingsPageContainer>
 
+      {removal && (
+        <ProjectRemovalDialog
+          plan={removal}
+          onCancel={() => setRemoval(null)}
+          onConfirm={(entries) => {
+            setIsRemoving(true);
+            void removeEntries(entries).finally(() => setIsRemoving(false));
+          }}
+        />
+      )}
       <ProjectFaviconPickerDialog
         key={`${filePickerProject.environmentId}:${filePickerProject.workspaceRoot}:${faviconPickerOpen}`}
         cwd={filePickerProject.workspaceRoot}

@@ -113,65 +113,92 @@ describe("project removal confirmation", () => {
   const listed = { rootThreadId: parentId, parentThreadId: null, relationshipToParent: null };
   const child = { rootThreadId: parentId, parentThreadId: parentId };
 
+  const nested = {
+    ...local,
+    id: ProjectId.make("nested"),
+    workspaceRoot: "/work/repo/my-project",
+  };
+  const groupMembers = [local, remote, nested];
+  const threads = [
+    { environmentId: local.environmentId, projectId: local.id, lineage: listed },
+    {
+      environmentId: local.environmentId,
+      projectId: local.id,
+      lineage: { ...child, relationshipToParent: "subagent" as const },
+    },
+    {
+      environmentId: local.environmentId,
+      projectId: local.id,
+      lineage: { ...child, relationshipToParent: "fork" as const, sideChat: true },
+    },
+    { environmentId: remote.environmentId, projectId: remote.id, lineage: listed },
+  ];
+
   it("limits a checkout's thread count to its listed threads in that environment and project", () => {
     const plan = planProjectRemoval({
       members: [local],
-      groupMemberCount: 2,
-      hasOtherMembers: false,
-      displayName: "Repo",
-      threads: [
-        { environmentId: local.environmentId, projectId: local.id, lineage: listed },
-        {
-          environmentId: local.environmentId,
-          projectId: local.id,
-          lineage: { ...child, relationshipToParent: "subagent" },
-        },
-        {
-          environmentId: local.environmentId,
-          projectId: local.id,
-          lineage: { ...child, relationshipToParent: "fork", sideChat: true },
-        },
-        { environmentId: remote.environmentId, projectId: remote.id, lineage: listed },
-      ],
+      groupMembers,
+      projects: groupMembers,
+      threads,
+      unloadedThreadCount: (member) => (member.id === local.id ? 4 : 0),
     });
-    expect(plan.projectThreads).toHaveLength(3);
-    expect(plan.confirmationMessage).toBe(
-      'Remove checkout "Repo" and delete its 1 thread?\nPath: /work/repo\nEnvironment: Local\nThose threads and any archived threads are deleted from T3 Code. Provider sessions are kept.\nOther entries in this grouped project are unaffected.\nThis action cannot be undone.',
-    );
+    expect(plan.entries.map((entry) => entry.member)).toEqual([local]);
+    expect(plan.entries[0]?.threads).toHaveLength(3);
+    expect(plan.entries[0]?.threadCount).toBe(5);
+    expect(plan.entriesToRemove().map((entry) => entry.member)).toEqual([local]);
+    expect(plan.entriesToRemove(true).map((entry) => entry.member)).toEqual([local, nested]);
+    expect(plan.nestedEntries.map((entry) => entry.member)).toEqual([nested]);
   });
 
-  it("keeps an environment-filtered group scoped to its selected checkout", () => {
-    const plan = planProjectRemoval({
-      members: [remote],
-      groupMemberCount: 1,
-      hasOtherMembers: true,
-      displayName: "Repo",
-      threads: [],
-    });
-    expect(plan.targetKind).toBe("checkout");
-    expect(plan.confirmationMessage).toContain("Environment: Remote");
-    expect(plan.confirmationMessage).toContain(
-      "Other entries in this grouped project are unaffected.",
-    );
-    expect(plan.confirmationMessage).toContain(
-      "Any archived threads are deleted from T3 Code. Provider sessions are kept.",
-    );
+  it("keeps a checkout removal scoped to the selected folder and environment", () => {
+    for (const member of [remote, nested]) {
+      const plan = planProjectRemoval({
+        members: [member],
+        groupMembers,
+        projects: groupMembers,
+        threads,
+      });
+      expect(plan.entries.map((entry) => entry.member)).toEqual([member]);
+      expect(plan.nestedEntries).toEqual([]);
+    }
   });
 
-  // regression: #21409 project-wide removal must count every checkout's threads and keep files
-  it("states the full group count and preserves files when removing a project everywhere", () => {
+  it("lists each checkout and offers nested projects separately, including those grouped elsewhere", () => {
+    const identity = makeProject(localEnvironmentId).repositoryIdentity!;
+    const members = groupMembers.map((member) => ({
+      ...member,
+      repositoryIdentity: { ...identity, rootPath: "/work/repo" },
+    }));
+    const other = { ...nested, id: ProjectId.make("other"), workspaceRoot: "/work/repo/other" };
+    const sibling = { ...other, id: ProjectId.make("sibling"), workspaceRoot: "/work/repo-copy" };
     const plan = planProjectRemoval({
-      members: [local, remote],
-      groupMemberCount: 2,
-      hasOtherMembers: false,
-      displayName: "Repo",
-      threads: [],
+      members,
+      groupMembers: members,
+      projects: [...members, other, sibling],
+      threads,
     });
-    expect(plan.targetKind).toBe("project");
-    expect(plan.confirmationMessage).toContain("This removes 2 grouped project entries.");
-    expect(plan.confirmationMessage).toContain(
-      "This removes only the project entries, not the files on disk.",
-    );
+    expect(plan.differentRepositoryFolders).toBe(true);
+    const aliased = members.map((member) => ({
+      ...member,
+      workspaceRoot: "/alias" + member.workspaceRoot,
+    }));
+    expect(
+      planProjectRemoval({ members: aliased, groupMembers: aliased, projects: aliased, threads })
+        .differentRepositoryFolders,
+    ).toBe(true);
+    expect(plan.entries.map((entry) => [entry.member, entry.threadCount])).toEqual([
+      [members[0], 1],
+      [members[1], 1],
+    ]);
+    expect(plan.nestedEntries.map((entry) => entry.member)).toEqual([members[2], other]);
+    expect(
+      planProjectRemoval({
+        members: members.slice(0, 2),
+        groupMembers: members.slice(0, 2),
+        projects: members,
+        threads,
+      }).differentRepositoryFolders,
+    ).toBe(false);
   });
 });
 

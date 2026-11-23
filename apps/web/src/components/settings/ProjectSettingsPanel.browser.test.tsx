@@ -27,6 +27,7 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
+import "~/index.css";
 import { act, render, type Screen } from "../../../test/render";
 import type { Project } from "../../types";
 
@@ -48,7 +49,6 @@ const state = vi.hoisted(() => ({
         input: DeleteProjectInput;
       }) => Promise<AsyncResult.Success<void>>
     >(),
-  confirm: vi.fn<() => Promise<boolean>>(),
   releaseUploads: vi.fn(),
   clearDraft: vi.fn(),
   toast: vi.fn(),
@@ -103,10 +103,6 @@ vi.mock(import("~/hooks/useSettings"), async (original) => ({
   ...(await original()),
   useClientSettings: ((selector?: (settings: typeof DEFAULT_CLIENT_SETTINGS) => unknown) =>
     selector ? selector(DEFAULT_CLIENT_SETTINGS) : DEFAULT_CLIENT_SETTINGS) as never,
-}));
-vi.mock(import("~/localApi"), async (original) => ({
-  ...(await original()),
-  readLocalApi: (() => ({ dialogs: { confirm: state.confirm } })) as never,
 }));
 vi.mock(import("~/lib/composerDraftUploads"), async (original) => ({
   ...(await original()),
@@ -214,7 +210,6 @@ function setup() {
     return AsyncResult.success(undefined);
   });
   state.delete.mockResolvedValue(AsyncResult.success(undefined));
-  state.confirm.mockResolvedValue(true);
   useComposerDraftStore.setState({ clearProjectDraftThreadId: state.clearDraft });
 }
 
@@ -309,7 +304,7 @@ const removeCheckout = (screen: Screen, root: string) =>
   screen.container.querySelector<HTMLButtonElement>(`[aria-label="Remove checkout ${root}"]`)!;
 const removeAll = (screen: Screen) =>
   [...screen.container.querySelectorAll("button")].find((button) =>
-    button.textContent?.includes("Remove all entries"),
+    button.textContent?.includes("Review entries"),
   )!;
 
 async function grant(id: EnvironmentId, result: SessionResult) {
@@ -409,6 +404,7 @@ describe("project settings permissions", () => {
     expect(removeAll(screen).disabled).toBe(true);
 
     await userEvent.click(removeCheckout(screen, "/work/primary"));
+    await page.getByRole("button", { name: "Remove 1 entry", exact: true }).click();
     await vi.waitFor(() => expect(state.delete).toHaveBeenCalledOnce());
     expect(state.delete).toHaveBeenCalledWith({
       environmentId: primaryId,
@@ -439,6 +435,7 @@ describe("project settings permissions", () => {
     await using screen = await mountPanel();
 
     await userEvent.click(removeCheckout(screen, "/work/remote"));
+    await page.getByRole("button", { name: "Remove 1 entry", exact: true }).click();
     await vi.waitFor(() => expect(state.releaseUploads).toHaveBeenCalledOnce());
 
     expect(useComposerDraftStore.getState().getDraftSession(draftId)).toMatchObject({
@@ -452,17 +449,12 @@ describe("project settings permissions", () => {
 
   it("rechecks every removal target after confirmation before deleting or clearing drafts", async () => {
     setup();
-    const confirmed = deferred<boolean>();
-    state.confirm.mockReturnValueOnce(confirmed.promise);
     await using screen = await mountPanel();
     await userEvent.click(removeAll(screen));
-    expect(state.confirm).toHaveBeenCalledOnce();
+    await expect.element(page.getByRole("alertdialog")).toBeVisible();
 
     await grant(remoteId, AsyncResult.success(session([])));
-    await act(async () => {
-      confirmed.resolve(true);
-      await confirmed.promise;
-    });
+    await page.getByRole("button", { name: "Remove 2 entries", exact: true }).click();
     await expectProjectAccessDeniedToast("Failed to remove project");
     expect(state.delete).not.toHaveBeenCalled();
     expect(state.releaseUploads).not.toHaveBeenCalled();
@@ -792,6 +784,7 @@ it("returns to the project overview after removal, clearing the selection but ke
   )!;
 
   await userEvent.click(removeProject);
+  await page.getByRole("button", { name: "Remove 1 entry", exact: true }).click();
 
   await vi.waitFor(() => {
     expect(screen.router.state.location.pathname).toBe("/settings/projects");
