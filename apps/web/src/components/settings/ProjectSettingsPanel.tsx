@@ -6,7 +6,14 @@ import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { useEnvironmentsWithScope } from "../../state/session";
 import { mapAtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { planProjectRemoval } from "@t3tools/client-runtime/state/projects";
+import {
+  planProjectRemoval,
+  readRemovalArchives,
+  removalEnvironmentLabel,
+  removalFoldersMatch,
+  changedProjectFolderNotice,
+  ambiguousProjectFoldersNotice,
+} from "@t3tools/client-runtime/state/projects";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import {
   checkProjectAccess,
@@ -14,7 +21,7 @@ import {
   useProjectGroupUpdate,
   type ProjectGroupUpdate,
 } from "../../hooks/useProjectGroupUpdate";
-import { Navigate, useLocation, useNavigate } from "@tanstack/react-router";
+import { Navigate, useLocation, useNavigate, useRouter } from "@tanstack/react-router";
 import { InfoIcon, Trash2Icon } from "lucide-react";
 import { lazy, Suspense, useRef, useState, type ReactNode } from "react";
 import { T, useGT, useMessages } from "gt-react";
@@ -31,8 +38,10 @@ import {
   type SidebarProjectSnapshot,
 } from "../../sidebarProjectGrouping";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
-import { useThreadShells, waitForProjectRemoval } from "../../state/entities";
+import { readProjects, readThreadShells, waitForProjectRemoval } from "../../state/entities";
 import { refreshProjectFaviconUrl } from "../../state/assets";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { orchestrationEnvironment } from "../../state/orchestration";
 import { projectEnvironment } from "../../state/projects";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Alert, AlertDescription } from "../ui/alert";
@@ -287,7 +296,7 @@ function ProjectDetail({
     group.memberProjects.find(
       (member) => environmentById.get(member.environmentId)?.serverConfig != null,
     ) ?? group.memberProjects[0]!;
-  const threads = useThreadShells();
+  const router = useRouter();
   const deleteProject = useOrchestrationCommand(projectEnvironment.delete, {
     reportFailure: false,
   });
@@ -359,31 +368,63 @@ function ProjectDetail({
 
   const [removal, setRemoval] = useState<RemovalPlan | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
-  const reviewRemoval = (members: readonly SidebarProjectGroupMember[]) => {
+  const foldersStillMatch = (members: readonly SidebarProjectGroupMember[]) => {
+    if (removalFoldersMatch(members, readProjects())) return true;
+    toastManager.add({ type: "warning", title: resolveMessage(changedProjectFolderNotice) });
+    return false;
+  };
+  const reviewRemoval = async (members: readonly SidebarProjectGroupMember[]) => {
     if (isRemoving || checkProjectAccess(members, gt("Failed to remove project"))) return;
-    setRemoval(
-      planProjectRemoval({
-        members,
-        groupMembers: allMembers,
-        projects: allGroups.flatMap((entry) => entry.memberProjects),
-        threads,
-        unloadedThreadCount: (member, held) => readUnloadedThreadCount([member], held),
-      }),
+    setIsRemoving(true);
+    const archives = await readRemovalArchives(
+      appAtomRegistry,
+      members,
+      orchestrationEnvironment.archivedShellSnapshot,
     );
+    setIsRemoving(false);
+    if (archives._tag === "Failure") {
+      reportProjectFailure(gt("Failed to remove project"), archives);
+      return;
+    }
+    if (!foldersStillMatch(members)) return;
+    const plan = planProjectRemoval({
+      members,
+      groupMembers: allMembers,
+      projects: readProjects().map((project) => ({
+        ...project,
+        physicalProjectKey: derivePhysicalProjectKey(project),
+        environmentLabel: removalEnvironmentLabel(project.environmentId, environments),
+      })),
+      threads: readThreadShells(),
+      archives: archives.value,
+      unloadedThreadCount: (member, held) => readUnloadedThreadCount([member], held),
+    });
+    if (plan.ambiguousFolders) {
+      toastManager.add({ type: "warning", title: resolveMessage(ambiguousProjectFoldersNotice) });
+      return;
+    }
+    setRemoval(plan);
   };
   const removeEntries = async (entries: RemovalPlan["entries"]) => {
     setRemoval(null);
+    const initialLocation = router.state.location.href;
     const members = entries.map((entry) => entry.member);
-    if (checkProjectAccess(members, gt("Failed to remove project"))) return;
+    if (checkProjectAccess(members, gt("Failed to remove project")) || !foldersStillMatch(members))
+      return;
     const draftStore = useComposerDraftStore.getState();
     const removedKeys = new Set(members.map((member) => member.physicalProjectKey));
     for (const { member, threads: memberThreads } of entries) {
-      if (checkProjectAccess([member], gt("Failed to remove project"))) return;
+      if (
+        checkProjectAccess([member], gt("Failed to remove project")) ||
+        !foldersStillMatch([member])
+      )
+        return;
       const result = mapAtomCommandResult(
         await deleteProject({
           environmentId: member.environmentId,
           input: {
             projectId: member.id,
+            expectedWorkspaceRoot: member.workspaceRoot,
             force: true,
           },
         }),
@@ -422,7 +463,10 @@ function ProjectDetail({
       draftStore.clearProjectDraftThreadId(projectRef);
     }
 
-    if (allMembers.every((member) => removedKeys.has(member.physicalProjectKey))) {
+    if (
+      router.state.location.href === initialLocation &&
+      allMembers.every((member) => removedKeys.has(member.physicalProjectKey))
+    ) {
       void navigate({
         to: "/settings/projects",
         search: ({ machine }) => ({ project: undefined, machine, checkout: undefined }),

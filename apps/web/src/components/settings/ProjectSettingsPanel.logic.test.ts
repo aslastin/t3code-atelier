@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, ProjectId, SourceControlProviderKind, ThreadId } from "@t3tools/contracts";
-import { planProjectRemoval } from "@t3tools/client-runtime/state/projects";
+import {
+  planProjectRemoval,
+  removalEnvironmentLabel,
+} from "@t3tools/client-runtime/state/projects";
 
 import { buildSidebarProjectSnapshots } from "../../sidebarProjectGrouping";
 import type { Project } from "../../types";
@@ -120,18 +123,30 @@ describe("project removal confirmation", () => {
   };
   const groupMembers = [local, remote, nested];
   const threads = [
-    { environmentId: local.environmentId, projectId: local.id, lineage: listed },
     {
+      id: ThreadId.make("listed"),
+      environmentId: local.environmentId,
+      projectId: local.id,
+      lineage: listed,
+    },
+    {
+      id: parentId,
       environmentId: local.environmentId,
       projectId: local.id,
       lineage: { ...child, relationshipToParent: "subagent" as const },
     },
     {
+      id: parentId,
       environmentId: local.environmentId,
       projectId: local.id,
       lineage: { ...child, relationshipToParent: "fork" as const, sideChat: true },
     },
-    { environmentId: remote.environmentId, projectId: remote.id, lineage: listed },
+    {
+      id: ThreadId.make("remote"),
+      environmentId: remote.environmentId,
+      projectId: remote.id,
+      lineage: listed,
+    },
   ];
 
   it("limits a checkout's thread count to its listed threads in that environment and project", () => {
@@ -140,6 +155,12 @@ describe("project removal confirmation", () => {
       groupMembers,
       projects: groupMembers,
       threads,
+      archives: [
+        {
+          environmentId: local.environmentId,
+          threads: [{ id: "archived", projectId: nested.id, lineage: listed }],
+        },
+      ],
       unloadedThreadCount: (member) => (member.id === local.id ? 4 : 0),
     });
     expect(plan.entries.map((entry) => entry.member)).toEqual([local]);
@@ -148,6 +169,7 @@ describe("project removal confirmation", () => {
     expect(plan.entriesToRemove().map((entry) => entry.member)).toEqual([local]);
     expect(plan.entriesToRemove(true).map((entry) => entry.member)).toEqual([local, nested]);
     expect(plan.nestedEntries.map((entry) => entry.member)).toEqual([nested]);
+    expect(plan.nestedEntries[0]?.threadCount).toBe(1);
   });
 
   it("keeps a checkout removal scoped to the selected folder and environment", () => {
@@ -198,6 +220,84 @@ describe("project removal confirmation", () => {
         projects: members,
         threads,
       }).differentRepositoryFolders,
+    ).toBe(false);
+  });
+  it("protects nested registrations reached through an alias and includes every ID at a selected checkout", () => {
+    const identity = makeProject(localEnvironmentId).repositoryIdentity!;
+    const root = {
+      ...local,
+      workspaceRoot: "/alias/repo",
+      repositoryIdentity: {
+        ...identity,
+        rootPath: "/real/repo",
+        resolvedWorkspaceRoot: "/real/repo",
+      },
+    };
+    const duplicate = { ...root, id: ProjectId.make("legacy"), workspaceRoot: "/alias/repo/" };
+    const child = {
+      ...nested,
+      workspaceRoot: "/real/repo/apps/ui",
+      repositoryIdentity: { ...identity, rootPath: "/real/repo" },
+    };
+    const plan = planProjectRemoval({
+      members: [root, child],
+      groupMembers: [root, child],
+      projects: [duplicate, root, child],
+      threads: [],
+    });
+    expect(plan.entriesToRemove().map(({ member }) => member.id)).toEqual([duplicate.id, root.id]);
+    expect(plan.nestedEntries.map(({ member }) => member.id)).toEqual([child.id]);
+  });
+
+  it("requires individual review for ambiguous aliases on older servers", () => {
+    const identity = {
+      ...makeProject(localEnvironmentId).repositoryIdentity!,
+      rootPath: "/real/repo",
+    };
+    const members = [
+      { ...local, workspaceRoot: "/alias/repo", repositoryIdentity: identity },
+      { ...nested, workspaceRoot: "/real/repo/ui", repositoryIdentity: identity },
+    ];
+    expect(
+      planProjectRemoval({ members, groupMembers: members, projects: members, threads: [] })
+        .ambiguousFolders,
+    ).toBe(true);
+    expect(
+      planProjectRemoval({
+        members: [members[1]!],
+        groupMembers: members,
+        projects: members,
+        threads: [],
+      }).ambiguousFolders,
+    ).toBe(false);
+  });
+
+  it("identifies both machines when their names match", () => {
+    const environments = [localEnvironmentId, remoteEnvironmentId].map((environmentId) => ({
+      environmentId,
+      label: "Dev",
+    }));
+    expect(removalEnvironmentLabel(localEnvironmentId, environments)).toBe("Dev (local)");
+    expect(removalEnvironmentLabel(remoteEnvironmentId, environments)).toBe("Dev (remote)");
+  });
+
+  it("recognizes the same repository folder on Windows and POSIX", () => {
+    const identity = makeProject(localEnvironmentId).repositoryIdentity!;
+    const members = [
+      {
+        ...local,
+        workspaceRoot: "C:/repo/Sources",
+        repositoryIdentity: { ...identity, rootPath: "C:/repo" },
+      },
+      {
+        ...remote,
+        workspaceRoot: "/work/repo/Sources",
+        repositoryIdentity: { ...identity, rootPath: "/work/repo" },
+      },
+    ];
+    expect(
+      planProjectRemoval({ members, groupMembers: members, projects: members, threads: [] })
+        .differentRepositoryFolders,
     ).toBe(false);
   });
 });

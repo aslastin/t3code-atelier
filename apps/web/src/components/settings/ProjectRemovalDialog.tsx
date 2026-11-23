@@ -41,7 +41,7 @@ export function ProjectRemovalDialog({
   const list = (entries: RemovalPlan["entries"]) => (
     <ul className="grid gap-2">
       {entries.map(({ member, threadCount }) => (
-        <li key={member.physicalProjectKey} className="min-w-0">
+        <li key={`${member.environmentId}:${member.id}`} className="min-w-0">
           <div className="wrap-anywhere font-mono text-sm">{member.workspaceRoot}</div>
           <div className="wrap-anywhere text-xs text-muted-foreground">
             {m(removalEntryDetail(member.environmentLabel ?? member.environmentId, threadCount))}

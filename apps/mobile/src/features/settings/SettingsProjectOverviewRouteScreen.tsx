@@ -10,6 +10,11 @@ import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import {
   planProjectRemoval,
   differentRepositoryFoldersNotice,
+  ambiguousProjectFoldersNotice,
+  changedProjectFolderNotice,
+  removalEnvironmentLabel,
+  removalFoldersMatch,
+  readRemovalArchives,
   projectRemovalNotice,
   removalEntryDetail,
   removeEntriesLabel,
@@ -31,8 +36,9 @@ import { useRef, useState } from "react";
 import { Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { projectEnvironment } from "../../state/projects";
-import { useThreadShells } from "../../state/entities";
+import { orchestrationEnvironment } from "../../state/orchestration";
+import { environmentProjects, projectEnvironment } from "../../state/projects";
+import { environmentThreadShells } from "../../state/threads";
 import { appAtomRegistry } from "../../state/atom-registry";
 import {
   clearComposerDraft,
@@ -123,7 +129,6 @@ export function SettingsProjectOverviewRouteScreen() {
             key={`${selectedProjectKey}:${members.map((member) => member.id).join(",")}`}
             members={members}
             group={group}
-            projectGroups={projectGroups}
             connectedTargets={availableTargets}
             environments={selectedTargets}
             hasOtherMembers={members.length < (group?.members.length ?? 0)}
@@ -144,7 +149,6 @@ function ProjectOverviewContent(props: {
   readonly members: readonly EnvironmentProject[];
   /** Pin and archive belong to the whole project, even when the filter picks one machine. */
   readonly group: ProjectGroup;
-  readonly projectGroups: readonly ProjectGroup[];
   readonly connectedTargets: readonly SettingsTarget[];
   readonly environments: readonly SettingsTarget[];
   readonly hasOtherMembers: boolean;
@@ -165,7 +169,6 @@ function ProjectOverviewContent(props: {
   });
   const [draftName, setDraftName] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const threads = useThreadShells();
   const allMembers = props.group.members.map((member) => member.project);
   const removableEnvironments = useEnvironmentsWithScope(allMembers, AuthOrchestrationOperateScope);
   const canRemoveGroup = props.members.every((member) =>
@@ -254,30 +257,58 @@ function ProjectOverviewContent(props: {
   >;
   const [removal, setRemoval] = useState<RemovalPlan | null>(null);
   const [includeNested, setIncludeNested] = useState(false);
-  const reviewRemoval = (members: readonly EnvironmentProject[]) => {
-    if (isRemoving || !checkRemovalAccess(members)) return;
-    setIncludeNested(false);
-    setRemoval(
-      planProjectRemoval({
-        members,
-        groupMembers: allMembers,
-        projects: props.projectGroups.flatMap((entry) =>
-          entry.members.map(({ project }) => project),
-        ),
-        threads,
-        unloadedThreadCount: (member, held) => readUnloadedThreadCount([member], held),
-      }),
+  const foldersStillMatch = (members: readonly EnvironmentProject[]) => {
+    if (removalFoldersMatch(members, appAtomRegistry.get(environmentProjects.projectsAtom)))
+      return true;
+    Dialog.alert(gt("Failed to remove project"), m(changedProjectFolderNotice));
+    return false;
+  };
+  const reviewRemoval = async (members: readonly EnvironmentProject[]) => {
+    if (!checkRemovalAccess(members) || !startRemoval()) return;
+    setIsRemoving(true);
+    const archives = await readRemovalArchives(
+      appAtomRegistry,
+      members,
+      orchestrationEnvironment.archivedShellSnapshot,
     );
+    finishRemoval();
+    if (archives._tag === "Failure") {
+      if (!isAtomCommandInterrupted(archives)) {
+        const error = squashAtomCommandFailure(archives);
+        Dialog.alert(
+          gt("Failed to remove project"),
+          error instanceof Error
+            ? (errorDisplayMessage(error, m) ?? error.message)
+            : gt("An error occurred."),
+        );
+      }
+      return;
+    }
+    if (!foldersStillMatch(members)) return;
+    const plan = planProjectRemoval({
+      members,
+      groupMembers: allMembers,
+      projects: appAtomRegistry.get(environmentProjects.projectsAtom),
+      threads: appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
+      archives: archives.value,
+      unloadedThreadCount: (member, held) => readUnloadedThreadCount([member], held),
+    });
+    if (plan.ambiguousFolders) {
+      Dialog.alert(gt("Failed to remove project"), m(ambiguousProjectFoldersNotice));
+      return;
+    }
+    setIncludeNested(false);
+    setRemoval(plan);
   };
   const removeEntries = async (entries: RemovalPlan["entries"]) => {
     const members = entries.map((entry) => entry.member);
     const projectKey = props.projectKey;
-    if (!checkRemovalAccess(members)) return;
+    if (!checkRemovalAccess(members) || !foldersStillMatch(members)) return;
     for (const member of members) {
-      if (!checkRemovalAccess([member])) return;
+      if (!checkRemovalAccess([member]) || !foldersStillMatch([member])) return;
       const result = await deleteProject({
         environmentId: member.environmentId,
-        input: { projectId: member.id, force: true },
+        input: { projectId: member.id, expectedWorkspaceRoot: member.workspaceRoot, force: true },
       });
       if (result._tag === "Failure") {
         if (!isAtomCommandInterrupted(result)) {
@@ -331,8 +362,7 @@ function ProjectOverviewContent(props: {
         <Text className="text-sm text-foreground-muted">
           {m(
             removalEntryDetail(
-              props.environments.find((target) => target.environmentId === member.environmentId)
-                ?.label ?? member.environmentId,
+              removalEnvironmentLabel(member.environmentId, props.connectedTargets),
               threadCount,
             ),
           )}

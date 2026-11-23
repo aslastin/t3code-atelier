@@ -77,13 +77,27 @@ vi.mock(import("~/state/environments"), async (original) => ({
 vi.mock(import("~/state/entities"), async (original) => ({
   ...(await original()),
   useProjects: (() => state.projects) as never,
-  useThreadShells: () => [],
+  readThreadShells: () => [],
+  readProjects: () => state.projects,
   useServerConfigs: (() =>
     new Map(
       environments.map((environment) => [environment.environmentId, environment.serverConfig]),
     )) as never,
   waitForProjectRemoval: async () => true,
 }));
+vi.mock(import("~/state/orchestration"), async (original) => {
+  const actual = await original();
+  return {
+    ...actual,
+    orchestrationEnvironment: {
+      ...actual.orchestrationEnvironment,
+      archivedShellSnapshot: () =>
+        Atom.make(
+          AsyncResult.success({ schemaVersion: 1, snapshotSequence: 0, projects: [], threads: [] }),
+        ),
+    },
+  };
+});
 vi.mock(import("~/state/projects"), async (original) => {
   const actual = await original();
   return {
@@ -408,7 +422,11 @@ describe("project settings permissions", () => {
     await vi.waitFor(() => expect(state.delete).toHaveBeenCalledOnce());
     expect(state.delete).toHaveBeenCalledWith({
       environmentId: primaryId,
-      input: { projectId: state.projects[0]!.id, force: true },
+      input: {
+        projectId: state.projects[0]!.id,
+        expectedWorkspaceRoot: "/work/primary",
+        force: true,
+      },
     });
     await vi.waitFor(() => expect(state.releaseUploads).toHaveBeenCalledOnce());
     expect(state.clearDraft).toHaveBeenCalledOnce();
@@ -459,6 +477,40 @@ describe("project settings permissions", () => {
     expect(state.delete).not.toHaveBeenCalled();
     expect(state.releaseUploads).not.toHaveBeenCalled();
     expect(state.clearDraft).not.toHaveBeenCalled();
+  });
+
+  it("stops before the first deletion when another client moves a reviewed project", async () => {
+    setup();
+    await using screen = await mountPanel();
+    await userEvent.click(removeAll(screen));
+    await expect.element(page.getByRole("alertdialog")).toBeVisible();
+    state.projects = state.projects.map((project) =>
+      project.environmentId === remoteId ? { ...project, workspaceRoot: "/elsewhere" } : project,
+    );
+    await page.getByRole("button", { name: "Remove 2 entries", exact: true }).click();
+    expect(state.delete).not.toHaveBeenCalled();
+    expect(state.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "The project folder changed. Review the removal again." }),
+    );
+  });
+
+  it("keeps a newer selection while a confirmed group removal finishes", async () => {
+    setup();
+    const pending = deferred<AsyncResult.Success<void>>();
+    state.delete.mockReturnValueOnce(pending.promise);
+    await using screen = await mountPanel();
+    await userEvent.click(removeAll(screen));
+    await page.getByRole("button", { name: "Remove 2 entries", exact: true }).click();
+    await vi.waitFor(() => expect(state.delete).toHaveBeenCalledOnce());
+    await act(async () => {
+      await screen.router.navigate({
+        to: "/settings/projects",
+        search: { project: "another-project" },
+      });
+      pending.resolve(AsyncResult.success(undefined));
+    });
+    await vi.waitFor(() => expect(state.releaseUploads).toHaveBeenCalledTimes(2));
+    expect(screen.router.state.location.search.project).toBe("another-project");
   });
 
   it("does not save an edit whose grant was revoked mid-edit, and recovers when restored", async () => {

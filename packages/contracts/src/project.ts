@@ -260,6 +260,7 @@ export const ProjectMutation = Schema.Union([
     commandId: CommandId,
     projectId: ProjectId,
     force: Schema.optional(Schema.Boolean),
+    expectedWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
   }),
 ]);
 export type ProjectMutation = typeof ProjectMutation.Type;

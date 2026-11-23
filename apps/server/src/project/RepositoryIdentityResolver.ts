@@ -378,13 +378,17 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
       onFailure: () => Duration.zero,
     });
 
-  const repositoryRootCache = yield* Cache.makeWith<string, RepositoryIdentityCacheKey | null>(
-    (cwd) =>
-      resolveRepositoryIdentityCacheKey(cwd).pipe(
+  const repositoryRootCache = yield* Cache.makeWith(
+    Effect.fnUntraced(function* (cwd: string) {
+      const key = yield* resolveRepositoryIdentityCacheKey(cwd).pipe(
         Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
-      ),
+      );
+      if (key === null) return null;
+      const physical = yield* fileSystem.realPath(cwd).pipe(Effect.orElseSucceed(() => cwd));
+      return { key, resolvedWorkspaceRoot: physical === cwd ? undefined : physical };
+    }),
     { capacity: cacheCapacity, timeToLive },
   );
 
@@ -406,10 +410,12 @@ export const make = Effect.fn("RepositoryIdentityResolver.make")(function* (
   const resolve: RepositoryIdentityResolver["Service"]["resolve"] = Effect.fnUntraced(
     function* (cwd, options) {
       if (options?.refresh) yield* Cache.invalidate(repositoryRootCache, cwd);
-      const cacheKey = yield* Cache.get(repositoryRootCache, cwd);
-      if (cacheKey === null) return null;
+      const workspace = yield* Cache.get(repositoryRootCache, cwd);
+      if (workspace === null) return null;
+      const { key: cacheKey, resolvedWorkspaceRoot } = workspace;
       if (options?.refresh) yield* Cache.invalidate(repositoryIdentityCache, cacheKey);
-      return yield* Cache.get(repositoryIdentityCache, cacheKey);
+      const identity = yield* Cache.get(repositoryIdentityCache, cacheKey);
+      return identity && resolvedWorkspaceRoot ? { ...identity, resolvedWorkspaceRoot } : identity;
     },
   );
 

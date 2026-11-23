@@ -215,6 +215,12 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
           identity?.rootPath === undefined ? "" : NodeFS.realpathSync.native(identity.rootPath);
         const resolvedRepoRoot = NodeFS.realpathSync.native(repoRoot);
 
+        if ((yield* HostProcess.Platform) !== "win32") {
+          const alias = path.join(tempDir, "alias");
+          yield* fileSystem.symlink(nestedWorkspace, alias);
+          const aliased = yield* resolver.resolve(alias);
+          expect(aliased?.resolvedWorkspaceRoot).toBe(yield* fileSystem.realPath(nestedWorkspace));
+        }
         expect(identity).not.toBeNull();
         expect(identity?.canonicalKey).toBe("github.com/t3tools/t3code");
         expect(normalizeResolvedPath(resolvedIdentityRoot)).toBe(

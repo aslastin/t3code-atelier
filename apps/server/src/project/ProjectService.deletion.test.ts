@@ -161,6 +161,11 @@ it.effect("retries a partial project deletion without repeating child events or 
         Effect.provideService(EventSink.EventSinkV2, failingEventSink),
       );
       const input = { commandId, projectId, force: true };
+      const moved = yield* service
+        .delete({ ...input, expectedWorkspaceRoot: "/old/location" })
+        .pipe(Effect.flip);
+      assert.instanceOf(moved, ProjectService.ProjectInvalidError);
+      assert.isEmpty(attempts);
       const failure = yield* service.delete(input).pipe(Effect.flip);
       assert.instanceOf(failure, ProjectService.ProjectOperationError);
       if (failure._tag !== "ProjectOperationError") return assert.fail("Expected a child failure");

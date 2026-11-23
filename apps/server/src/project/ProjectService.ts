@@ -73,6 +73,7 @@ export interface ProjectDeleteInput {
   readonly commandId: CommandId;
   readonly projectId: ProjectId;
   readonly force?: boolean;
+  readonly expectedWorkspaceRoot?: string;
 }
 
 export class ProjectNotFoundError extends Schema.TaggedError<ProjectNotFoundError>()(
@@ -768,10 +769,25 @@ export const make = Effect.gen(function* () {
       }
 
       const isFirstDelete = existing.value.deletedAt === null;
-      if (isFirstDelete) {
-        yield* deleteChildThreads(input);
-      }
-      yield* commit({ type: "project.delete", commandId: input.commandId, projectId });
+      const command = { type: "project.delete", commandId: input.commandId, projectId } as const;
+      yield* commit(
+        command,
+        Effect.fnUntraced(function* (current) {
+          if (current?.deletedAt === null) {
+            if (
+              input.expectedWorkspaceRoot !== undefined &&
+              current.workspaceRoot !== input.expectedWorkspaceRoot
+            ) {
+              return yield* new ProjectInvalidError({
+                projectId,
+                detail: "The project folder changed. Review the removal again.",
+              });
+            }
+            yield* deleteChildThreads(input);
+          }
+          return command;
+        }),
+      );
       if (isFirstDelete) {
         yield* clearProjectSettingsOverrides(projectId);
       }

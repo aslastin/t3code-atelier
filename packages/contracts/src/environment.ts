@@ -260,6 +260,8 @@ export const RepositoryIdentity = Schema.Struct({
   webUrl: Schema.optionalKey(TrimmedNonEmptyString),
   /** Work tree root, or the git dir for a bare repository. */
   rootPath: Schema.optionalKey(TrimmedNonEmptyString),
+  /** Physical workspace directory when the registered path follows a symlink. */
+  resolvedWorkspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
   displayName: Schema.optionalKey(TrimmedNonEmptyString),
   provider: Schema.optionalKey(SourceControlProviderKind),
   owner: Schema.optionalKey(TrimmedNonEmptyString),

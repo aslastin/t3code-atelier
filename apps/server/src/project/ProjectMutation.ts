@@ -61,6 +61,9 @@ export const projectMutationOperation = Effect.fn("projectMutationOperation")(fu
         commandId: mutation.commandId,
         projectId: mutation.projectId,
         ...(mutation.force === undefined ? {} : { force: mutation.force }),
+        ...(mutation.expectedWorkspaceRoot === undefined
+          ? {}
+          : { expectedWorkspaceRoot: mutation.expectedWorkspaceRoot }),
       });
   }
 });
