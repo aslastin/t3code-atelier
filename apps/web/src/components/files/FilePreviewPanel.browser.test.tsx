@@ -1,10 +1,16 @@
 import { DEFAULT_THEMES, preloadHighlighter } from "@pierre/diffs";
 import { EnvironmentId, ThreadId, type ProjectReadFileResult } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
-import { StrictMode, type ReactNode } from "react";
+import { StrictMode, useRef, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { cdp, userEvent } from "vite-plus/test/browser";
 import { act, fakeTimers, render } from "../../../test/render";
+import { useComposerDraftStore } from "~/composerDraftStore";
+import {
+  ComposerPromptEditorTiptap,
+  type ComposerPromptEditorHandle,
+} from "../ComposerPromptEditorTiptap";
+import { composerContextRecordsFromDraft } from "../composerContextPresentation";
 import appCss from "~/index.css?inline";
 import { isMacPlatform } from "~/lib/utils";
 import {
@@ -238,6 +244,82 @@ function deepActiveElement() {
   while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
   return active;
 }
+
+function FileCommentComposer() {
+  const draft = useComposerDraftStore((store) => store.getComposerDraft(threadRef));
+  return (
+    <ComposerPromptEditorTiptap
+      editorRef={useRef<ComposerPromptEditorHandle>(null)}
+      value={draft?.prompt ?? ""}
+      cursor={draft?.prompt.length ?? 0}
+      contextRecords={composerContextRecordsFromDraft(draft ?? { terminalContexts: [] })}
+      skills={[]}
+      disabled={false}
+      placeholder=""
+      ariaLabel="Prompt"
+      onPaste={() => {}}
+      onChange={() => {}}
+    />
+  );
+}
+
+describe("read-only source comments", () => {
+  it("adds a selected range from a host file to the composer prompt", async () => {
+    using _settings = setup();
+    const reset = () =>
+      useComposerDraftStore.setState(useComposerDraftStore.getInitialState(), true);
+    reset();
+    using _draft = { [Symbol.dispose]: reset };
+    const filePath = "/tmp/notes.txt";
+    const contents = "first\nsecond\nthird\nfourth";
+    state.file = {
+      relativePath: filePath,
+      contents,
+      byteLength: contents.length,
+      truncated: false,
+    };
+    await using screen = await render(
+      <div style={{ width: 560, height: 400, display: "flex", flexDirection: "column" }}>
+        {filePreview(filePath)}
+        <FileCommentComposer />
+      </div>,
+    );
+    const number = (line: number) =>
+      screen.container
+        .querySelector("diffs-container")
+        ?.shadowRoot?.querySelector<HTMLElement>(`[data-column-number="${line}"]`);
+    await vi.waitFor(() => expect(number(3)).toBeInstanceOf(HTMLElement));
+    const frame = window.frameElement?.getBoundingClientRect();
+    const drag = (type: "mousePressed" | "mouseMoved" | "mouseReleased", line: number) => {
+      const rect = number(line)!.getBoundingClientRect();
+      return cdp().send("Input.dispatchMouseEvent", {
+        type,
+        x: rect.right - 4 + (frame?.left ?? 0),
+        y: rect.top + rect.height / 2 + (frame?.top ?? 0),
+        button: "left",
+        buttons: type === "mouseReleased" ? 0 : 1,
+        clickCount: 1,
+      });
+    };
+    await drag("mousePressed", 2);
+    await drag("mouseMoved", 3);
+    await drag("mouseReleased", 3);
+    await userEvent.fill(
+      screen.getByRole("textbox", { name: /Comment on lines/ }),
+      "Explain this.",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Comment", exact: true }));
+
+    const draft = useComposerDraftStore.getState().getComposerDraft(threadRef)!;
+    expect(draft.reviewComments).toMatchObject([
+      { filePath, rangeLabel: "L2 to L3", text: "Explain this.", diff: "second\nthird" },
+    ]);
+    await expect
+      .element(screen.getByRole("textbox", { name: "Prompt" }))
+      .toHaveTextContent("notes.txt L2 to L3");
+    expect(state.writeFile).not.toHaveBeenCalled();
+  });
+});
 
 describe("source file focus", () => {
   it("hands panel focus to the file's editor, which owns mod+f", async () => {

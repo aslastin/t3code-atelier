@@ -7,6 +7,8 @@ import { useClientSettings } from "~/hooks/useSettings";
 import { FileSurfaceFailure, FileSurfaceLoading, FileSurfaceNotice } from "./fileSurfaceChrome";
 import { PREVIEW_PAGE_ROWS, type TextPreviewResult } from "./largeTextProtocol";
 import { previewFailureText } from "./previewFailureMessages";
+import { PagedSourcePreview } from "./PagedSourcePreview";
+import type { FileCommentTarget } from "./useFileComments";
 import VirtualTablePreview from "./VirtualTablePreview";
 
 const FIRST_SCREEN_BYTES = 16 * 1024;
@@ -31,6 +33,7 @@ function firstScreen(text: string, delimiter: "," | "\t" | null, complete: boole
 
 export default function LargeTextViewer(props: {
   readonly name: string;
+  readonly commentTarget?: FileCommentTarget | undefined;
   readonly src?: string;
   readonly text?: string;
   readonly sizeBytes?: number;
@@ -217,6 +220,22 @@ export default function LargeTextViewer(props: {
   const header = props.delimiter ? pages.get(0)?.[0] : undefined;
   const rowCount = Math.max(0, meta.count - 1);
   const columnCount = meta.count ? meta.columns : 0;
+  const tableProps = {
+    name: props.name,
+    count: meta.count,
+    columns: meta.columns,
+    header,
+    source: !props.delimiter,
+    wrap: wordWrap,
+    revealLine: meta.complete ? (props.revealLine ?? null) : null,
+    revealRequestId: props.revealRequestId ?? 0,
+    getRows: (page: number) => pages.get(page),
+    loadPage: (page: number) => {
+      if (pending.current.has(page)) return;
+      pending.current.add(page);
+      worker.current?.postMessage({ type: "page", index: page });
+    },
+  };
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div
@@ -252,22 +271,11 @@ export default function LargeTextViewer(props: {
         </FileSurfaceNotice>
       ) : null}
       {meta.count > 0 ? (
-        <VirtualTablePreview
-          name={props.name}
-          count={meta.count}
-          columns={meta.columns}
-          header={header}
-          source={!props.delimiter}
-          wrap={wordWrap}
-          revealLine={meta.complete ? (props.revealLine ?? null) : null}
-          revealRequestId={props.revealRequestId ?? 0}
-          getRows={(page) => pages.get(page)}
-          loadPage={(page) => {
-            if (pending.current.has(page)) return;
-            pending.current.add(page);
-            worker.current?.postMessage({ type: "page", index: page });
-          }}
-        />
+        props.commentTarget && !props.delimiter ? (
+          <PagedSourcePreview {...tableProps} commentTarget={props.commentTarget} />
+        ) : (
+          <VirtualTablePreview {...tableProps} />
+        )
       ) : (
         <div className="flex flex-1 items-center justify-center p-6 text-xs text-muted-foreground">
           <T>This file is empty.</T>

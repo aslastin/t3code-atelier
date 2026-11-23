@@ -1,6 +1,8 @@
 import type { LineAnnotation, SelectedLineRange } from "@pierre/diffs";
 import { msg } from "gt-react";
 import { m, type MessageResolver } from "~/i18n/messages";
+import type { FileReviewExcerpt } from "~/reviewCommentContext";
+import { PREVIEW_PAGE_ROWS } from "./largeTextProtocol";
 
 export interface FileCommentAnnotationEntry {
   id: string;
@@ -31,6 +33,20 @@ export function normalizeFileCommentRange(range: SelectedLineRange): {
     startLine: Math.min(range.start, range.end),
     endLine: Math.max(range.start, range.end),
   };
+}
+
+export function readPagedSourceExcerpt(
+  range: SelectedLineRange,
+  getRows: (page: number) => readonly (readonly string[])[] | undefined,
+): FileReviewExcerpt | undefined {
+  const { startLine, endLine } = normalizeFileCommentRange(range);
+  const lines: string[] = [];
+  for (let index = startLine - 1; index < endLine; index++) {
+    const row = getRows(Math.floor(index / PREVIEW_PAGE_ROWS))?.[index % PREVIEW_PAGE_ROWS];
+    if (row?.[0] === undefined) return undefined;
+    lines.push(row[0]);
+  }
+  return { firstLine: startLine, lines };
 }
 
 export function formatFileCommentRange(

@@ -58,17 +58,27 @@ export function formatReviewCommentFence(language: string, contents: string): st
   return [`${fence}${language}`, contents.trimEnd(), fence].join("\n");
 }
 
+export interface FileReviewExcerpt {
+  firstLine: number;
+  lines: readonly string[];
+}
+
 export function buildFileReviewComment(input: {
   id: string;
   filePath: string;
   startLine: number;
   endLine: number;
   text: string;
-  contents: string;
+  contents: string | FileReviewExcerpt;
 }): ReviewCommentContext {
-  const startLine = Math.max(1, Math.min(input.startLine, input.endLine));
-  const endLine = Math.max(startLine, Math.max(input.startLine, input.endLine));
-  const selectedLines = input.contents.split("\n").slice(startLine - 1, endLine);
+  const { firstLine, lines } =
+    typeof input.contents === "string"
+      ? { firstLine: 1, lines: input.contents.split(/\r\n|\r|\n/) }
+      : input.contents;
+  const lastLine = firstLine + Math.max(0, lines.length - 1);
+  const startLine = Math.max(firstLine, Math.min(input.startLine, input.endLine, lastLine));
+  const endLine = Math.min(lastLine, Math.max(startLine, input.startLine, input.endLine));
+  const selectedLines = lines.slice(startLine - firstLine, endLine - firstLine + 1);
   return {
     id: input.id,
     sectionId: `file:${input.filePath}`,

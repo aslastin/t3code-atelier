@@ -1,5 +1,13 @@
 /* oxlint-disable react/no-array-index-key -- Positions identify source rows and columns. */
-import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
+import {
+  Fragment,
+  type ReactNode,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { observeResize } from "~/lib/observeResize";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { PREVIEW_PAGE_ROWS } from "./largeTextProtocol";
@@ -12,6 +20,9 @@ export default function VirtualTablePreview(props: {
   readonly loadPage?: (page: number) => void;
   readonly header?: readonly string[] | undefined;
   readonly source?: boolean;
+  readonly renderLineNumber?: (line: number, loaded: boolean) => ReactNode;
+  readonly renderAnnotation?: (line: number) => ReactNode;
+  readonly selectedLines?: { start: number; end: number } | null;
   readonly wrap?: boolean;
   readonly revealLine?: number | null;
   readonly revealRequestId?: number;
@@ -191,64 +202,74 @@ function RowPage(
   }, [rows, page, loadPage, props.count]);
   const start = props.page * PREVIEW_PAGE_ROWS;
   const count = Math.min(PREVIEW_PAGE_ROWS, props.count - start, props.limit ?? PREVIEW_PAGE_ROWS);
+  const revealLine =
+    props.revealLine == null ? null : Math.min(props.count, Math.max(1, props.revealLine));
+  const selection = props.selectedLines;
+  const firstSelected = selection ? Math.min(selection.start, selection.end) : Infinity;
+  const lastSelected = selection ? Math.max(selection.start, selection.end) : -Infinity;
   return (
     <div role="rowgroup">
       {Array.from({ length: count }, (_, local) => {
         const row = rows?.[local];
         const index = start + local;
         if (props.header && index === 0) return null;
+        const line = index + 1;
+        const highlighted = line === revealLine || (line >= firstSelected && line <= lastSelected);
         return (
-          <div
-            key={local}
-            data-preview-row={index}
-            role={props.source ? undefined : "row"}
-            aria-rowindex={props.source ? undefined : index + 1}
-            className={
-              props.source
-                ? `flex min-h-[29px] font-mono ${props.revealLine != null && Math.min(props.count, Math.max(1, props.revealLine)) === index + 1 ? "bg-primary/10" : ""}`
-                : `flex min-h-[29px] border-b border-border/60 ${(index - (props.header ? 1 : 0)) % 2 ? "bg-muted/30" : ""}`
-            }
-            data-preview-reveal={
-              props.revealLine != null &&
-              Math.min(props.count, Math.max(1, props.revealLine)) === index + 1
-                ? "true"
-                : undefined
-            }
-          >
+          <Fragment key={local}>
             <div
-              role={props.source ? undefined : "rowheader"}
-              className={`${props.source ? "sticky left-0" : "relative"} z-1 shrink-0 border-r border-border bg-background px-2 py-1.5 text-right font-normal text-muted-foreground tabular-nums select-none`}
-              style={{
-                width: props.rowHeader,
-                transform: props.source ? undefined : "translateX(var(--preview-scroll-left, 0px))",
-              }}
+              data-preview-row={index}
+              role={props.source ? undefined : "row"}
+              aria-rowindex={props.source ? undefined : index + 1}
+              className={
+                props.source
+                  ? `flex min-h-[29px] font-mono ${highlighted ? "bg-primary/10" : ""}`
+                  : `flex min-h-[29px] border-b border-border/60 ${(index - (props.header ? 1 : 0)) % 2 ? "bg-muted/30" : ""}`
+              }
+              data-preview-reveal={line === revealLine ? "true" : undefined}
             >
-              <span className="sticky top-0 block">{index + (props.header ? 0 : 1)}</span>
-            </div>
-            {!props.source ? (
               <div
+                role={props.source ? undefined : "rowheader"}
+                className={`${props.source ? "sticky left-0" : "relative"} z-1 shrink-0 border-r border-border bg-background px-2 py-1.5 text-right font-normal text-muted-foreground tabular-nums select-none`}
                 style={{
-                  width: props.sizes.slice(0, props.firstColumn).reduce((a, b) => a + b, 0),
-                  flexShrink: 0,
+                  width: props.rowHeader,
+                  transform: props.source
+                    ? undefined
+                    : "translateX(var(--preview-scroll-left, 0px))",
                 }}
-              />
-            ) : null}
-            {props.columnsVisible.map((column) => (
-              <div
-                key={column}
-                role={props.source ? undefined : "cell"}
-                aria-colindex={props.source ? undefined : column + 1}
-                className={
-                  props.source
-                    ? `min-w-0 flex-1 px-3 py-1 ${props.wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}`
-                    : "shrink-0 border-r border-border/40 px-3 py-1.5 whitespace-pre-wrap break-words tabular-nums"
-                }
-                style={props.source ? undefined : { width: props.sizes[column] }}
               >
-                {row?.[column] ?? ""}
+                <span className="sticky top-0 block">
+                  {props.renderLineNumber
+                    ? props.renderLineNumber(line, row !== undefined)
+                    : index + (props.header ? 0 : 1)}
+                </span>
               </div>
-            ))}
-          </div>
+              {!props.source ? (
+                <div
+                  style={{
+                    width: props.sizes.slice(0, props.firstColumn).reduce((a, b) => a + b, 0),
+                    flexShrink: 0,
+                  }}
+                />
+              ) : null}
+              {props.columnsVisible.map((column) => (
+                <div
+                  key={column}
+                  role={props.source ? undefined : "cell"}
+                  aria-colindex={props.source ? undefined : column + 1}
+                  className={
+                    props.source
+                      ? `min-w-0 flex-1 px-3 py-1 ${props.wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}`
+                      : "shrink-0 border-r border-border/40 px-3 py-1.5 whitespace-pre-wrap break-words tabular-nums"
+                  }
+                  style={props.source ? undefined : { width: props.sizes[column] }}
+                >
+                  {row?.[column] ?? ""}
+                </div>
+              ))}
+            </div>
+            {props.renderAnnotation?.(line)}
+          </Fragment>
         );
       })}
     </div>
@@ -437,6 +458,7 @@ function ScaledRows(props: Omit<Parameters<typeof RowPage>[0], "page">) {
       className="min-h-0 flex-1 overflow-auto"
       onKeyDown={(event) => {
         const node = event.currentTarget;
+        if (event.target !== node) return;
         const delta =
           event.key === "ArrowDown"
             ? 29
