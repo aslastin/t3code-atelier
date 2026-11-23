@@ -95,6 +95,7 @@ export class DesktopShellEnvironment extends Context.Service<
     readonly awaitUserShellDiscovery: Effect.Effect<boolean>;
     /** Whether discovery has settled (the user's shell answered or retries ran out), without waiting. */
     readonly discoveryFinished: Effect.Effect<boolean>;
+    readonly awaitSettledDiscovery: Effect.Effect<void>;
     readonly updates: Stream.Stream<DesktopShellEnvironmentSnapshot>;
   }
 >()("@t3tools/desktop/shell/DesktopShellEnvironment") {}
@@ -826,6 +827,9 @@ export const make = Effect.gen(function* () {
       Effect.map(({ fromUserShell }) => fromUserShell),
     ),
     discoveryFinished: Deferred.isDone(settledDiscovery),
+    awaitSettledDiscovery: installIntoProcess.pipe(
+      Effect.andThen(Deferred.await(settledDiscovery)),
+    ),
     updates,
   });
 });

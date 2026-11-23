@@ -1,7 +1,11 @@
 import * as Effect from "effect/Effect";
 import { bindExporter, ExportChannel, switchingTracer } from "@t3tools/shared/telemetryConsent";
 import type { ServerObservability } from "@t3tools/contracts";
-import { relayTelemetryEnabled, resolveRelayTracingConfig } from "../cloud/publicConfig";
+import {
+  relayTelemetryEnabled,
+  relayTracingDestination,
+  subscribeRelayTelemetryEnabled,
+} from "../cloud/publicConfig";
 import * as Layer from "effect/Layer";
 import { HttpClient } from "effect/http";
 import { OtlpExporter, OtlpSerialization, OtlpTracer } from "effect/observability";
@@ -69,8 +73,11 @@ const layerDelegateRuntime = Layer.mergeAll(
 
 const traces = new ExportChannel();
 export const connect = new ExportChannel();
+let stopWaitingForDesktop: (() => void) | undefined;
 
 export function configureClientTracing(state?: ServerObservability) {
+  stopWaitingForDesktop?.();
+  stopWaitingForDesktop = undefined;
   const status = state?.telemetry;
   const forward = status?.otlp === "on" && state?.otlpTracesEnabled;
   traces.set(
@@ -79,12 +86,18 @@ export function configureClientTracing(state?: ServerObservability) {
       : undefined,
     forward ? (status.revisions?.otlp ?? 0) : undefined,
   );
-  connect.set(
-    (status?.rendererConnect ?? status?.connect) === "on" && relayTelemetryEnabled() === true
-      ? resolveRelayTracingConfig()?.tracesUrl
-      : undefined,
-    status?.revisions?.connect,
-  );
+  const url =
+    (status?.rendererConnect ?? status?.connect) === "on"
+      ? relayTracingDestination()?.tracesUrl
+      : undefined;
+  if (!url) {
+    connect.set(undefined);
+    return;
+  }
+  const refreshConnect = () =>
+    connect.set(relayTelemetryEnabled() === true ? url : undefined, status?.revisions?.connect);
+  refreshConnect();
+  stopWaitingForDesktop = subscribeRelayTelemetryEnabled(refreshConnect);
 }
 
 export const layer = Layer.effectDiscard(

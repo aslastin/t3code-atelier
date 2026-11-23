@@ -31,6 +31,7 @@ const layerShellEnvironment = (prepared = true) =>
     awaitDiscovery: Effect.succeed(prepared),
     awaitUserShellDiscovery: Effect.succeed(prepared),
     discoveryFinished: Effect.succeed(true),
+    awaitSettledDiscovery: Effect.void,
     updates: Stream.empty,
   });
 

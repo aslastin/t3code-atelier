@@ -11124,42 +11124,9 @@
   "c6fa2905d56a750c": "Sparat",
   "23029f9ce3382536": "Den här anslutningen saknar behörighet att ändra inställningar på {environment}.",
   "a5f1fe10ef6373fd": "Ange en HTTP- eller HTTPS-slutpunkt, eller lämna tomt för att inaktivera export.",
-  "5b928a84a624e831": "Körs: {url}",
-  "b07718fe86a16cc6": "Körning: inaktiverad",
+  "b1323238373c0942": "Konfigurerad slutpunkt: {url}",
   "6e2b976790364e8b": "Skicka spår, mätvärden och loggar till en OTLP-mottagare över HTTP. Miljövariabler har företräde framför dessa inställningar.",
   "f7c3ae7a79ede728": "Testa",
-  "b93d2ec53e944576": [
-    "Körs: ",
-    {
-      "i": 1,
-      "k": "_gt_value_1",
-      "v": "v"
-    },
-    " från",
-    " ",
-    {
-      "t": "code",
-      "i": 2,
-      "c": {
-        "i": 3,
-        "k": "_gt_value_3",
-        "v": "v"
-      }
-    }
-  ],
-  "ae9958ee0d8ed8e8": [
-    "Körning: inaktiverad från",
-    " ",
-    {
-      "t": "code",
-      "i": 1,
-      "c": {
-        "i": 2,
-        "k": "_gt_value_2",
-        "v": "v"
-      }
-    }
-  ],
   "97585565390197f6": "Kasta",
   "bae67297bb379e9d": "Inkompatibel server",
   "d42834368fccccc8": "Behörighet saknas",

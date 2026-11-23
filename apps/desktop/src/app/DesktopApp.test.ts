@@ -124,6 +124,7 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
           awaitDiscovery: Effect.succeed(true),
           awaitUserShellDiscovery: Effect.succeed(true),
           discoveryFinished: Effect.succeed(true),
+          awaitSettledDiscovery: Effect.void,
           updates: Stream.empty,
         }),
         Effect.provideService(DesktopAppSettings.DesktopAppSettings, {

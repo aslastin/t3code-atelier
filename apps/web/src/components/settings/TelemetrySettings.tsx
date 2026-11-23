@@ -4,12 +4,16 @@ import {
   type TelemetryStatus,
 } from "@t3tools/contracts";
 import { msg, useGT, useMessages } from "gt-react";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentsWithScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
-import { relayTracingDestination, relayTelemetryEnabled } from "../../cloud/publicConfig";
+import {
+  relayTracingDestination,
+  relayTelemetryEnabled,
+  subscribeRelayTelemetryEnabled,
+} from "../../cloud/publicConfig";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { Switch } from "../ui/switch";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -63,6 +67,10 @@ export function TelemetrySettings() {
   const [saving, setSaving] = useState(false);
   const [report, setReport] = useState<ReadonlyMap<string, keyof typeof outcomes>>(new Map());
   const [expanded, setExpanded] = useState(false);
+  const desktopAllowsRelay = useSyncExternalStore(
+    subscribeRelayTelemetryEnabled,
+    relayTelemetryEnabled,
+  );
   if (scope.kind !== "environment" && scope.kind !== "all") return null;
 
   const targets = environments.map((env) => {
@@ -75,16 +83,15 @@ export function TelemetrySettings() {
       relayTracingDestination() &&
       status.rendererConnect
     ) {
-      const allowed = relayTelemetryEnabled();
       const serverAllowsChoice =
         status.rendererConnect === "on" || status.rendererConnect === "off";
-      blockedByDesktop = allowed === false && serverAllowsChoice;
+      blockedByDesktop = desktopAllowsRelay === false && serverAllowsChoice;
       status = {
         ...status,
         connect:
-          !serverAllowsChoice || allowed === true
+          !serverAllowsChoice || desktopAllowsRelay === true
             ? status.rendererConnect
-            : allowed === null
+            : desktopAllowsRelay === null
               ? "pending"
               : "off",
       };

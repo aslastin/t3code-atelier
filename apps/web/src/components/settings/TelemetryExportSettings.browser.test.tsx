@@ -147,11 +147,10 @@ describe("TelemetryExportSettings", () => {
     await expect
       .element(screen.getByText("Set by environment · Connected · 12 ms"))
       .toBeInTheDocument();
-    await expect
-      .element(
-        screen.getByText("Running: http://collector/v1/traces from OTEL_EXPORTER_OTLP_ENDPOINT"),
-      )
-      .toBeInTheDocument();
+    const address = screen.getByText(
+      "Configured endpoint: http://collector/v1/traces · OTEL_EXPORTER_OTLP_ENDPOINT",
+    );
+    await expect.element(address).toBeInTheDocument();
     expect(checkOtlpEndpoint).toHaveBeenCalledExactlyOnceWith({
       environmentId: "env",
       input: { signal: "traces", url: "http://collector/v1/traces" },
@@ -165,6 +164,23 @@ describe("TelemetryExportSettings", () => {
       environmentId: "env",
       input: { signal: "traces", url: "http://collector/v1/traces" },
     });
+    const running = state.serverConfig.observability!;
+    state.serverConfig.observability = {
+      ...running,
+      otlpTracesEnabled: false,
+      telemetry: {
+        ...running.telemetry!,
+        preferences: { ...running.telemetry!.preferences, enabled: false },
+        otlp: "off",
+      },
+    };
+    for (const notify of state.listeners) notify();
+    await expect
+      .element(screen.getByRole("button", { name: "Test" }).first())
+      .not.toBeInTheDocument();
+    await expect.element(address).toBeInTheDocument();
+    expect(screen.container.textContent).not.toContain("Running:");
+    expect(checkOtlpEndpoint).toHaveBeenCalledTimes(2);
   });
 
   it("checks the current saved endpoint when permission returns and discards pending manual probes", async () => {

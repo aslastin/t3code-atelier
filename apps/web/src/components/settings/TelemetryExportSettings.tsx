@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { OtlpEndpointCheckResult, OtlpSignal, ServerObservability } from "@t3tools/contracts";
 import { useEffect, useEffectEvent, useState } from "react";
-import { msg, T, useGT, useMessages, Var } from "gt-react";
+import { msg, T, useGT, useMessages } from "gt-react";
 import { m, type MessageResolver } from "../../i18n/messages";
 
 import { serverEnvironment } from "../../state/server";
@@ -281,26 +281,14 @@ function TelemetryExportForm() {
               </div>
               {(saved[key] !== (running?.[key] ?? "") || override?.variable) && (
                 <p className="break-all text-xs text-muted-foreground">
-                  {override?.variable ? (
-                    running?.[key] ? (
-                      <T>
-                        Running: <Var>{running[key]}</Var> from{" "}
-                        <code className="font-mono">
-                          <Var>{override.variable}</Var>
-                        </code>
-                      </T>
-                    ) : (
-                      <T>
-                        Running: Disabled from{" "}
-                        <code className="font-mono">
-                          <Var>{override.variable}</Var>
-                        </code>
-                      </T>
-                    )
-                  ) : running?.[key] ? (
-                    gt("Running: {url}", { url: running[key] })
-                  ) : (
-                    gt("Running: Disabled")
+                  {running?.[key]
+                    ? gt("Configured endpoint: {url}", { url: running[key] })
+                    : messages(msg("No OTLP endpoint configured"))}
+                  {override?.variable && (
+                    <>
+                      {" "}
+                      · <code className="font-mono">{override.variable}</code>
+                    </>
                   )}
                 </p>
               )}

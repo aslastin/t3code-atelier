@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Effect from "effect/Effect";
+import { MixedScheduler } from "effect/Scheduler";
 import * as Tracer from "effect/Tracer";
 // Load the runtime's module graph once at collection, outside the per-test timeout;
 // each case re-evaluates it from that cache after vi.resetModules().
@@ -29,6 +30,25 @@ describe("web runtime relay telemetry policy", () => {
       exports: true,
     },
     {
+      surface: "desktop whose shell settles after its server confirms consent",
+      desktopBridge: { getRelayTelemetryEnabled: () => null },
+      shellResult: true,
+      exports: true,
+    },
+    {
+      surface: "desktop whose shell eventually denies consent",
+      desktopBridge: { getRelayTelemetryEnabled: () => null },
+      shellResult: false,
+      exports: false,
+    },
+    {
+      surface: "desktop disconnected while awaiting its shell",
+      desktopBridge: { getRelayTelemetryEnabled: () => null },
+      shellResult: true,
+      disconnect: true,
+      exports: false,
+    },
+    {
       // The desktop host reads the login shell after the renderer has started.
       surface: "desktop enabled once the login shell is read",
       desktopBridge: { getRelayTelemetryEnabled: answers(null, true) },
@@ -52,8 +72,9 @@ describe("web runtime relay telemetry policy", () => {
     },
   ])(
     "applies $surface before the first relay span",
-    async ({ desktopBridge, exports, preAuth }) => {
+    async ({ desktopBridge, exports, preAuth, shellResult, disconnect }) => {
       vi.resetModules();
+      const shell = Promise.withResolvers<boolean>();
       vi.stubEnv("T3CODE_TELEMETRY_ENABLED", "false");
       vi.stubEnv("T3CODE_OTEL_SDK_DISABLED", "true");
       vi.stubEnv("OTEL_SDK_DISABLED", "true");
@@ -64,6 +85,7 @@ describe("web runtime relay telemetry policy", () => {
         location: new URL("http://localhost/"),
         desktopBridge: desktopBridge && {
           ...desktopBridge,
+          waitForRelayTelemetryEnabled: () => shell.promise,
           getAppBranding: () => null,
           getLocalEnvironmentBootstraps: () => [],
           getLocalEnvironmentEnabled: () => true,
@@ -96,6 +118,21 @@ describe("web runtime relay telemetry policy", () => {
                 },
               },
         );
+        if (shellResult !== undefined) {
+          const scheduler = new MixedScheduler();
+          const dispatcher = scheduler.makeDispatcher();
+          vi.spyOn(scheduler, "makeDispatcher").mockReturnValue(dispatcher);
+          await freshRuntime.runPromise(
+            Effect.void.pipe(Effect.withSpan("relay.before-shell"), withRelayClientTracing),
+            { scheduler },
+          );
+          if (disconnect) {
+            configureClientTracing();
+          }
+          shell.resolve(shellResult);
+          await shell.promise;
+          dispatcher.flush();
+        }
         expect(
           await freshRuntime.runPromise(
             Effect.succeed("relay operation completed").pipe(
@@ -129,6 +166,7 @@ describe("web runtime relay telemetry policy", () => {
         expect(relayRequests).toHaveLength(1);
         const payload = new TextDecoder().decode(relayRequests[0]?.[1]?.body as Uint8Array);
         expect(payload).toContain('"name":"relay.first-operation"');
+        expect(payload).not.toContain("relay.before-shell");
       } else {
         expect(relayRequests).toHaveLength(0);
       }

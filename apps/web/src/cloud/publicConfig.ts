@@ -62,12 +62,34 @@ export function resolveCloudPublicConfig(): CloudPublicConfig {
 }
 
 let desktopRelayTelemetry: boolean | null = null;
+let pendingDesktopRelayTelemetry: Promise<boolean> | undefined;
 
 /** Whether relay spans may be exported now; the desktop host may not know yet at startup. */
 export function relayTelemetryEnabled(): boolean | null {
   if (typeof window === "undefined" || !window.desktopBridge) return true;
   desktopRelayTelemetry ??= window.desktopBridge.getRelayTelemetryEnabled();
   return desktopRelayTelemetry;
+}
+
+export function subscribeRelayTelemetryEnabled(notify: () => void) {
+  const bridge = typeof window !== "undefined" ? window.desktopBridge : undefined;
+  if (
+    !bridge?.waitForRelayTelemetryEnabled ||
+    desktopRelayTelemetry !== null ||
+    !relayTracingDestination()
+  ) {
+    return () => {};
+  }
+  let subscribed = true;
+  const finish = (enabled: boolean) => {
+    desktopRelayTelemetry ??= enabled === true;
+    if (subscribed) notify();
+  };
+  pendingDesktopRelayTelemetry ??= bridge.waitForRelayTelemetryEnabled();
+  void pendingDesktopRelayTelemetry.then(finish, () => finish(false));
+  return () => {
+    subscribed = false;
+  };
 }
 
 export function resolveRelayTracingConfig() {
