@@ -770,21 +770,10 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  // A missing registration can still be removed. Resolve its existing ancestors so aliases agree.
-  const resolveRemovalPath = Effect.fn("ProjectService.resolveRemovalPath")(function* (
-    workspaceRoot: string,
-  ) {
-    let current = workspaceRoot;
-    while (true) {
-      const result = yield* nativeRealPath(current).pipe(Effect.result);
-      if (Result.isSuccess(result))
-        return path.join(result.success, path.relative(current, workspaceRoot));
-      if (result.failure.code !== "ENOENT") return null;
-      const parent = path.dirname(current);
-      if (current === parent) return null;
-      current = parent;
-    }
-  });
+  // Missing components can hide a case alias or symlink, so their ancestry is unknown.
+  const resolveRemovalPath = Effect.fn("ProjectService.resolveRemovalPath")(
+    (workspaceRoot: string) => nativeRealPath(workspaceRoot).pipe(Effect.orElseSucceed(() => null)),
+  );
   const removalPreview = Effect.fn("ProjectService.removalPreview")(function* () {
     const rows = yield* projects
       .listRemovalRows()

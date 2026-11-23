@@ -310,6 +310,23 @@ describe("project removal confirmation", () => {
     expect(removalEnvironmentLabel(remoteEnvironmentId, environments)).toBe("Dev (remote)");
   });
 
+  it("requires individual review for missing folders whose registered casing differs", () => {
+    const root = { ...local, workspaceRoot: "/work/Repo" };
+    const projects = [root, nested];
+    const options = {
+      groupMembers: projects,
+      projects,
+      preview: previewRows(projects).map((row) => ({ ...row, resolvedWorkspaceRoot: null })),
+      threads,
+    };
+    const group = planProjectRemoval({ ...options, members: projects });
+    expect(group.ambiguousFolders).toBe(true);
+    expect(group.entriesToRemove()).toEqual([]);
+    const individual = planProjectRemoval({ ...options, members: [root] });
+    expect(individual.ambiguousFolders).toBe(false);
+    expect(individual.entriesToRemove().map(({ member }) => member.id)).toEqual([root.id]);
+  });
+
   it("recognizes the same repository folder on Windows and POSIX", () => {
     const identity = makeProject(localEnvironmentId).repositoryIdentity!;
     const members = [

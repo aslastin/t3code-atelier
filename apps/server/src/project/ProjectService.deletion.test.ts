@@ -162,6 +162,12 @@ it.effect(
           path.join(entry!.resolvedWorkspaceRoot!, "child"),
         );
         assert.equal(entry?.resolvedWorkspaceRoot, yield* fs.realPath(first));
+        yield* fs.rename(first, path.join(temp, "moved"));
+        const missing = yield* service.removalPreview();
+        assert.deepEqual(
+          missing.map((row) => row.resolvedWorkspaceRoot),
+          [null, null],
+        );
         if (!windows) {
           yield* fs.remove(registered);
           yield* fs.symlink(second, registered);

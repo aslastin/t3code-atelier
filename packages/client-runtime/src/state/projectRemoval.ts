@@ -207,8 +207,9 @@ export function planProjectRemoval<
   const foldersChanged =
     relevant.length !== folders.size ||
     relevant.some((member) => folders.get(keyOf(member))?.workspaceRoot !== member.workspaceRoot);
-  const entries = foldersChanged ? [] : roots.map(entry);
-  const nestedEntries = foldersChanged ? [] : nested.map(entry);
+  const canReview = !foldersChanged && !ambiguousFolders;
+  const entries = canReview ? roots.map(entry) : [];
+  const nestedEntries = canReview ? nested.map(entry) : [];
   return {
     entries,
     nestedEntries,
