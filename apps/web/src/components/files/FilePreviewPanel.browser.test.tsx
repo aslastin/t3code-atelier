@@ -273,17 +273,19 @@ describe("read-only source comments", () => {
     const filePath = "/tmp/notes.txt";
     const contents = "first\nsecond\nthird\nfourth";
     state.file = {
-      relativePath: filePath,
+      relativePath: "~/notes.txt",
+      absolutePath: filePath,
       contents,
       byteLength: contents.length,
       truncated: false,
     };
-    await using screen = await render(
+    const panel = () => (
       <div style={{ width: 560, height: 400, display: "flex", flexDirection: "column" }}>
-        {filePreview(filePath)}
+        {filePreview("~/notes.txt")}
         <FileCommentComposer />
-      </div>,
+      </div>
     );
+    await using screen = await render(panel());
     const number = (line: number) =>
       screen.container
         .querySelector("diffs-container")
@@ -308,6 +310,11 @@ describe("read-only source comments", () => {
       screen.getByRole("textbox", { name: /Comment on lines/ }),
       "Explain this.",
     );
+    state.file = { ...state.file!, contents: "replaced", byteLength: 8 };
+    await screen.rerender(panel());
+    await expect
+      .element(screen.getByRole("textbox", { name: /Comment on lines/ }))
+      .toHaveValue("Explain this.");
     await userEvent.click(screen.getByRole("button", { name: "Comment", exact: true }));
 
     const draft = useComposerDraftStore.getState().getComposerDraft(threadRef)!;
@@ -317,6 +324,12 @@ describe("read-only source comments", () => {
     await expect
       .element(screen.getByRole("textbox", { name: "Prompt" }))
       .toHaveTextContent("notes.txt L2 to L3");
+    await vi.waitFor(() => expect(number(3)).toBeNull());
+    await drag("mousePressed", 1);
+    await drag("mouseReleased", 1);
+    await expect
+      .element(screen.getByRole("textbox", { name: "Comment on lines L1" }))
+      .toBeVisible();
     expect(state.writeFile).not.toHaveBeenCalled();
   });
 });

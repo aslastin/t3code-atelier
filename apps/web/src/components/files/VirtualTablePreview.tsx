@@ -1,6 +1,5 @@
 /* oxlint-disable react/no-array-index-key -- Positions identify source rows and columns. */
 import {
-  Fragment,
   type ReactNode,
   useEffect,
   useEffectEvent,
@@ -215,61 +214,63 @@ function RowPage(
         if (props.header && index === 0) return null;
         const line = index + 1;
         const highlighted = line === revealLine || (line >= firstSelected && line <= lastSelected);
+        const annotation = props.renderAnnotation?.(line);
         return (
-          <Fragment key={local}>
+          <div
+            key={local}
+            data-preview-row={index}
+            role={props.source ? undefined : "row"}
+            aria-rowindex={props.source ? undefined : index + 1}
+            className={
+              props.source
+                ? `flex min-h-[29px] flex-wrap font-mono ${highlighted ? "bg-primary/10" : ""}`
+                : `flex min-h-[29px] border-b border-border/60 ${(index - (props.header ? 1 : 0)) % 2 ? "bg-muted/30" : ""}`
+            }
+            data-preview-reveal={line === revealLine ? "true" : undefined}
+          >
             <div
-              data-preview-row={index}
-              role={props.source ? undefined : "row"}
-              aria-rowindex={props.source ? undefined : index + 1}
-              className={
-                props.source
-                  ? `flex min-h-[29px] font-mono ${highlighted ? "bg-primary/10" : ""}`
-                  : `flex min-h-[29px] border-b border-border/60 ${(index - (props.header ? 1 : 0)) % 2 ? "bg-muted/30" : ""}`
-              }
-              data-preview-reveal={line === revealLine ? "true" : undefined}
+              role={props.source ? undefined : "rowheader"}
+              className={`${props.source ? "sticky left-0" : "relative"} z-1 shrink-0 border-r border-border bg-background px-2 py-1.5 text-right font-normal text-muted-foreground tabular-nums select-none`}
+              style={{
+                width: props.rowHeader,
+                transform: props.source ? undefined : "translateX(var(--preview-scroll-left, 0px))",
+              }}
             >
-              <div
-                role={props.source ? undefined : "rowheader"}
-                className={`${props.source ? "sticky left-0" : "relative"} z-1 shrink-0 border-r border-border bg-background px-2 py-1.5 text-right font-normal text-muted-foreground tabular-nums select-none`}
-                style={{
-                  width: props.rowHeader,
-                  transform: props.source
-                    ? undefined
-                    : "translateX(var(--preview-scroll-left, 0px))",
-                }}
-              >
-                <span className="sticky top-0 block">
-                  {props.renderLineNumber
-                    ? props.renderLineNumber(line, row !== undefined)
-                    : index + (props.header ? 0 : 1)}
-                </span>
-              </div>
-              {!props.source ? (
-                <div
-                  style={{
-                    width: props.sizes.slice(0, props.firstColumn).reduce((a, b) => a + b, 0),
-                    flexShrink: 0,
-                  }}
-                />
-              ) : null}
-              {props.columnsVisible.map((column) => (
-                <div
-                  key={column}
-                  role={props.source ? undefined : "cell"}
-                  aria-colindex={props.source ? undefined : column + 1}
-                  className={
-                    props.source
-                      ? `min-w-0 flex-1 px-3 py-1 ${props.wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}`
-                      : "shrink-0 border-r border-border/40 px-3 py-1.5 whitespace-pre-wrap break-words tabular-nums"
-                  }
-                  style={props.source ? undefined : { width: props.sizes[column] }}
-                >
-                  {row?.[column] ?? ""}
-                </div>
-              ))}
+              <span className="sticky top-0 block">
+                {props.renderLineNumber
+                  ? props.renderLineNumber(line, row !== undefined)
+                  : index + (props.header ? 0 : 1)}
+              </span>
             </div>
-            {props.renderAnnotation?.(line)}
-          </Fragment>
+            {!props.source ? (
+              <div
+                style={{
+                  width: props.sizes.slice(0, props.firstColumn).reduce((a, b) => a + b, 0),
+                  flexShrink: 0,
+                }}
+              />
+            ) : null}
+            {props.columnsVisible.map((column) => (
+              <div
+                key={column}
+                role={props.source ? undefined : "cell"}
+                aria-colindex={props.source ? undefined : column + 1}
+                className={
+                  props.source
+                    ? `min-w-0 flex-1 px-3 py-1 ${props.wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}`
+                    : "shrink-0 border-r border-border/40 px-3 py-1.5 whitespace-pre-wrap break-words tabular-nums"
+                }
+                style={props.source ? undefined : { width: props.sizes[column] }}
+              >
+                {row?.[column] ?? ""}
+              </div>
+            ))}
+            {annotation ? (
+              <div className="w-full font-sans select-none [&_textarea]:select-text">
+                {annotation}
+              </div>
+            ) : null}
+          </div>
         );
       })}
     </div>
@@ -349,6 +350,11 @@ function ScaledRows(props: Omit<Parameters<typeof RowPage>[0], "page">) {
   const onWheel = useEffectEvent((event: WheelEvent) => {
     const node = ref.current;
     if (!node || event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+    if (
+      event.target instanceof HTMLTextAreaElement &&
+      event.target.scrollHeight > event.target.clientHeight
+    )
+      return;
     const delta =
       event.deltaY * (event.deltaMode === 1 ? 29 : event.deltaMode === 2 ? node.clientHeight : 1);
     if (!delta) return;

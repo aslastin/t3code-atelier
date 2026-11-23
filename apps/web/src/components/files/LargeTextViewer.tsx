@@ -67,6 +67,7 @@ export default function LargeTextViewer(props: {
     const controller = new AbortController();
     let indexed = false;
     let prefetched = false;
+    let replacementMeta: typeof meta = null;
     const paintFirstScreen = (text: string, complete: boolean) => {
       if (indexed || controller.signal.aborted) return;
       const rows = firstScreen(text, props.delimiter, complete);
@@ -107,12 +108,25 @@ export default function LargeTextViewer(props: {
         } else if (result.type === "meta") {
           indexed = true;
           if (prefetched) {
+            // Replace the prefix and its metadata together so open annotations stay mounted.
+            if (result.count > 0) {
+              replacementMeta = result;
+              return;
+            }
             setPages(new Map());
             pending.current.clear();
             prefetched = false;
           }
           setMeta(result);
         } else if (result.type === "page") {
+          if (replacementMeta && result.index === 0) {
+            setMeta(replacementMeta);
+            setPages(new Map([[0, result.rows]]));
+            replacementMeta = null;
+            pending.current.clear();
+            prefetched = false;
+            return;
+          }
           pending.current.delete(result.index);
           setPages((old) => {
             const previous = old.get(result.index);
@@ -270,17 +284,16 @@ export default function LargeTextViewer(props: {
           <T>Showing the first 1,024 columns. Source and Save retain every column.</T>
         </FileSurfaceNotice>
       ) : null}
-      {meta.count > 0 ? (
-        props.commentTarget && !props.delimiter ? (
-          <PagedSourcePreview {...tableProps} commentTarget={props.commentTarget} />
-        ) : (
-          <VirtualTablePreview {...tableProps} />
-        )
-      ) : (
+      {props.commentTarget && !props.delimiter ? (
+        <PagedSourcePreview {...tableProps} commentTarget={props.commentTarget} />
+      ) : meta.count > 0 ? (
+        <VirtualTablePreview {...tableProps} />
+      ) : null}
+      {meta.count === 0 ? (
         <div className="flex flex-1 items-center justify-center p-6 text-xs text-muted-foreground">
           <T>This file is empty.</T>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

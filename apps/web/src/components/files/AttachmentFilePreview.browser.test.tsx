@@ -810,6 +810,48 @@ describe("large text preview recovery", () => {
     }
   });
 
+  it("keeps an open line comment when the worker replaces the prefetched source", async () => {
+    const started = Promise.withResolvers<EventTarget>();
+    using _worker = stubGlobal(
+      "Worker",
+      class extends EventTarget {
+        postMessage() {
+          started.resolve(this);
+        }
+        terminate() {}
+      },
+    );
+    const environmentId = EnvironmentId.make("env");
+    await using screen = await render(
+      <div style={{ display: "flex", height: 400, width: 600 }}>
+        <LargeTextViewer
+          name="log.txt"
+          text={"one\ntwo\nthree"}
+          delimiter={null}
+          commentTarget={{
+            environmentId,
+            filePath: "log.txt",
+            composerDraftTarget: { environmentId, threadId: ThreadId.make("paged-comment") },
+          }}
+        />
+      </div>,
+    );
+    const worker = await started.promise;
+    const reply = (data: TextPreviewResult) =>
+      act(() => {
+        worker.dispatchEvent(new MessageEvent("message", { data }));
+      });
+    await userEvent.click(screen.getByRole("button", { name: "Comment on lines L3" }));
+    const draft = screen.getByRole("textbox", { name: "Comment on lines L3" });
+    await userEvent.fill(draft, "Keep this line");
+    await reply({ type: "meta", count: 2, columns: 1, complete: true });
+    await expect.element(draft).toHaveValue("Keep this line");
+    await reply({ type: "page", index: 0, rows: [["one"], ["changed"]] });
+    await expect.element(draft).toHaveValue("Keep this line");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await expect.element(screen.getByRole("button", { name: "Comment on lines L2" })).toBeEnabled();
+  });
+
   it("fills the horizontal viewport using measured column widths", async () => {
     const header = Array.from({ length: 20 }, (_, i) => "C" + i);
     await using screen = await render(

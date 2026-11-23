@@ -362,6 +362,7 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
 
           expect(result).toEqual({
             relativePath,
+            absolutePath: (yield* Path.Path).join(home, ".claude", "CLAUDE.md"),
             contents: "# Notes\n",
             byteLength: 8,
             truncated: false,

@@ -888,12 +888,20 @@ function ReadOnlyFileSurface(
     onPostRender: FilePostRender;
   },
 ) {
-  const { fileProps } = useFileComments(props);
+  // Keep the selected version visible until the user submits or cancels the draft.
+  const [source, setSource] = useState({ contents: props.contents, cacheKey: props.cacheKey });
+  const { fileProps, hasOpenCommentForm } = useFileComments({
+    ...props,
+    contents: source.contents,
+  });
+  if (!hasOpenCommentForm && source.cacheKey !== props.cacheKey) {
+    setSource({ contents: props.contents, cacheKey: props.cacheKey });
+  }
   return (
     <SourceFilePreview
       name={props.filePath}
-      text={props.contents}
-      cacheKey={props.cacheKey}
+      text={source.contents}
+      cacheKey={source.cacheKey}
       wordWrap={props.wordWrap}
       onPostRender={props.onPostRender}
       annotations={fileProps}
@@ -1370,7 +1378,7 @@ export default function FilePreviewPanel({
     breadcrumbPath === ""
       ? cwd
       : relativePath && attachment === undefined
-        ? resolvePathLinkTarget(relativePath, cwd)
+        ? (file.data?.absolutePath ?? resolvePathLinkTarget(relativePath, cwd))
         : null;
   const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
   // Mounting the file read under the workspace mutation id refetches it after each mutation.
@@ -1654,7 +1662,7 @@ export default function FilePreviewPanel({
                 environmentId,
                 projectId,
                 composerDraftTarget,
-                filePath: relativePath,
+                filePath: file.data.absolutePath ?? relativePath,
               }}
               key={`${absolutePath}:${renderTable}:${fileRefreshRevision}`}
               environmentId={environmentId}
@@ -1745,7 +1753,7 @@ export default function FilePreviewPanel({
             ) : file.data.truncated || isHostFile || !canWriteFiles ? (
               <ReadOnlyFileSurface
                 key={relativePath}
-                filePath={relativePath}
+                filePath={file.data.absolutePath ?? relativePath}
                 environmentId={environmentId}
                 composerDraftTarget={composerDraftTarget}
                 projectId={projectId}

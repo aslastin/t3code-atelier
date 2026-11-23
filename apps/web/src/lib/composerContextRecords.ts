@@ -1,3 +1,5 @@
+import { sha256 } from "@noble/hashes/sha2";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils";
 import {
   capitalizeTerm,
   sourceControlClients,
@@ -5,6 +7,7 @@ import {
 import {
   COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS,
   COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS,
+  COMPOSER_CONTEXT_REVIEW_SECTION_ID_MAX_CHARS,
   COMPOSER_CONTEXT_REVIEW_TEXT_MAX_CHARS,
   COMPOSER_CONTEXT_TERMINAL_TEXT_MAX_CHARS,
 } from "@t3tools/contracts";
@@ -406,7 +409,11 @@ export function reviewCommentContextRecord(
     contextId: reviewCommentContextId(comment.id),
     kind: "review-comment",
     label: sanitizeComposerContextLabel(reviewCommentContextLabel(comment), "review-comment"),
-    sectionId: comment.sectionId,
+    sectionId:
+      comment.sectionId.length > COMPOSER_CONTEXT_REVIEW_SECTION_ID_MAX_CHARS &&
+      comment.sectionId === `file:${comment.filePath}`
+        ? `file-sha256:${bytesToHex(sha256(utf8ToBytes(comment.filePath)))}`
+        : comment.sectionId,
     sectionTitle: comment.sectionTitle,
     filePath: comment.filePath,
     startIndex: comment.startIndex,
