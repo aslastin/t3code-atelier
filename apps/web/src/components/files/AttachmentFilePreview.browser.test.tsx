@@ -83,7 +83,8 @@ import { boundedZip } from "@t3tools/client-runtime/zip/bounded-zip";
 import BinaryViewer from "./BinaryViewer";
 import { decodeImagePreview } from "./decodeImagePreview";
 import type { BinaryWorkerResult } from "./binaryPreviewProtocol";
-import type { TextPreviewResult } from "./largeTextProtocol";
+import type { TextPreviewRequest, TextPreviewResult } from "./largeTextProtocol";
+import { useComposerDraftStore } from "~/composerDraftStore";
 import type { ReactElement } from "react";
 import type { OfficeWorkerResult } from "./officePreviewProtocol";
 import { previewErrorText } from "./previewFailureMessages";
@@ -579,6 +580,10 @@ describe("large text preview recovery", () => {
       environmentId: EnvironmentId.make("test"),
       threadId: ThreadId.make("test"),
     };
+    const resetDraft = () =>
+      useComposerDraftStore.setState(useComposerDraftStore.getInitialState(), true);
+    resetDraft();
+    using _draft = { [Symbol.dispose]: resetDraft };
     const preview = (mutation: string, revision = 0) => (
       <div style={{ display: "flex", flexDirection: "column", height: 400, width: 600 }}>
         <WorkspaceLargeTextPreview
@@ -658,13 +663,28 @@ describe("large text preview recovery", () => {
       await screen.rerender(preview("file-edit", 1));
       await expect.element(draft).toHaveValue("Check the original line");
       expect(workers).toHaveLength(1);
-      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await act(() => workers[0]!.dispatchEvent(new ErrorEvent("error")));
+      await expect.element(draft).toHaveValue("Check the original line");
+      await userEvent.click(screen.getByRole("button", { name: "Try again" }));
       // The prefetched first screen paints before the worker starts, so wait for the worker itself.
       await vi.waitFor(() => expect(workers).toHaveLength(2));
       await vi.waitFor(() => expect(screen.container.textContent).toContain("changed"));
+      await expect.element(draft).toHaveValue("Check the original line");
+      await userEvent.click(screen.getByRole("button", { name: "Comment", exact: true }));
+      await expect.element(screen.getByText("Check the original line")).not.toBeInTheDocument();
+      await userEvent.click(
+        screen.getByRole("button", { name: "Comment on lines L2", exact: true }),
+      );
+      await userEvent.fill(
+        screen.getByRole("textbox", { name: "Comment on lines L2" }),
+        "Keep this annotation",
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Comment", exact: true }));
       await screen.rerender(preview("file-edit", 2));
       await vi.waitFor(() => expect(workers).toHaveLength(3));
       await vi.waitFor(() => expect(screen.container.textContent).toContain("changed"));
+      await expect.element(screen.getByText("Keep this annotation")).toBeVisible();
+      await userEvent.click(screen.getByRole("button", { name: "Delete comment" }));
       state(`${original}#legacy`);
       await screen.rerender(preview("legacy-edit", 1));
       await vi.waitFor(() => expect(workers).toHaveLength(4));
@@ -849,11 +869,14 @@ describe("large text preview recovery", () => {
 
   it("keeps an open line comment when the worker replaces the prefetched source", async () => {
     const started = Promise.withResolvers<EventTarget>();
+    const requested = Promise.withResolvers<number>();
+    const copyContents = { current: null as (() => Promise<string>) | null };
     using _worker = stubGlobal(
       "Worker",
       class extends EventTarget {
-        postMessage() {
+        postMessage(input: TextPreviewRequest) {
           started.resolve(this);
+          if (input.type === "excerpt") requested.resolve(input.requestId);
         }
         terminate() {}
       },
@@ -864,6 +887,7 @@ describe("large text preview recovery", () => {
         <LargeTextViewer
           name="log.txt"
           text={"one\ntwo\nthree"}
+          copyContents={copyContents}
           delimiter={null}
           commentTarget={{
             environmentId,
@@ -881,12 +905,41 @@ describe("large text preview recovery", () => {
     await userEvent.click(screen.getByRole("button", { name: "Comment on lines L3" }));
     const draft = screen.getByRole("textbox", { name: "Comment on lines L3" });
     await userEvent.fill(draft, "Keep this line");
+    const disabled = screen.getByRole("button", { name: "Comment on lines L2" }).element();
+    const rect = disabled.getBoundingClientRect();
+    const frame = window.frameElement?.getBoundingClientRect();
+    for (const type of ["mousePressed", "mouseReleased"] as const) {
+      await cdp().send("Input.dispatchMouseEvent", {
+        type,
+        x: rect.left + rect.width / 2 + (frame?.left ?? 0),
+        y: rect.top + rect.height / 2 + (frame?.top ?? 0),
+        button: "left",
+        buttons: type === "mousePressed" ? 1 : 0,
+        clickCount: 1,
+      });
+    }
+    await expect.element(draft).toHaveValue("Keep this line");
     await reply({ type: "meta", count: 2, columns: 1, complete: true });
     await expect.element(draft).toHaveValue("Keep this line");
     await reply({ type: "page", index: 0, rows: [["one"], ["changed"]] });
     await expect.element(draft).toHaveValue("Keep this line");
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await expect.element(screen.getByRole("button", { name: "Comment on lines L2" })).toBeEnabled();
+    await reply({ type: "page", index: 0, rows: [["x".repeat(32_001)], ["changed"]] });
+    const copy = expect(copyContents.current!()).resolves.toBe("whole file");
+    await userEvent.click(screen.getByRole("button", { name: "Comment on lines L1" }));
+    await reply({
+      type: "error",
+      operation: "excerpt",
+      requestId: await requested.promise,
+      message: "Could not decode this range",
+    });
+    await reply({ type: "copy", text: "whole file" });
+    await copy;
+    await userEvent.click(screen.getByRole("button", { name: "Comment on lines L2" }));
+    await expect
+      .element(screen.getByRole("textbox", { name: "Comment on lines L2" }))
+      .toBeVisible();
   });
 
   it("fills the horizontal viewport using measured column widths", async () => {

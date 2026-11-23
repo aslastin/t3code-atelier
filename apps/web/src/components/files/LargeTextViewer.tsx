@@ -4,6 +4,7 @@ import type { FileReviewExcerpt } from "~/reviewCommentContext";
 import { clampContextText } from "~/lib/composerContextRecords";
 import { useEffect, useImperativeHandle, useRef, useState, type RefObject } from "react";
 import { m } from "~/i18n/messages";
+import { useStableCallback } from "~/hooks/useStableCallback";
 import { parseDelimitedPreview } from "@t3tools/shared/delimitedPreview";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { useClientSettings } from "~/hooks/useSettings";
@@ -53,8 +54,43 @@ export default function LargeTextViewer(props: {
   const [meta, setMeta] = useState<Extract<TextPreviewResult, { type: "meta" }> | null>(null);
   const [pages, setPages] = useState(new Map<number, string[][]>());
   const [error, setError] = useState<string | null>(null);
+  const { src, text, sizeBytes, delimiter } = props;
+  const [source, setSource] = useState({ src, text, sizeBytes, delimiter, revision: 0 });
+  if (
+    source.src !== src ||
+    source.text !== text ||
+    source.sizeBytes !== sizeBytes ||
+    source.delimiter !== delimiter
+  ) {
+    setSource({ src, text, sizeBytes, delimiter, revision: source.revision + 1 });
+    setError(null);
+    setMeta(null);
+    setPages(new Map());
+  }
   const worker = useRef<Worker | null>(null);
-  const excerptReady = useRef<((excerpt: FileReviewExcerpt) => void) | null>(null);
+  const excerptId = useRef(0);
+  const excerpts = useRef(new Map<number, (result: FileReviewExcerpt | Error) => void>());
+  const readExcerpt = useStableCallback(
+    (firstLine: number, lastLine: number, ready: (result: FileReviewExcerpt | Error) => void) => {
+      const id = ++excerptId.current;
+      if (worker.current) {
+        excerpts.current.set(id, ready);
+        worker.current.postMessage(
+          {
+            type: "excerpt",
+            requestId: id,
+            firstLine,
+            lastLine,
+            maxChars: COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS + 1,
+          },
+          [],
+        );
+      } else ready(new Error(m(msg("The file is unavailable."))));
+      return () => {
+        excerpts.current.delete(id);
+      };
+    },
+  );
   const copyPending = useRef<{
     resolve: (text: string) => void;
     reject: (cause: Error) => void;
@@ -64,14 +100,16 @@ export default function LargeTextViewer(props: {
   const wordWrap = props.wordWrap ?? defaultWordWrap;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Own the prefix fetch and indexing worker, cancelling requests and pending copies when the source changes or unmounts.
   useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect -- A replacement source must discard the previous worker's error and pages.
-    setError(null);
-    setMeta(null);
-    setPages(new Map());
     const controller = new AbortController();
     let indexed = false;
     let prefetched = false;
     let replacementMeta: typeof meta = null;
+    const failReads = (cause: Error) => {
+      copyPending.current?.reject(cause);
+      copyPending.current = null;
+      for (const ready of excerpts.current.values()) ready(cause);
+      excerpts.current.clear();
+    };
     const paintFirstScreen = (text: string, complete: boolean) => {
       if (indexed || controller.signal.aborted) return;
       const rows = firstScreen(text, props.delimiter, complete);
@@ -100,23 +138,36 @@ export default function LargeTextViewer(props: {
         type: "module",
       });
       worker.current = engine;
+      const failWorker = (cause: Error, message?: string) => {
+        engine.terminate();
+        worker.current = null;
+        failReads(cause);
+        setError(message ?? cause.message);
+      };
       engine.addEventListener("message", (event: MessageEvent<TextPreviewResult>) => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || worker.current !== engine) return;
         const result = event.data;
         if (result.type === "excerpt") {
-          excerptReady.current?.({
+          excerpts.current.get(result.requestId)?.({
             firstLine: result.firstLine,
             lastLine: result.lastLine,
             text: clampContextText(result.text, COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS),
           });
-          excerptReady.current = null;
+          excerpts.current.delete(result.requestId);
         } else if (result.type === "copy") {
           copyPending.current?.resolve(result.text);
           copyPending.current = null;
         } else if (result.type === "error") {
-          copyPending.current?.reject(new Error(previewFailureText(result)));
-          copyPending.current = null;
-          if (result.operation !== "copy") setError(previewFailureText(result));
+          const cause = new Error(previewFailureText(result));
+          if (result.operation === "excerpt") {
+            excerpts.current.get(result.requestId)?.(cause);
+            excerpts.current.delete(result.requestId);
+          } else if (result.operation === "copy") {
+            copyPending.current?.reject(cause);
+            copyPending.current = null;
+          } else {
+            failWorker(cause);
+          }
         } else if (result.type === "meta") {
           indexed = true;
           if (prefetched) {
@@ -160,9 +211,11 @@ export default function LargeTextViewer(props: {
         }
       });
       engine.addEventListener("error", () => {
-        copyPending.current?.reject(new Error(m(msg("The text viewer stopped."))));
-        copyPending.current = null;
-        setError(m(msg("Could not load the text viewer. Close the file and try again.")));
+        if (controller.signal.aborted || worker.current !== engine) return;
+        failWorker(
+          new Error(m(msg("The text viewer stopped."))),
+          m(msg("Could not load the text viewer. Close the file and try again.")),
+        );
       });
       engine.postMessage(
         {
@@ -214,9 +267,7 @@ export default function LargeTextViewer(props: {
     } else startWorker();
     return () => {
       controller.abort();
-      excerptReady.current = null;
-      copyPending.current?.reject(new Error(m(msg("Preview closed."))));
-      copyPending.current = null;
+      failReads(new DOMException(m(msg("Preview closed.")), "AbortError"));
       worker.current?.terminate();
       worker.current = null;
       pending.current.clear();
@@ -239,22 +290,23 @@ export default function LargeTextViewer(props: {
       }),
     [],
   );
-  if (error)
-    return (
-      <FileSurfaceFailure message={error} {...(props.onRetry ? { onRetry: props.onRetry } : {})} />
-    );
-  if (!meta || (meta.count > 0 && !pages.has(0))) return <FileSurfaceLoading />;
+  const fallback = error ? (
+    <FileSurfaceFailure message={error} {...(props.onRetry ? { onRetry: props.onRetry } : {})} />
+  ) : !meta || (meta.count > 0 && !pages.has(0)) ? (
+    <FileSurfaceLoading />
+  ) : null;
   const header = props.delimiter ? pages.get(0)?.[0] : undefined;
-  const rowCount = Math.max(0, meta.count - 1);
-  const columnCount = meta.count ? meta.columns : 0;
+  const rowCount = Math.max(0, (meta?.count ?? 0) - 1);
+  const columnCount = meta?.count ? meta.columns : 0;
+  const count = fallback ? 0 : (meta?.count ?? 0);
   const tableProps = {
     name: props.name,
-    count: meta.count,
-    columns: meta.columns,
+    count,
+    columns: meta?.columns ?? 1,
     header,
     source: !props.delimiter,
     wrap: wordWrap,
-    revealLine: meta.complete ? (props.revealLine ?? null) : null,
+    revealLine: meta?.complete ? (props.revealLine ?? null) : null,
     revealRequestId: props.revealRequestId ?? 0,
     getRows: (page: number) => pages.get(page),
     loadPage: (page: number) => {
@@ -265,34 +317,40 @@ export default function LargeTextViewer(props: {
   };
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <div
-        className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-1 border-b border-border/60 px-3 py-2 text-xs text-muted-foreground tabular-nums"
-        role="status"
-      >
-        {props.delimiter
-          ? `${gt("{count, plural, one {{formatted} row} other {{formatted} rows}}", {
-              count: rowCount,
-              formatted: rowCount.toLocaleString(),
-            })} · ${gt("{count, plural, one {{formatted} column} other {{formatted} columns}}", {
-              count: columnCount,
-              formatted: columnCount.toLocaleString(),
-            })}`
-          : gt("{count, plural, one {{formatted} line} other {{formatted} lines}}", {
-              count: meta.count,
-              formatted: meta.count.toLocaleString(),
-            })}
-        {meta.complete && meta.sizeBytes !== undefined
-          ? ` · ${meta.sizeBytes === 0 ? gt("0 bytes") : formatAttachmentSize(meta.sizeBytes, messages)}`
-          : ` · ${gt("Indexing…")}`}
-      </div>
-      {!meta.complete ? (
+      {fallback ??
+        (meta && (
+          <div
+            className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-1 border-b border-border/60 px-3 py-2 text-xs text-muted-foreground tabular-nums"
+            role="status"
+          >
+            {props.delimiter
+              ? `${gt("{count, plural, one {{formatted} row} other {{formatted} rows}}", {
+                  count: rowCount,
+                  formatted: rowCount.toLocaleString(),
+                })} · ${gt(
+                  "{count, plural, one {{formatted} column} other {{formatted} columns}}",
+                  {
+                    count: columnCount,
+                    formatted: columnCount.toLocaleString(),
+                  },
+                )}`
+              : gt("{count, plural, one {{formatted} line} other {{formatted} lines}}", {
+                  count: meta.count,
+                  formatted: meta.count.toLocaleString(),
+                })}
+            {meta.complete && meta.sizeBytes !== undefined
+              ? ` · ${meta.sizeBytes === 0 ? gt("0 bytes") : formatAttachmentSize(meta.sizeBytes, messages)}`
+              : ` · ${gt("Indexing…")}`}
+          </div>
+        ))}
+      {!fallback && meta && !meta.complete ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
           <FileSurfaceNotice>
             <T>Loading the rest of the file…</T>
           </FileSurfaceNotice>
         </div>
       ) : null}
-      {meta.columns === 1024 ? (
+      {!fallback && meta?.columns === 1024 ? (
         <FileSurfaceNotice>
           <T>Showing the first 1,024 columns. Source and Save retain every column.</T>
         </FileSurfaceNotice>
@@ -301,20 +359,14 @@ export default function LargeTextViewer(props: {
         <PagedSourcePreview
           {...tableProps}
           commentTarget={props.commentTarget}
-          readExcerpt={(firstLine, lastLine, ready) => {
-            excerptReady.current = ready;
-            worker.current?.postMessage({
-              type: "excerpt",
-              firstLine,
-              lastLine,
-              maxChars: COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS + 1,
-            });
-          }}
+          indexed={meta?.complete === true && !fallback}
+          sourceRevision={source.revision}
+          readExcerpt={readExcerpt}
         />
-      ) : meta.count > 0 ? (
+      ) : count > 0 ? (
         <VirtualTablePreview {...tableProps} />
       ) : null}
-      {meta.count === 0 ? (
+      {!fallback && meta?.count === 0 ? (
         <div className="flex flex-1 items-center justify-center p-6 text-xs text-muted-foreground">
           <T>This file is empty.</T>
         </div>

@@ -1933,9 +1933,15 @@ export function WorkspaceLargeTextPreview(props: {
     revision,
     props.refreshRevision,
   ]);
-  const [loaded, setLoaded] = useState<{ revision: string; url: string } | null>(null);
-  if (!commentOpen && assetUrl._tag === "Success" && loaded?.revision !== contentRevision) {
-    setLoaded({ revision: contentRevision, url: assetUrl.url });
+  const [loaded, setLoaded] = useState<{ revision: string; url: string; retry: number } | null>(
+    null,
+  );
+  if (
+    (!commentOpen || loaded?.retry !== revision) &&
+    assetUrl._tag === "Success" &&
+    loaded?.revision !== contentRevision
+  ) {
+    setLoaded({ revision: contentRevision, url: assetUrl.url, retry: revision });
   }
   if (!commentOpen && assetUrl._tag === "Failure")
     return (
@@ -2004,7 +2010,6 @@ export function WorkspaceLargeTextPreview(props: {
         }
       >
         <LargeTextViewer
-          key={`${src}:${revision}`}
           name={props.name}
           commentTarget={
             props.commentTarget && {

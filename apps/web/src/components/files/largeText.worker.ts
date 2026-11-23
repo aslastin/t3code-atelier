@@ -45,6 +45,7 @@ async function read(start: number, end: number, partial = false) {
   });
 }
 async function excerpt({
+  requestId,
   firstLine,
   lastLine,
   maxChars,
@@ -58,6 +59,7 @@ async function excerpt({
   const text = (await read(start, limit, limit < end)).replace(/\r\n|\r/g, "\n");
   reply({
     type: "excerpt",
+    requestId,
     firstLine,
     lastLine,
     text: (limit === end ? text.replace(/\n$/, "") : text).slice(0, maxChars),
@@ -225,7 +227,9 @@ self.addEventListener("message", (event: MessageEvent<TextPreviewRequest>) => {
   ).catch((cause: unknown) =>
     reply({
       type: "error",
-      operation: input.type,
+      ...(input.type === "excerpt"
+        ? { operation: input.type, requestId: input.requestId }
+        : { operation: input.type }),
       ...previewFailure(cause, "read-failed"),
     }),
   );

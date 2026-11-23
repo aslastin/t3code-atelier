@@ -48,12 +48,10 @@ export function useFileComments({
   const messages = useMessages();
   const addReviewComment = useComposerDraftStore((store) => store.addReviewComment);
   const removeReviewComment = useComposerDraftStore((store) => store.removeReviewComment);
-  const promptCommentIds = new Set(
-    useComposerDraftStore(
-      (store) =>
-        store.getComposerDraft(composerDraftTarget)?.reviewComments ?? EMPTY_REVIEW_COMMENTS,
-    ).map((comment) => comment.id),
+  const promptComments = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.reviewComments ?? EMPTY_REVIEW_COMMENTS,
   );
+  const promptCommentIds = new Set(promptComments.map((comment) => comment.id));
   const [draftText, setDraftText] = useState("");
   const [lineAnnotations, setLineAnnotations] = useState<FileCommentLineAnnotation[]>([]);
   const [selectionOverride, setSelectionOverride] = useState<{
@@ -217,6 +215,7 @@ export function useFileComments({
       },
     },
     hasOpenCommentForm,
+    promptComments,
     setSelectedRange,
     retainUnchangedAnnotations: (before: string, after: string) => {
       if (!lineAnnotations.length) return;
