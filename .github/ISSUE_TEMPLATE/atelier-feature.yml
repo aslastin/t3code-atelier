@@ -1,0 +1,38 @@
+name: Fork feature
+description: Propose an Atelier feature, a follow-up to one, or deferred work, once it is agreed.
+labels:
+  - atelier-feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form once you agree what to build. Open-ended ideas start in
+        [Discussions → Ideas](https://github.com/aslastin/t3code-atelier/discussions/categories/ideas).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is missing or getting in the way, and for whom.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The behavior you want. Name the surfaces it touches, such as the sidebar, settings, or MCP tools.
+    validations:
+      required: true
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: What this deliberately leaves out, and where that goes instead.
+
+  - type: input
+    id: extends
+    attributes:
+      label: Extends
+      description: For a follow-up, the feature it extends from "Differences from upstream" in ATELIER.md, such as "2. Thread topics".

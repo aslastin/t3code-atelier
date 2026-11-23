@@ -1,6 +1,6 @@
 ---
 name: atelier
-description: Maintain the T3 Code Atelier fork. Use when the user finishes a fork feature, asks to build, rebuild, install, or update the T3 Code (Atelier) app, or asks to sync the fork with upstream T3 Code.
+description: Maintain the T3 Code Atelier fork. Use when the user starts or finishes a fork feature, asks to build, rebuild, install, or update the T3 Code (Atelier) app, or asks to sync the fork with upstream T3 Code.
 ---
 
 # T3 Code Atelier
@@ -16,6 +16,20 @@ describes it. Installed builds are named `T3 Code (Atelier)` and are versioned
 
 Pick the workflow that matches the request. Ask the user when the request is ambiguous rather than
 guessing.
+
+## Start a feature
+
+Use when the user begins work on a new fork feature or a follow-up to one. "Working on the fork"
+in `ATELIER.md` describes the path.
+
+1. Find the feature's issue in `aslastin/t3code-atelier`. If there is none, draft one with the
+   fields of `.github/ISSUE_TEMPLATE/atelier-feature.yml`, show it to the user, and file it after
+   they confirm. Discussions are for open-ended ideas, not for agreed work.
+2. Branch `atelier/<short-name>` from a fresh `origin/main`.
+3. Open the pull request against `aslastin/t3code-atelier` `main`, never upstream: pass
+   `-R aslastin/t3code-atelier --base main` to `gh pr create`. Title it `feat(atelier): …`, put
+   `Closes #N` in the body, and label it `atelier-feature`.
+4. If adding a label fails for lack of permission, ask the user to add it.
 
 ## Finish a feature
 
