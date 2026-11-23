@@ -26,6 +26,7 @@ appears in the app version as `+atelier.<N>`.
    under each project. The ungrouped sidebar and the chat header name a thread's topic next to
    its project.
 3. **[Plan mode](#plan-mode).** Refine a proposal, then implement it in the current thread or a new thread in the same checkout.
+4. **[Telemetry controls](./docs/user/telemetry.md).** Choose product analytics, T3 Connect tracing, or your own OpenTelemetry receiver per environment and pause all exports with one switch.
 
 ### Plan mode
 
