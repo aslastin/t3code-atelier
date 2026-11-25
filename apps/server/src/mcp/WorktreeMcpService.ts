@@ -264,6 +264,7 @@ const make = Effect.gen(function* () {
                 readonly path: string;
                 readonly refName: string;
                 readonly taskFolder: string | null;
+                readonly projectPath?: string | null;
               },
               GitCommandError | TaskFolderError
             > =>
@@ -300,7 +301,7 @@ const make = Effect.gen(function* () {
                     ),
           ).pipe(asOperationFailed("Unable to create the worktree")),
         );
-        const worktreePath = worktree.path;
+        const worktreePath = worktree.projectPath ?? worktree.path;
 
         const reportFailed = (logMessage: string) =>
           Effect.catchCause((cause: Cause.Cause<unknown>) => {
@@ -316,7 +317,7 @@ const make = Effect.gen(function* () {
           (): Effect.Effect<unknown, GitCommandError | TaskFolderError> =>
             worktree.taskFolder === null
               ? gitWorkflow
-                  .removeWorktree({ cwd: projectCwd, path: worktreePath, force: true })
+                  .removeWorktree({ cwd: projectCwd, path: worktree.path, force: true })
                   .pipe(
                     Effect.andThen(
                       Effect.suspend(() =>
@@ -432,6 +433,10 @@ const make = Effect.gen(function* () {
             );
         }
 
+        const note =
+          continuation.status === "scheduled"
+            ? "Handoff recorded. Changing the workspace detaches this provider session, so the current turn ends shortly after this call; the queued continuation prompt then starts the next turn inside the worktree with the conversation preserved. The worktree is not removed automatically when the thread is deleted."
+            : "Handoff recorded. Changing the workspace detaches this provider session, so the current turn ends shortly after this call; the conversation continues inside the worktree when the thread receives its next message. Pass continuationPrompt to resume automatically. The worktree is not removed automatically when the thread is deleted.";
         const result: WorktreeMcpHandoffResult = {
           worktreePath,
           branch: worktree.refName,
@@ -440,9 +445,9 @@ const make = Effect.gen(function* () {
           setupScript,
           continuation,
           note:
-            continuation.status === "scheduled"
-              ? "Handoff recorded. Changing the workspace detaches this provider session, so the current turn ends shortly after this call; the queued continuation prompt then starts the next turn inside the worktree with the conversation preserved. The worktree is not removed automatically when the thread is deleted."
-              : "Handoff recorded. Changing the workspace detaches this provider session, so the current turn ends shortly after this call; the conversation continues inside the worktree when the thread receives its next message. Pass continuationPrompt to resume automatically. The worktree is not removed automatically when the thread is deleted.",
+            worktree.projectPath === null
+              ? `Project folder is missing in this checkout. Using the worktree root. ${note}`
+              : note,
         };
         return result;
       }),

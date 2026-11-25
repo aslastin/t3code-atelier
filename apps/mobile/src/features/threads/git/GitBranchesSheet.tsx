@@ -40,7 +40,6 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
   );
 
   const currentBranch = gitStatus.data?.refName ?? selectedThread?.branch ?? null;
-  const currentWorktreePath = selectedThreadCwd;
   const availableBranches = gitState.selectedThreadBranches;
   const branchesLoading = gitState.selectedThreadBranchesLoading;
   const busy = gitState.gitOperationLabel !== null;
@@ -53,7 +52,7 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
 
   const disabledExistingBranchNames: Array<string> = [];
   for (const branch of availableBranches) {
-    if (branch.worktreePath !== null && branch.worktreePath !== currentWorktreePath) {
+    if (branch.worktreePath !== null && !branch.current) {
       disabledExistingBranchNames.push(branch.name);
     }
   }
@@ -144,7 +143,7 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
         {availableBranches.map((branch, index) => {
           const disabled = disabledExistingBranches.has(branch.name);
           const subtitle = branch.worktreePath
-            ? branch.worktreePath === currentWorktreePath
+            ? branch.current
               ? gt("Checked out in this thread")
               : gt("Checked out in another worktree")
             : branch.isDefault

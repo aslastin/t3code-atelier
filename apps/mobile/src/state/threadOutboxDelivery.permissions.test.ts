@@ -11,6 +11,7 @@ import { attachmentUploadError } from "@t3tools/client-runtime/state/attachment-
 import * as Effect from "effect/Effect";
 import * as Cause from "effect/Cause";
 import { AsyncResult, type Atom } from "effect/reactivity";
+import { Alert } from "react-native";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { threadOutboxRetryDelayMs, type QueuedThreadMessage } from "./thread-outbox-model";
 
@@ -280,6 +281,7 @@ describe("queued PR checkout", () => {
       },
     });
   const preparedCheckout = {
+    projectFolderMissing: true,
     branch: "pr-123",
     worktreePath: "/repo/.t3/worktrees/pr-123",
     isOnPullRequestHead: true,
@@ -304,6 +306,10 @@ describe("queued PR checkout", () => {
     });
     checkout.resolve(AsyncResult.success(preparedCheckout));
     await drained;
+    expect(Alert.alert).toHaveBeenCalledWith(
+      expect.stringContaining("worktree root"),
+      preparedCheckout.worktreePath,
+    );
     expect(state.start).toHaveBeenCalledOnce();
     const bootstrap = state.start.mock.calls[0]?.[0].input.bootstrap;
     expect(bootstrap.createThread).toMatchObject({

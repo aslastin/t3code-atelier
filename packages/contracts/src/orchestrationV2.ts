@@ -4207,6 +4207,7 @@ export const OrchestrationV2ThreadLinkMetadata = Schema.Struct({
 export type OrchestrationV2ThreadLinkMetadata = typeof OrchestrationV2ThreadLinkMetadata.Type;
 
 export const OrchestrationV2GetWorktreeThreadIdsInput = Schema.Struct({
+  projectCwd: Schema.optional(TrimmedNonEmptyString),
   worktreePath: TrimmedNonEmptyString,
 });
 export type OrchestrationV2GetWorktreeThreadIdsInput =
@@ -4268,6 +4269,7 @@ export type OrchestrationV2OlderSettledThreadsPage =
 
 /** Active threads on a worktree path, including subagent children a shell may leave out. */
 export const OrchestrationV2WorktreeThreadIds = Schema.Struct({
+  worktreeRoot: Schema.optional(TrimmedNonEmptyString),
   threadIds: Schema.Array(ThreadId),
 });
 export type OrchestrationV2WorktreeThreadIds = typeof OrchestrationV2WorktreeThreadIds.Type;

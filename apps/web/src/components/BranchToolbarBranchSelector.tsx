@@ -265,6 +265,7 @@ export function BranchToolbarBranchSelector({
       ? null
       : vcsEnvironment.status({ environmentId, input: { cwd: activeProjectCwd } }),
   );
+  const activeCheckoutRoot = branchStatusQuery.data?.workingTree.rootPath;
   const activeProjectCheckoutRoot = projectStatusQuery.data?.workingTree.rootPath;
   const trimmedBranchQuery = branchQuery.trim();
   const branchRefState = usePaginatedBranches(
@@ -293,6 +294,7 @@ export function BranchToolbarBranchSelector({
         : resolveBranchSelectionTarget({
             activeProjectCwd,
             activeProjectCheckoutRoot,
+            activeCheckoutRoot,
             activeWorktreePath,
             refName,
           }).nextWorktreePath,
@@ -447,7 +449,13 @@ export function BranchToolbarBranchSelector({
   const readSelectedRef = async (worktreePath: string, listedRef: VcsRef): Promise<VcsRef> => {
     const result = await readRefs({
       environmentId,
-      input: { cwd: worktreePath, query: listedRef.name, refKind: "local", limit: 1 },
+      input: {
+        cwd: worktreePath,
+        projectCwd: activeProjectCwd ?? undefined,
+        query: listedRef.name,
+        refKind: "local",
+        limit: 1,
+      },
     });
     return resolveConfirmedSelectedRef(listedRef, result._tag === "Success" ? result.value : null);
   };
@@ -477,6 +485,7 @@ export function BranchToolbarBranchSelector({
     const selectionTarget = resolveBranchSelectionTarget({
       activeProjectCwd,
       activeProjectCheckoutRoot,
+      activeCheckoutRoot,
       activeWorktreePath: latest.worktreePath,
       refName,
     });
@@ -789,6 +798,7 @@ export function BranchToolbarBranchSelector({
               !resolveBranchSelectionTarget({
                 activeProjectCwd,
                 activeProjectCheckoutRoot,
+                activeCheckoutRoot,
                 activeWorktreePath,
                 refName,
               }).reuseExistingWorktree)) ||

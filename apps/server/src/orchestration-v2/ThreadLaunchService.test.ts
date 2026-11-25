@@ -42,6 +42,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import { withExclusiveWorkspaceReservation } from "../workspace/workspaceLease.ts";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -54,6 +55,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectStore from "./ProjectStore.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
@@ -70,6 +72,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import { ThreadWorktreeRestore } from "../workspace/restoreMissingWorktree.ts";
 import * as TaskFolders from "../workspace/TaskFolders.ts";
 import {
   layerTaskFoldersWithGit,
@@ -138,6 +141,8 @@ const claudeAdapter = {
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 
 interface HarnessOptions {
+  readonly restoreWorktree?: ThreadWorktreeRestore["Service"]["restore"];
+  readonly workspaceRoot?: string;
   readonly closeTerminal?: TerminalManager.TerminalManager["Service"]["close"];
   readonly adapters?: ReadonlyArray<ProviderAdapter.ProviderAdapterV2["Service"]>;
   readonly managedFolders?: Layer.Layer<ManagedProjectFolders.ManagedProjectFolders>;
@@ -223,7 +228,10 @@ function makeHarness(options: HarnessOptions = {}) {
       getById: (id) =>
         Effect.succeed(
           id === projectId
-            ? Option.some(project)
+            ? Option.some({
+                ...project,
+                workspaceRoot: options.workspaceRoot ?? project.workspaceRoot,
+              })
             : id === otherProjectId
               ? Option.some(otherProject)
               : Option.none(),
@@ -262,6 +270,7 @@ function makeHarness(options: HarnessOptions = {}) {
     }),
     layerServerSettings,
     ProviderRegistryMock.layer(options.providers),
+    Layer.mock(ThreadWorktreeRestore)({ restore: options.restoreWorktree ?? (() => Effect.void) }),
     options.taskFolders ??
       Layer.mock(TaskFolders.TaskFolders)({ plan: () => Effect.succeed(null) }),
     options.managedFolders ??
@@ -287,9 +296,13 @@ function makeHarness(options: HarnessOptions = {}) {
         ).pipe(Layer.provide(layerThreadManagement));
   const layerLaunch = ThreadLaunch.layer.pipe(
     Layer.provide(
+      Layer.merge(ProjectionStore.layer, ProjectStore.layer).pipe(Layer.provide(layerDatabase)),
+    ),
+    Layer.provide(
       Layer.mergeAll(
         layerExternalServices,
         layerLaunchThreads,
+        NodeServices.layer,
         layerReceipts,
         layerOrchestrator,
         IdAllocator.layer,
@@ -1778,9 +1791,13 @@ const withRealGitRepo = <A, E, R>(
           ),
         fetchWorktreeBaseCommit: (input) => git.fetchWorktreeBaseCommit({ ...input, cwd }),
         createWorktree: (input, progress) =>
-          git.createWorktree({ ...input, cwd, path: worktreePath }, progress),
+          git.createWorktree(
+            { ...input, cwd: options.workspaceRoot ?? cwd, path: worktreePath },
+            progress,
+          ),
         ...options,
         git: {
+          repositoryRoot: () => Effect.succeed(cwd),
           resolveWorktreeBaseRemote: (input) => git.resolveWorktreeBaseRemote({ ...input, cwd }),
           resolvePrimaryRemoteName: () => git.resolvePrimaryRemoteName(cwd),
           resolveDefaultBranchName: (_cwd, remoteName) =>
@@ -1818,6 +1835,399 @@ const launchFromBase = (harness: ReturnType<typeof makeHarness>, baseRef: string
     const projection = yield* preparationSettled(launched.threadId);
     assert.equal(projection.runs[0]?.status, "starting");
   }).pipe(Effect.provide(harness.layer));
+
+it.live.each([
+  "present",
+  "root",
+  "missing on two consecutive branches",
+  "cancel",
+  "cancel-root",
+  "cancel-root-with-files",
+  "dirty",
+  "changed",
+  "shared",
+] as const)("launches a subfolder project with the folder %s in the new worktree", (folder) =>
+  withRealGitRepo(({ cwd, command, worktreePath, harness }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const workspaceRoot = `${cwd}/my-project`;
+      const retry = folder === "missing on two consecutive branches";
+      if (retry) {
+        yield* command(cwd, ["commit", "--allow-empty", "-m", "first base without project"]);
+        yield* command(cwd, ["remote", "add", "origin", cwd]);
+        yield* command(cwd, ["update-ref", "refs/remotes/origin/missing", "HEAD"]);
+        yield* command(cwd, ["commit", "--allow-empty", "-m", "second base without project"]);
+        yield* command(cwd, ["branch", "without-project"]);
+      }
+      yield* fs.makeDirectory(workspaceRoot);
+      yield* fs.writeFileString(`${workspaceRoot}/README.md`, "project\n");
+      if (folder !== "present") {
+        yield* command(cwd, ["add", "."]);
+        yield* command(cwd, ["commit", "-m", "project on another base"]);
+        yield* command(cwd, ["branch", "with-project"]);
+        yield* fs.writeFileString(`${cwd}/.git/info/exclude`, "local-draft\n");
+        yield* fs.writeFileString(
+          `${workspaceRoot}/t3.json`,
+          JSON.stringify({ worktreeSparsePatternsPath: "patterns" }),
+        );
+        yield* fs.writeFileString(`${cwd}/patterns`, "/patterns\n");
+      }
+      yield* command(cwd, ["add", "."]);
+      yield* command(cwd, ["commit", "-m", "add subfolder project"]);
+      const entered = yield* Deferred.make<void>();
+      let baseRef = "beta";
+      if (folder === "present") baseRef = ":/add subfolder project";
+      if (folder === "cancel") {
+        yield* command(cwd, ["switch", "-c", "another-name"]);
+        baseRef = "-";
+      }
+      if (retry) baseRef = "refs/remotes/origin/missing";
+      const cancelAfterSetup = folder === "cancel-root" || folder === "cancel-root-with-files";
+      const launch = harness({
+        ...(cancelAfterSetup
+          ? {
+              runSetup: () =>
+                Effect.gen(function* () {
+                  if (folder === "cancel-root-with-files")
+                    yield* fs
+                      .writeFileString(`${worktreePath}/local-draft`, "setup output")
+                      .pipe(Effect.orDie);
+                  yield* Deferred.succeed(entered, undefined);
+                  return yield* Effect.never;
+                }),
+            }
+          : {}),
+        workspaceRoot,
+        restoreWorktree: (owner) => {
+          assert.equal(owner.worktreePath, `${worktreePath}/my-project`);
+          return command(cwd, ["worktree", "add", worktreePath, "feature"]).pipe(
+            Effect.asVoid,
+            Effect.orDie,
+          );
+        },
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+        const { threadId } = yield* launches.launch(
+          launchInput({
+            command: "launch:subfolder",
+            thread: "thread:subfolder",
+            message: "Start",
+            workspace: { type: "worktree", baseRef, branch: "feature" },
+          }),
+        );
+        if (folder !== "present") {
+          const waitForFolderChoice = (base: string) =>
+            Effect.gen(function* () {
+              const paused = Option.getOrThrow(
+                yield* tracker.stream(threadId).pipe(
+                  Stream.filter(
+                    (state) =>
+                      state !== null &&
+                      (state.phase !== "running" ||
+                        (state.baseRef === base && state.folderChoice !== undefined)),
+                  ),
+                  Stream.runHead,
+                ),
+              );
+              assert.isDefined(
+                paused?.folderChoice,
+                "setup must pause before running from the root",
+              );
+              assert.equal(paused!.worktreePath, worktreePath);
+              assert.equal(paused!.folderChoice!.relativePath, "my-project");
+              assert.equal(launch.runSetup.mock.calls.length, 0);
+              assert.equal(paused!.stages.find((stage) => stage.id === "agent")?.status, "pending");
+              return paused!.folderChoice!.requestId;
+            });
+          let requestId = yield* waitForFolderChoice(baseRef);
+          if (folder === "dirty")
+            yield* fs.writeFileString(`${worktreePath}/local-draft`, "keep me");
+          if (folder === "cancel" || folder === "dirty") {
+            assert.isTrue(yield* tracker.cancel(threadId));
+            const stopped = yield* preparationSettled(threadId);
+            assert.equal(stopped.messages.length, 1);
+            if (folder === "dirty")
+              assert.equal(yield* fs.readFileString(`${worktreePath}/local-draft`), "keep me");
+            else assert.isFalse(yield* fs.exists(worktreePath));
+            assert.equal(launch.runSetup.mock.calls.length, 0);
+            return;
+          }
+          if (folder === "shared") {
+            yield* launches.launch(
+              launchInput({
+                command: "launch:shared",
+                thread: "thread:shared",
+                workspace: { type: "existing_worktree", worktreePath, branch: "feature" },
+              }),
+            );
+          }
+          if (folder === "changed")
+            yield* command(worktreePath, ["commit", "--allow-empty", "-m", "new work"]);
+          if (retry) {
+            assert.equal(
+              (yield* command(cwd, [
+                "config",
+                "--get",
+                "branch.feature.t3-merge-base-ref",
+              ])).stdout.trim(),
+              baseRef,
+            );
+            const firstChoice = {
+              threadId,
+              requestId,
+              choice: { type: "branch" as const, baseRef: "without-project" },
+            };
+            assert.isTrue(yield* tracker.chooseFolder(firstChoice));
+            requestId = yield* waitForFolderChoice("without-project");
+            assert.notEqual(requestId, firstChoice.requestId);
+            assert.isFalse(yield* tracker.chooseFolder(firstChoice));
+          }
+          const response = {
+            threadId,
+            requestId,
+            choice:
+              folder === "root" || cancelAfterSetup || folder === "changed"
+                ? { type: "root" as const }
+                : { type: "branch" as const, baseRef: "with-project" },
+          };
+          assert.isTrue(yield* tracker.chooseFolder(response));
+          assert.isFalse(yield* tracker.chooseFolder(response));
+          if (cancelAfterSetup) {
+            yield* Deferred.await(entered);
+            assert.isTrue(yield* tracker.cancel(threadId));
+            const stopped = yield* preparationSettled(threadId);
+            assert.isNull(stopped.thread.worktreePath);
+            assert.equal(stopped.messages.length, 1);
+            if (folder === "cancel-root-with-files") {
+              assert.equal(yield* fs.readFileString(`${worktreePath}/local-draft`), "setup output");
+              assert.isTrue(
+                stopped.turnItems.some(
+                  (item) =>
+                    item.type === "system_notice" &&
+                    item.title === "Worktree kept" &&
+                    item.message.includes(worktreePath),
+                ),
+              );
+            } else {
+              assert.isFalse(yield* fs.exists(worktreePath));
+              assert.equal(
+                (yield* command(cwd, ["branch", "--list", "feature"])).stdout.trim(),
+                "",
+              );
+            }
+            return;
+          }
+          if (folder === "shared" || folder === "changed") {
+            const kept = yield* preparationSettled(threadId);
+            assert.equal(kept.runs[0]?.status, "failed");
+            assert.isTrue(yield* fs.exists(worktreePath));
+            assert.isTrue(
+              kept.turnItems.some(
+                (item) =>
+                  item.type === "system_notice" &&
+                  item.title === "Worktree kept" &&
+                  item.message.includes(worktreePath),
+              ),
+            );
+            assert.isFalse(
+              launch.runSetup.mock.calls.some(([setup]) => setup.threadId === threadId),
+            );
+            return;
+          }
+        }
+        const { thread, messages, turnItems } = yield* preparationSettled(threadId);
+        assert.equal(messages.length, 1);
+        if (retry) {
+          assert.equal(
+            (yield* command(cwd, [
+              "config",
+              "--get",
+              "branch.feature.t3-merge-base",
+            ])).stdout.trim(),
+            "with-project",
+          );
+          assert.isTrue(
+            Exit.isFailure(
+              yield* Effect.exit(
+                command(cwd, ["config", "--get", "branch.feature.t3-merge-base-ref"]),
+              ),
+            ),
+          );
+        }
+        if (folder === "root")
+          assert.isTrue(
+            turnItems.some(
+              (item) => item.type === "system_notice" && item.message.includes(worktreePath),
+            ),
+          );
+        const expected = folder !== "root" ? `${worktreePath}/my-project` : worktreePath;
+        assert.equal(thread.worktreePath, expected);
+        assert.equal(launch.runSetup.mock.calls[0]?.[0].worktreePath, expected);
+        assert.equal(
+          (yield* tracker.get(threadId))?.stages.find((stage) => stage.id === "checkout")?.status,
+          folder !== "root" ? "done" : "warning",
+        );
+        const existing = yield* launches.launch(
+          launchInput({
+            command: "launch:reuse-subfolder",
+            thread: "thread:reuse-subfolder",
+            message: "Continue",
+            workspace: { type: "existing_worktree", worktreePath, branch: "feature" },
+          }),
+        );
+        assert.equal((yield* preparationSettled(existing.threadId)).thread.worktreePath, expected);
+        if (folder === "present") {
+          yield* command(cwd, ["worktree", "remove", worktreePath]);
+          const previous = yield* launches.launch(
+            launchInput({
+              command: "launch:previous",
+              thread: "thread:previous",
+              workspace: { type: "existing_worktree", worktreePath: expected, branch: "feature" },
+            }),
+          );
+          assert.equal(
+            (yield* (yield* ThreadManagement.ThreadManagementService).getThreadShell(
+              previous.threadId,
+            ))?.worktreePath,
+            expected,
+          );
+          assert.equal(
+            (yield* command(expected, ["rev-parse", "--show-prefix"])).stdout.trim(),
+            "my-project/",
+          );
+        }
+      }).pipe(Effect.provide(launch.layer));
+    }),
+  ),
+);
+
+it.live.each(["agent", "scheduled", "empty thread"] as const)(
+  "handles a missing worktree project folder for a launch from %s",
+  (source) =>
+    withRealGitRepo(({ cwd, command, worktreePath, harness }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* command(cwd, ["commit", "--allow-empty", "-m", "before project"]);
+        const workspaceRoot = `${cwd}/my-project`;
+        yield* fs.makeDirectory(workspaceRoot);
+        const launch = harness({ workspaceRoot });
+        yield* Effect.gen(function* () {
+          const launches = yield* ThreadLaunch.ThreadLaunchService;
+          const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+          const threads = yield* ThreadManagement.ThreadManagementService;
+          const input = launchInput({
+            command: "launch:missing",
+            thread: "thread:missing",
+            workspace: { type: "worktree", baseRef: "beta", branch: "feature" },
+          });
+          const { threadId } = yield* launches.launch({
+            ...input,
+            ...(source === "agent" ? ({ createdBy: "agent", creationSource: "mcp" } as const) : {}),
+            ...(source === "empty thread"
+              ? {}
+              : {
+                  initialMessage: {
+                    text: "Start",
+                    attachments: [],
+                    ...(source === "scheduled"
+                      ? { scheduledTaskId: ScheduledTaskId.make("timer") }
+                      : {}),
+                  },
+                }),
+          });
+          const snapshot = Option.getOrThrow(
+            yield* tracker.stream(threadId).pipe(
+              Stream.filter(
+                (state) =>
+                  !!state && (state.folderChoice !== undefined || state.phase !== "running"),
+              ),
+              Stream.runHead,
+            ),
+          );
+          if (source === "empty thread") {
+            assert.isDefined(snapshot?.folderChoice);
+            assert.isTrue(
+              yield* tracker.chooseFolder({
+                threadId,
+                requestId: snapshot!.folderChoice!.requestId,
+                choice: { type: "root" },
+              }),
+            );
+            yield* tracker.stream(threadId).pipe(
+              Stream.filter((state) => !!state && state.phase !== "running"),
+              Stream.runHead,
+            );
+            const projection = yield* threads.getThreadProjection(threadId);
+            assert.equal(projection.thread.worktreePath, worktreePath);
+            assert.isTrue(
+              projection.turnItems.some(
+                (item) =>
+                  item.type === "system_notice" &&
+                  item.runId === null &&
+                  item.message.includes(worktreePath),
+              ),
+            );
+          } else {
+            assert.equal(snapshot?.phase, "failed");
+            assert.include(snapshot?.error ?? "", "my-project");
+            assert.include(snapshot?.error ?? "", "beta");
+            const projection = yield* preparationSettled(threadId);
+            assert.equal(projection.runs[0]?.status, "failed");
+            assert.equal(launch.runSetup.mock.calls.length, 0);
+            assert.isFalse(yield* fs.exists(worktreePath));
+          }
+        }).pipe(Effect.provide(launch.layer));
+      }),
+    ),
+);
+
+it.live("refuses to bind an existing checkout removed during launch", () =>
+  withRealGitRepo(({ cwd, command, worktreePath, harness }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* command(cwd, ["commit", "--allow-empty", "-m", "initial"]);
+      yield* command(cwd, ["worktree", "add", "-b", "feature", worktreePath]);
+      const selecting = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const test = harness({
+        git: { repositoryRoot: () => Deferred.succeed(selecting, undefined).pipe(Effect.as(cwd)) },
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const removalEntered = yield* Deferred.make<void>();
+        const removal = yield* withExclusiveWorkspaceReservation(
+          fs,
+          path,
+          worktreePath,
+          Effect.gen(function* () {
+            yield* Deferred.succeed(removalEntered, undefined);
+            yield* Deferred.await(release);
+            yield* command(cwd, ["worktree", "remove", worktreePath]);
+          }),
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(removalEntered);
+        const launch = yield* launches
+          .launch(
+            launchInput({
+              command: "launch:during-removal",
+              thread: "thread:removed",
+              workspace: { type: "existing_worktree", worktreePath },
+            }),
+          )
+          .pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(selecting);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(removal);
+        assert.isTrue(Result.isFailure(yield* Fiber.join(launch)));
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        assert.isNull(yield* threads.getThreadShell(ThreadId.make("thread:removed")));
+      }).pipe(Effect.provide(test.layer));
+    }),
+  ),
+);
 
 it.effect("re-bases a stored base that no longer exists on the remote default branch", () =>
   withRealGitRepo(({ directory, cwd, worktreePath, command, harness }) =>

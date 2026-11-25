@@ -567,22 +567,27 @@ it.effect("a launch binds only an existing checkout that is one of the project's
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-launch-worktree-" });
+    const physical = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-launch-worktree-" });
+    const root = path.join(yield* fileSystem.makeTempDirectoryScoped(), "alias");
+    yield* fileSystem.symlink(physical, root);
     const repo = path.join(root, "repo");
     const worktree = path.join(root, "feature");
     const outside = path.join(root, "outside");
-    yield* fileSystem.makeDirectory(repo);
+    const projectFolder = path.join(repo, "my-project");
+    yield* fileSystem.makeDirectory(projectFolder, { recursive: true });
+    yield* fileSystem.writeFileString(path.join(projectFolder, "README.md"), "project");
     yield* fileSystem.makeDirectory(outside);
 
     const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
     const { projectId, dependencies } = clientLaunchHarness({
       runtimeModeCeiling: "auto",
       launched,
-      workspaceRoot: repo,
+      workspaceRoot: projectFolder,
     });
     const git = yield* GitVcsDriver.GitVcsDriver.pipe(Effect.provide(dependencies));
     for (const args of [
       ["init", "-b", "main"],
+      ["add", "."],
       ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init"],
       ["worktree", "add", "-b", "feature", worktree],
     ]) {
@@ -610,14 +615,19 @@ it.effect("a launch binds only an existing checkout that is one of the project's
       code: "invalid_request",
     });
     expect((yield* launchInto(repo)).at(-1)?.result).toMatchObject({ projectId });
-    for (const elsewhere of [outside, path.join(worktree, "..", "outside"), "/"]) {
+    const threadFolder = path.join(worktree, "my-project");
+    expect((yield* launchInto(threadFolder)).at(-1)?.result).toMatchObject({ projectId });
+    const sibling = path.join(worktree, "different-project");
+    yield* fileSystem.makeDirectory(sibling);
+    for (const elsewhere of [sibling, outside, path.join(worktree, "..", "outside"), "/"]) {
       expect((yield* launchInto(elsewhere)).at(-1)?.result).toMatchObject({
         code: "invalid_request",
       });
     }
     expect(launched.map((launch) => launch.workspaceStrategy)).toEqual([
-      { type: "existing_worktree", worktreePath: worktree },
-      { type: "existing_worktree", worktreePath: repo },
+      { type: "existing_worktree", worktreePath: threadFolder },
+      { type: "existing_worktree", worktreePath: projectFolder },
+      { type: "existing_worktree", worktreePath: threadFolder },
     ]);
 
     yield* fileSystem.remove(worktree, { recursive: true });
