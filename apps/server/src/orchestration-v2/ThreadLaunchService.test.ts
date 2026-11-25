@@ -1839,7 +1839,7 @@ const launchFromBase = (harness: ReturnType<typeof makeHarness>, baseRef: string
 it.live.each([
   "present",
   "root",
-  "retry",
+  "missing on two consecutive branches",
   "cancel",
   "cancel-root",
   "cancel-root-with-files",
@@ -1851,6 +1851,14 @@ it.live.each([
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const workspaceRoot = `${cwd}/my-project`;
+      const retry = folder === "missing on two consecutive branches";
+      if (retry) {
+        yield* command(cwd, ["commit", "--allow-empty", "-m", "first base without project"]);
+        yield* command(cwd, ["remote", "add", "origin", cwd]);
+        yield* command(cwd, ["update-ref", "refs/remotes/origin/missing", "HEAD"]);
+        yield* command(cwd, ["commit", "--allow-empty", "-m", "second base without project"]);
+        yield* command(cwd, ["branch", "without-project"]);
+      }
       yield* fs.makeDirectory(workspaceRoot);
       yield* fs.writeFileString(`${workspaceRoot}/README.md`, "project\n");
       if (folder !== "present") {
@@ -1873,11 +1881,7 @@ it.live.each([
         yield* command(cwd, ["switch", "-c", "another-name"]);
         baseRef = "-";
       }
-      if (folder === "retry") {
-        yield* command(cwd, ["remote", "add", "origin", cwd]);
-        yield* command(cwd, ["update-ref", "refs/remotes/origin/missing", "HEAD"]);
-        baseRef = "refs/remotes/origin/missing";
-      }
+      if (retry) baseRef = "refs/remotes/origin/missing";
       const cancelAfterSetup = folder === "cancel-root" || folder === "cancel-root-with-files";
       const launch = harness({
         ...(cancelAfterSetup
@@ -1914,19 +1918,30 @@ it.live.each([
           }),
         );
         if (folder !== "present") {
-          const paused = Option.getOrThrow(
-            yield* tracker.stream(threadId).pipe(
-              Stream.filter(
-                (state) =>
-                  state !== null && (state.folderChoice !== undefined || state.phase !== "running"),
-              ),
-              Stream.runHead,
-            ),
-          );
-          assert.isDefined(paused?.folderChoice, "setup must pause before running from the root");
-          assert.equal(launch.runSetup.mock.calls.length, 0);
-          assert.equal(paused!.worktreePath, worktreePath);
-          assert.equal(paused!.folderChoice!.relativePath, "my-project");
+          const waitForFolderChoice = (base: string) =>
+            Effect.gen(function* () {
+              const paused = Option.getOrThrow(
+                yield* tracker.stream(threadId).pipe(
+                  Stream.filter(
+                    (state) =>
+                      state !== null &&
+                      (state.phase !== "running" ||
+                        (state.baseRef === base && state.folderChoice !== undefined)),
+                  ),
+                  Stream.runHead,
+                ),
+              );
+              assert.isDefined(
+                paused?.folderChoice,
+                "setup must pause before running from the root",
+              );
+              assert.equal(paused!.worktreePath, worktreePath);
+              assert.equal(paused!.folderChoice!.relativePath, "my-project");
+              assert.equal(launch.runSetup.mock.calls.length, 0);
+              assert.equal(paused!.stages.find((stage) => stage.id === "agent")?.status, "pending");
+              return paused!.folderChoice!.requestId;
+            });
+          let requestId = yield* waitForFolderChoice(baseRef);
           if (folder === "dirty")
             yield* fs.writeFileString(`${worktreePath}/local-draft`, "keep me");
           if (folder === "cancel" || folder === "dirty") {
@@ -1950,7 +1965,7 @@ it.live.each([
           }
           if (folder === "changed")
             yield* command(worktreePath, ["commit", "--allow-empty", "-m", "new work"]);
-          if (folder === "retry")
+          if (retry) {
             assert.equal(
               (yield* command(cwd, [
                 "config",
@@ -1959,9 +1974,19 @@ it.live.each([
               ])).stdout.trim(),
               baseRef,
             );
+            const firstChoice = {
+              threadId,
+              requestId,
+              choice: { type: "branch" as const, baseRef: "without-project" },
+            };
+            assert.isTrue(yield* tracker.chooseFolder(firstChoice));
+            requestId = yield* waitForFolderChoice("without-project");
+            assert.notEqual(requestId, firstChoice.requestId);
+            assert.isFalse(yield* tracker.chooseFolder(firstChoice));
+          }
           const response = {
             threadId,
-            requestId: paused!.folderChoice!.requestId,
+            requestId,
             choice:
               folder === "root" || cancelAfterSetup || folder === "changed"
                 ? { type: "root" as const }
@@ -2014,7 +2039,7 @@ it.live.each([
         }
         const { thread, messages, turnItems } = yield* preparationSettled(threadId);
         assert.equal(messages.length, 1);
-        if (folder === "retry") {
+        if (retry) {
           assert.equal(
             (yield* command(cwd, [
               "config",
