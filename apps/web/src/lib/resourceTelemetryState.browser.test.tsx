@@ -50,6 +50,7 @@ vi.mock("../components/settings/settingsLayout", () => ({
 }));
 
 vi.mock("../state/environments", () => ({ usePrimaryEnvironment: () => null }));
+vi.mock("../hooks/useSettings", () => ({ useClientSettings: () => "locale" }));
 vi.mock("../state/session", () => ({
   readEnvironmentScope: () => true,
   useEnvironmentScope: () => true,
@@ -219,9 +220,6 @@ describe("resource monitor retry", () => {
         ? { environmentId: EnvironmentId.make("other"), label: "Other host" }
         : environment;
       if (switchEnvironment) await screen.rerender(view(selected));
-      await expect
-        .element(screen.getByText(`Showing resources for ${selected.label} only`))
-        .toBeVisible();
       await screen.getByRole("button", { name: "5m", exact: true }).click();
       await expect.element(screen.getByText(historyError, { exact: true })).toBeVisible();
       const selectedKey = `${selected.environmentId}:300000`;

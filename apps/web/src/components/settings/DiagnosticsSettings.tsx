@@ -50,6 +50,9 @@ import { formatCpuTime } from "./ResourceTelemetryDiagnostics.logic";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useSettingsScope } from "./SettingsScopeContext";
+import { useEnvironments } from "../../state/environments";
+import { EnvironmentScopeMenu } from "./SettingsScopeSentence";
+import { DiagnosticsIntervalTime } from "./DiagnosticsIntervalTime";
 import { TelemetrySettings } from "./TelemetrySettings";
 
 const NUMBER_FORMAT = new Intl.NumberFormat();
@@ -511,6 +514,7 @@ function ProcessResourceHistoryChart({
 }: {
   buckets: ReadonlyArray<{
     readonly startedAt: DateTime.Utc;
+    readonly endedAt: DateTime.Utc;
     readonly avgCpuPercent: number;
     readonly maxCpuPercent: number;
   }>;
@@ -549,6 +553,7 @@ function ProcessResourceHistoryChart({
                 }
               />
               <TooltipPopup side="top">
+                <DiagnosticsIntervalTime bucket={bucket} />
                 {gt("Avg {average}%, peak {peak}%", {
                   average: bucket.avgCpuPercent.toFixed(1),
                   peak: bucket.maxCpuPercent.toFixed(1),
@@ -787,7 +792,8 @@ export function DiagnosticsSettingsPanel() {
 function DiagnosticsSettingsBody() {
   const gt = useGT();
   const m = useMessages();
-  const { environment, scope } = useSettingsScope();
+  const { environment, scope, groups, search, selectScope } = useSettingsScope();
+  const { environments } = useEnvironments();
   const environmentId = environment?.environmentId ?? null;
   const canMaintainEnvironment = useEnvironmentScope(environmentId, AuthEnvironmentMaintainScope);
   const observability = environment?.serverConfig?.observability;
@@ -980,10 +986,33 @@ function DiagnosticsSettingsBody() {
     ? Option.getOrElse(data.partialFailure, () => false)
     : false;
 
+  const source = environment && (
+    <div className="space-y-1 px-3 sm:px-4">
+      <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+        {gt("Diagnostics environment")}
+        <EnvironmentScopeMenu
+          ariaLabel={gt("Diagnostics environment")}
+          value={{ ...search, machine: environment.environmentId }}
+          singleEnvironment
+          groups={groups}
+          environments={environments}
+          onChange={selectScope}
+        />
+      </div>
+      {scope.kind === "all" && (
+        <p className="text-xs text-muted-foreground">
+          {gt(
+            "In All environments, diagnostics show the primary environment if connected, otherwise the first connected environment.",
+          )}
+        </p>
+      )}
+    </div>
+  );
   if (!canReadDiagnostics) {
     return (
       <SettingsPageContainer>
         <TelemetrySettings />
+        {source}
         <p className="text-sm text-muted-foreground">
           {environmentId === null
             ? gt("Connect an environment to see diagnostics.")
@@ -998,13 +1027,11 @@ function DiagnosticsSettingsBody() {
   return (
     <SettingsPageContainer width="expanded" className="gap-10">
       <TelemetrySettings />
-      <ResourceTelemetryDiagnostics
-        environment={environment}
-        allEnvironments={scope.kind === "all"}
-      />
+      {source}
+      <ResourceTelemetryDiagnostics environment={environment} />
 
       <SettingsSection
-        title={gt("Live Processes")}
+        title={gt("Live server child processes")}
         headerAction={
           <div className="flex items-center gap-1.5">
             <DiagnosticsLastChecked checkedAt={processData?.readAt ?? null} />
@@ -1070,7 +1097,7 @@ function DiagnosticsSettingsBody() {
       </SettingsSection>
 
       <SettingsSection
-        title={gt("Resource History")}
+        title={gt("Server process history")}
         headerAction={
           <div className="flex items-center gap-1.5">
             <ResourceHistoryWindowSelector

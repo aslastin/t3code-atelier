@@ -111,8 +111,8 @@ export function TelemetryExportSettings() {
   const { environment, scope } = useSettingsScope();
   if (scope.kind !== "environment" || !environment) {
     return (
-      <SettingsSection title={gt("OpenTelemetry export")} id="telemetry-endpoints">
-        <SettingsScopeNotice target="environment">
+      <SettingsSection title={gt("OpenTelemetry export")}>
+        <SettingsScopeNotice inline target="environment" targetId="telemetry-endpoints">
           {gt("Choose one environment to configure its telemetry exports.")}
         </SettingsScopeNotice>
       </SettingsSection>
@@ -213,6 +213,13 @@ function TelemetryExportForm() {
             these settings.
           </T>
         </p>
+        {canEdit &&
+          environment?.serverConfig?.environment.capabilities.otlpEndpointCheck === true &&
+          running?.telemetry?.otlp !== "on" && (
+            <p className="text-xs text-muted-foreground">
+              {gt("Endpoint tests are available when OTLP export is active.")}
+            </p>
+          )}
         {!canEdit && (
           <p className="text-xs text-muted-foreground">
             {environment

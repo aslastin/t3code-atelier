@@ -65,6 +65,7 @@ import {
   visibleResourceTelemetryProcesses,
 } from "./ResourceTelemetryDiagnostics.logic";
 import { SettingsSection } from "./settingsLayout";
+import { DiagnosticsIntervalTime } from "./DiagnosticsIntervalTime";
 
 const HISTORY_WINDOWS = [
   { label: "5m", windowMs: 5 * 60_000, bucketMs: 15_000 },
@@ -463,6 +464,7 @@ function ResourceHistoryChart({
                   }
                 />
                 <TooltipPopup side="top" className="text-left">
+                  <DiagnosticsIntervalTime bucket={bucket} />
                   {id === "cpu" ? (
                     <>
                       <div>
@@ -899,7 +901,6 @@ function AttributionTable({ entries }: { entries: ReadonlyArray<ResourceAttribut
 
 type ResourceTelemetryDiagnosticsProps = {
   environment: Pick<EnvironmentPresentation, "environmentId" | "label"> | null;
-  allEnvironments?: boolean;
 };
 
 export function ResourceTelemetryDiagnostics(props: ResourceTelemetryDiagnosticsProps) {
@@ -909,10 +910,7 @@ export function ResourceTelemetryDiagnostics(props: ResourceTelemetryDiagnostics
   );
 }
 
-function ResourceTelemetryDiagnosticsBody({
-  environment,
-  allEnvironments,
-}: ResourceTelemetryDiagnosticsProps) {
+function ResourceTelemetryDiagnosticsBody({ environment }: ResourceTelemetryDiagnosticsProps) {
   const environmentId = environment?.environmentId ?? null;
   const messages = useMessages();
   const gt = useGT();
@@ -1112,25 +1110,13 @@ function ResourceTelemetryDiagnosticsBody({
           <div className="flex flex-col gap-3 border-b border-border/60 bg-linear-to-r from-muted/45 via-muted/20 to-transparent px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
             <div className="min-w-0">
               <div className="text-xs font-semibold wrap-anywhere text-foreground">
-                {environment ? (
-                  gt("Showing resources for {environment} only", {
-                    environment: environment.label,
-                  })
-                ) : (
-                  <T>T3 system footprint</T>
-                )}
+                {gt("All T3 processes")}
               </div>
               <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
-                {allEnvironments ? (
-                  gt(
-                    "The monitor shows the primary environment if it is connected. Otherwise it shows the first connected environment.",
-                  )
-                ) : (
-                  <T>
-                    Live native counters for the server, providers, terminals, desktop processes,
-                    and the monitor itself.
-                  </T>
-                )}
+                <T>
+                  Live native counters for the server, providers, terminals, desktop processes, and
+                  the monitor itself.
+                </T>
               </p>
             </div>
             <div className="flex items-center gap-2 text-3xs text-muted-foreground/65">

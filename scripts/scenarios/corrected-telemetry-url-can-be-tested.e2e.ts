@@ -2,7 +2,7 @@
 import * as NodeHttp from "node:http";
 import { expect } from "e2e";
 
-import { environmentId, runPromise, test, WEB } from "./t3.ts";
+import { test, WEB } from "./t3.ts";
 
 test(
   "The corrected traces endpoint can be tested while the previous URL is still checking",
@@ -28,8 +28,7 @@ test(
       const origin = `http://127.0.0.1:${address.port}`;
 
       await t3.project("demo");
-      const environment = await runPromise(environmentId(app.baseUrl ?? ""));
-      await t3.open(`/settings/general?machine=${encodeURIComponent(environment)}`);
+      await t3.open("/settings/general");
       const diagnostics = screen.getByRole("button", "Diagnostics", { exact: true });
       await screen.getByRole("button", "General", { exact: true }).waitFor();
       expect(await diagnostics.isVisible(), "Diagnostics is in the settings sidebar").toBe(true);
@@ -38,6 +37,13 @@ test(
       const traces = browser.locator("#otlpTracesUrl");
       const exportSection = browser.locator("#telemetry-export");
       await exportSection.getByText("What to send", { exact: true }).tap();
+      const environmentChoice = exportSection.getByRole("button", /Scenario/);
+      expect(
+        await environmentChoice.isVisible(),
+        "Choose the receiver's environment in place",
+      ).toBe(true);
+      await environmentChoice.tap();
+      await traces.waitFor();
       const analyticsLabel = "T3 product analytics (PostHog)";
       const analyticsRow = browser
         .locator("#telemetry-export label")
@@ -52,6 +58,8 @@ test(
       await exportSection.getByRole("button", "Save").tap();
       await exportSection.getByText("Saved", { exact: true }).waitFor();
       await exportSection.getByRole("switch", "My OpenTelemetry receiver").tap();
+      await exportSection.getByText("Selected · sending paused", { exact: true }).waitFor();
+      expect(await exportSection.getByRole("button", "Test").count()).toBe(0);
       await exportSection.getByRole("switch", "Send telemetry").tap();
       const tracesGroup = exportSection.getByRole("group", "Traces endpoint");
       const testTraces = tracesGroup.getByRole("button", "Test");

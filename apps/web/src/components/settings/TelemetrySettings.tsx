@@ -17,7 +17,7 @@ import {
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { Switch } from "../ui/switch";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { SettingsSection } from "./settingsLayout";
+import { SettingsSection, useSettingsSearchTargetId } from "./settingsLayout";
 import { TelemetryExportSettings } from "./TelemetryExportSettings";
 
 import {
@@ -50,8 +50,8 @@ const outcomes = {
   unavailable: msg("Unavailable"),
   incompatible: msg("Incompatible server"),
   denied: msg("Permission denied"),
-  confirmed: msg("Confirmed"),
-  unconfirmed: msg("Not confirmed"),
+  confirmed: msg("Telemetry choice saved"),
+  unconfirmed: msg("Telemetry choice not confirmed"),
   noChannel: reasons.unavailable,
   desktop: msg("Blocked by desktop settings"),
   allBlocked: msg("All telemetry channels are blocked"),
@@ -66,12 +66,20 @@ export function TelemetrySettings() {
   const update = useAtomCommand(serverEnvironment.updateSettings);
   const [saving, setSaving] = useState(false);
   const [report, setReport] = useState<ReadonlyMap<string, keyof typeof outcomes>>(new Map());
-  const [expanded, setExpanded] = useState(false);
+  const searchTarget = useSettingsSearchTargetId();
+  const targetsDisclosure =
+    searchTarget === "telemetry-export" || searchTarget === "telemetry-endpoints";
+  const [expanded, setExpanded] = useState(targetsDisclosure);
+  const [previousTarget, setPreviousTarget] = useState(searchTarget);
   const desktopAllowsRelay = useSyncExternalStore(
     subscribeRelayTelemetryEnabled,
     relayTelemetryEnabled,
   );
   if (scope.kind !== "environment" && scope.kind !== "all") return null;
+  if (previousTarget !== searchTarget) {
+    setPreviousTarget(searchTarget);
+    if (targetsDisclosure) setExpanded(true);
+  }
 
   const targets = environments.map((env) => {
     const connected = env.connection.phase === "connected" && !!env.serverConfig;
@@ -128,6 +136,7 @@ export function TelemetrySettings() {
       setExpanded(true);
     }
     setSaving(true);
+    setReport(new Map());
     setReport(
       new Map(
         await Promise.all(
@@ -167,7 +176,9 @@ export function TelemetrySettings() {
             ? m(outcomes.desktop)
             : status[key] === "sdk" && status.sdkDisabledBy
               ? gt("Disabled by {variable}", { variable: status.sdkDisabledBy })
-              : m(reasons[status[key]]);
+              : status[key] === "off" && !status.preferences.enabled && status.preferences[key]
+                ? gt("Selected · sending paused")
+                : m(reasons[status[key]]);
       return [eligible.length === 1 ? state : `${env.label} · ${state}`];
     });
     return (
@@ -208,29 +219,25 @@ export function TelemetrySettings() {
             {gt("What to send")}
           </Button>
         </div>
-        {expanded && (
-          <div id="telemetry-channels" className="border-t border-border/60">
-            {row("analytics", m(channels.analytics))}
-            {row("connect", m(channels.connect))}
-            {row("otlp", m(channels.otlp))}
-            {scope.kind === "environment" && targets[0]?.status ? (
-              <TelemetryExportSettings />
-            ) : (
-              <p className="py-2 text-xs text-muted-foreground">
-                {gt("Choose one environment to configure its telemetry exports.")}
-              </p>
-            )}
+        <div id="telemetry-channels">
+          {expanded && (
+            <div className="border-t border-border/60">
+              {row("analytics", m(channels.analytics))}
+              {row("connect", m(channels.connect))}
+              {row("otlp", m(channels.otlp))}
+            </div>
+          )}
+          <div role="status" className="text-xs text-muted-foreground">
+            {targets.map(({ env, issue }) => {
+              const outcome = issue ?? report.get(env.environmentId);
+              return outcome ? (
+                <p key={env.environmentId}>
+                  {env.label} · {m(outcomes[outcome])}
+                </p>
+              ) : null;
+            })}
           </div>
-        )}
-        <div role="status" className="text-xs text-muted-foreground">
-          {targets.map(({ env, issue }) => {
-            const outcome = issue ?? report.get(env.environmentId);
-            return outcome ? (
-              <p key={env.environmentId}>
-                {env.label} · {m(outcomes[outcome])}
-              </p>
-            ) : null;
-          })}
+          {expanded && (scope.kind === "all" || targets[0]?.status) && <TelemetryExportSettings />}
         </div>
       </div>
     </SettingsSection>
