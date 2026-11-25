@@ -58,17 +58,34 @@ export function formatReviewCommentFence(language: string, contents: string): st
   return [`${fence}${language}`, contents.trimEnd(), fence].join("\n");
 }
 
+export interface FileReviewExcerpt {
+  firstLine: number;
+  lastLine: number;
+  text: string;
+}
+
+function selectFileLines(contents: string, start: number, end: number): FileReviewExcerpt {
+  const lines = contents.split(/\r\n|\r|\n/);
+  const firstLine = Math.max(1, Math.min(start, end, lines.length));
+  const lastLine = Math.min(lines.length, Math.max(firstLine, start, end));
+  return { firstLine, lastLine, text: lines.slice(firstLine - 1, lastLine).join("\n") };
+}
+
 export function buildFileReviewComment(input: {
   id: string;
   filePath: string;
   startLine: number;
   endLine: number;
   text: string;
-  contents: string;
+  contents: string | FileReviewExcerpt;
 }): ReviewCommentContext {
-  const startLine = Math.max(1, Math.min(input.startLine, input.endLine));
-  const endLine = Math.max(startLine, Math.max(input.startLine, input.endLine));
-  const selectedLines = input.contents.split("\n").slice(startLine - 1, endLine);
+  const {
+    firstLine: startLine,
+    lastLine: endLine,
+    text: diff,
+  } = typeof input.contents === "string"
+    ? selectFileLines(input.contents, input.startLine, input.endLine)
+    : input.contents;
   return {
     id: input.id,
     sectionId: `file:${input.filePath}`,
@@ -80,7 +97,7 @@ export function buildFileReviewComment(input: {
     // oxlint-disable-next-line t3code/no-untranslated-copy -- stored in the review comment record sent to the agent
     rangeLabel: startLine === endLine ? `L${startLine}` : `L${startLine} to L${endLine}`,
     text: input.text.trim(),
-    diff: selectedLines.join("\n"),
+    diff,
     fenceLanguage: inferReviewCommentFenceLanguage(input.filePath),
   };
 }

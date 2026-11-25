@@ -43,6 +43,8 @@ export const COMPOSER_CONTEXT_TERMINAL_TEXT_MAX_CHARS = 64_000;
 const COMPOSER_CONTEXT_ELEMENT_HTML_MAX_CHARS = 8_000;
 const COMPOSER_CONTEXT_ELEMENT_STYLES_MAX_CHARS = 8_000;
 export const COMPOSER_CONTEXT_REVIEW_TEXT_MAX_CHARS = 16_000;
+export const COMPOSER_CONTEXT_REVIEW_SECTION_ID_MAX_CHARS = 255;
+export const COMPOSER_CONTEXT_REVIEW_FENCE_LANGUAGE_MAX_CHARS = 64;
 export const COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS = 32_000;
 export const COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS = 8_000;
 
@@ -182,7 +184,9 @@ export type PreviewAnnotationContextRecord = typeof PreviewAnnotationContextReco
 export const ReviewCommentContextRecord = Schema.Struct({
   ...recordBase,
   kind: Schema.Literal("review-comment"),
-  sectionId: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+  sectionId: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(COMPOSER_CONTEXT_REVIEW_SECTION_ID_MAX_CHARS),
+  ),
   sectionTitle: ShortString,
   filePath: TrimmedNonEmptyString.check(Schema.isMaxLength(2_048)),
   startIndex: NonNegativeInt,
@@ -190,7 +194,9 @@ export const ReviewCommentContextRecord = Schema.Struct({
   rangeLabel: ShortString,
   text: BoundedString(COMPOSER_CONTEXT_REVIEW_TEXT_MAX_CHARS),
   diff: BoundedString(COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS),
-  fenceLanguage: Schema.optionalKey(BoundedString(64)),
+  fenceLanguage: Schema.optionalKey(
+    BoundedString(COMPOSER_CONTEXT_REVIEW_FENCE_LANGUAGE_MAX_CHARS),
+  ),
   pullRequest: Schema.optionalKey(PullRequestContextMetadata),
 }).check(Schema.makeFilter((record) => record.endIndex >= record.startIndex));
 export type ReviewCommentContextRecord = typeof ReviewCommentContextRecord.Type;
