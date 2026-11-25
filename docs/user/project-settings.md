@@ -216,7 +216,9 @@ This needs Git 2.35 or newer.
 When your project is a subfolder of a repository, a new worktree opens in the corresponding
 subfolder. If the selected branch or sparse checkout omits it, **New worktree** pauses before
 running the setup script or starting the agent. Choose another base branch to retry in the same
-thread, or select **Use worktree root** to run from the whole checkout. Scripts receive the thread folder in `T3CODE_WORKTREE_PATH`
+thread, or select **Use worktree root** to run from the whole checkout. Scheduled tasks and
+agent-launched worktrees stop with an error if the project folder is missing. To retry, choose
+a base that contains the folder. Scripts receive the thread folder in `T3CODE_WORKTREE_PATH`
 and the checkout root in `T3CODE_WORKTREE_ROOT`. For a project opened at `repo/app`, put its
 sparse-checkout and submodule settings in `app/t3.json` on the branch you plan to check out.
 

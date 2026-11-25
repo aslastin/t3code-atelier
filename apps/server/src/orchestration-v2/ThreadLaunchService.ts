@@ -25,6 +25,7 @@ import {
   TaskFolderError,
   TextGenerationError,
   ThreadId,
+  TurnItemId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -136,7 +137,12 @@ export interface ThreadLaunchInput {
 
 type PreparationInput = Pick<
   ThreadLaunchInput,
-  "commandId" | "projectId" | "workspaceStrategy" | "initialMessage"
+  | "commandId"
+  | "projectId"
+  | "workspaceStrategy"
+  | "initialMessage"
+  | "createdBy"
+  | "creationSource"
 > & {
   readonly reusedWorktree?: { readonly baseRef: string };
 };
@@ -326,7 +332,7 @@ const make = Effect.gen(function* () {
 
   const recordNotice = Effect.fn("ThreadLaunchService.recordNotice")(function* (
     threadId: ThreadId,
-    runId: RunId,
+    runId: RunId | null,
     signal: string,
     title: string,
     message: string,
@@ -338,10 +344,13 @@ const make = Effect.gen(function* () {
           id: yield* ids.allocate.event({ threadId }),
           type: "turn-item.updated",
           threadId,
-          runId,
+          ...(runId === null ? {} : { runId }),
           occurredAt: now,
           payload: {
-            id: ids.derive.runSignalTurnItem({ runId, signal }),
+            id:
+              runId === null
+                ? TurnItemId.make(`turn-item:thread:${threadId}:setup:${signal}`)
+                : ids.derive.runSignalTurnItem({ runId, signal }),
             threadId,
             runId,
             nodeId: null,
@@ -932,6 +941,22 @@ const make = Effect.gen(function* () {
               "provision-worktree",
               threadId,
             )("Cannot verify the missing project folder.");
+          if (
+            input.createdBy !== "user" ||
+            (input.creationSource !== "web" && input.creationSource !== "mobile") ||
+            initialMessage?.scheduledTaskId !== undefined
+          ) {
+            const detail = `The checkout of ${requestedBaseRef} does not contain the project folder ${missing.relativePath}. Choose a base that includes this folder and launch again.`;
+            if (runId === null)
+              yield* recordNotice(
+                threadId,
+                null,
+                "worktree-folder-missing",
+                "Project folder missing",
+                detail,
+              ).pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+            return yield* mapError(input, "provision-worktree", threadId)(detail);
+          }
           const choice = yield* setupTracker.waitForFolder(
             threadId,
             yield* randomUuidV4,
@@ -947,14 +972,13 @@ const make = Effect.gen(function* () {
               "warning",
               "Using the worktree root by request.",
             );
-            if (runId !== null)
-              yield* recordNotice(
-                threadId,
-                runId,
-                "worktree-root-choice",
-                "Using the worktree root",
-                `You chose to run the setup script and agent from ${worktree.path} because this checkout does not contain ${missing.relativePath}.`,
-              ).pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+            yield* recordNotice(
+              threadId,
+              runId,
+              "worktree-root-choice",
+              "Using the worktree root",
+              `You chose to run the setup script and agent from ${worktree.path} because this checkout does not contain ${missing.relativePath}.`,
+            ).pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
             break;
           }
           yield* discardPending(branch).pipe(
@@ -1237,7 +1261,18 @@ const make = Effect.gen(function* () {
             const removedPath = createdWorktreePath;
             const removedBranch = createdBranch;
             const removedTaskFolder = createdTaskFolder;
-            // Forget worktrees only after removal succeeds; failed removals must not reuse partially written checkouts.
+            const detach = threads
+              .dispatch({
+                type: "thread.metadata.update",
+                commandId: CommandId.make(`${input.commandId}:cancel-workspace`),
+                threadId,
+                worktreePath: null,
+                branch: null,
+                ...(workspaceRecorded && discardPending
+                  ? { expectedWorktreePath: removedPath }
+                  : {}),
+              })
+              .pipe(Effect.ignore);
             yield* Effect.suspend((): Effect.Effect<void, GitCommandError | TaskFolderError> =>
               discardPending && removedBranch
                 ? discardPending(removedBranch)
@@ -1281,17 +1316,7 @@ const make = Effect.gen(function* () {
                         ),
                       ),
             ).pipe(
-              Effect.andThen(
-                threads
-                  .dispatch({
-                    type: "thread.metadata.update",
-                    commandId: CommandId.make(`${input.commandId}:cancel-workspace`),
-                    threadId,
-                    worktreePath: null,
-                    branch: null,
-                  })
-                  .pipe(Effect.ignore),
-              ),
+              Effect.andThen(detach),
               Effect.catchCause((removeCause) =>
                 Effect.logWarning("Failed to remove an abandoned thread worktree", {
                   commandId: input.commandId,
@@ -1300,14 +1325,17 @@ const make = Effect.gen(function* () {
                   cause: removeCause,
                 }).pipe(
                   Effect.andThen(
-                    cancelled && discardPending && runId !== null
+                    cancelled && discardPending
                       ? recordNotice(
                           threadId,
                           runId,
                           "worktree-kept",
                           "Worktree kept",
-                          `Kept ${removedPath}. ${failureDetail(Cause.squash(removeCause))}`,
-                        ).pipe(Effect.ignoreCause({ log: true }))
+                          `Kept ${removedPath} and its branch. ${failureDetail(Cause.squash(removeCause))}`,
+                        ).pipe(
+                          Effect.andThen(workspaceRecorded ? detach : Effect.void),
+                          Effect.ignoreCause({ log: true }),
+                        )
                       : Effect.void,
                   ),
                 ),
@@ -1947,6 +1975,8 @@ const make = Effect.gen(function* () {
       {
         commandId: input.commandId,
         projectId: thread.projectId,
+        createdBy: message?.createdBy ?? thread.createdBy,
+        creationSource: message?.creationSource ?? thread.creationSource,
         workspaceStrategy: reuse?.strategy ?? workspacePreparation,
         ...(reuse === null ? {} : { reusedWorktree: reuse.reusedWorktree }),
         ...(message === undefined
@@ -1955,6 +1985,9 @@ const make = Effect.gen(function* () {
               initialMessage: {
                 text: message.text,
                 attachments: message.attachments,
+                ...(message.scheduledTaskId === undefined
+                  ? {}
+                  : { scheduledTaskId: message.scheduledTaskId }),
                 ...(message.context ? { context: message.context } : {}),
                 ...(run.outputSchema === undefined ? {} : { outputSchema: run.outputSchema }),
               },

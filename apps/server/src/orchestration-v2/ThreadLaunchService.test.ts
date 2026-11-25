@@ -1841,6 +1841,7 @@ it.live.each([
   "retry",
   "cancel",
   "cancel-root",
+  "cancel-root-with-files",
   "dirty",
   "changed",
   "shared",
@@ -1876,11 +1877,19 @@ it.live.each([
         yield* command(cwd, ["update-ref", "refs/remotes/origin/missing", "HEAD"]);
         baseRef = "refs/remotes/origin/missing";
       }
+      const cancelAfterSetup = folder === "cancel-root" || folder === "cancel-root-with-files";
       const launch = harness({
-        ...(folder === "cancel-root"
+        ...(cancelAfterSetup
           ? {
               runSetup: () =>
-                Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+                Effect.gen(function* () {
+                  if (folder === "cancel-root-with-files")
+                    yield* fs
+                      .writeFileString(`${worktreePath}/local-draft`, "setup output")
+                      .pipe(Effect.orDie);
+                  yield* Deferred.succeed(entered, undefined);
+                  return yield* Effect.never;
+                }),
             }
           : {}),
         workspaceRoot,
@@ -1953,20 +1962,35 @@ it.live.each([
             threadId,
             requestId: paused!.folderChoice!.requestId,
             choice:
-              folder === "root" || folder === "cancel-root" || folder === "changed"
+              folder === "root" || cancelAfterSetup || folder === "changed"
                 ? { type: "root" as const }
                 : { type: "branch" as const, baseRef: "with-project" },
           };
           assert.isTrue(yield* tracker.chooseFolder(response));
           assert.isFalse(yield* tracker.chooseFolder(response));
-          if (folder === "cancel-root") {
+          if (cancelAfterSetup) {
             yield* Deferred.await(entered);
             assert.isTrue(yield* tracker.cancel(threadId));
             const stopped = yield* preparationSettled(threadId);
             assert.isNull(stopped.thread.worktreePath);
             assert.equal(stopped.messages.length, 1);
-            assert.isFalse(yield* fs.exists(worktreePath));
-            assert.equal((yield* command(cwd, ["branch", "--list", "feature"])).stdout.trim(), "");
+            if (folder === "cancel-root-with-files") {
+              assert.equal(yield* fs.readFileString(`${worktreePath}/local-draft`), "setup output");
+              assert.isTrue(
+                stopped.turnItems.some(
+                  (item) =>
+                    item.type === "system_notice" &&
+                    item.title === "Worktree kept" &&
+                    item.message.includes(worktreePath),
+                ),
+              );
+            } else {
+              assert.isFalse(yield* fs.exists(worktreePath));
+              assert.equal(
+                (yield* command(cwd, ["branch", "--list", "feature"])).stdout.trim(),
+                "",
+              );
+            }
             return;
           }
           if (folder === "shared" || folder === "changed") {
@@ -2043,6 +2067,86 @@ it.live.each([
       }).pipe(Effect.provide(launch.layer));
     }),
   ),
+);
+
+it.live.each(["agent", "scheduled", "empty thread"] as const)(
+  "handles a missing worktree project folder for a launch from %s",
+  (source) =>
+    withRealGitRepo(({ cwd, command, worktreePath, harness }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* command(cwd, ["commit", "--allow-empty", "-m", "before project"]);
+        const workspaceRoot = `${cwd}/my-project`;
+        yield* fs.makeDirectory(workspaceRoot);
+        const launch = harness({ workspaceRoot });
+        yield* Effect.gen(function* () {
+          const launches = yield* ThreadLaunch.ThreadLaunchService;
+          const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+          const threads = yield* ThreadManagement.ThreadManagementService;
+          const input = launchInput({
+            command: "launch:missing",
+            thread: "thread:missing",
+            workspace: { type: "worktree", baseRef: "beta", branch: "feature" },
+          });
+          const { threadId } = yield* launches.launch({
+            ...input,
+            ...(source === "agent" ? ({ createdBy: "agent", creationSource: "mcp" } as const) : {}),
+            ...(source === "empty thread"
+              ? {}
+              : {
+                  initialMessage: {
+                    text: "Start",
+                    attachments: [],
+                    ...(source === "scheduled"
+                      ? { scheduledTaskId: ScheduledTaskId.make("timer") }
+                      : {}),
+                  },
+                }),
+          });
+          const snapshot = Option.getOrThrow(
+            yield* tracker.stream(threadId).pipe(
+              Stream.filter(
+                (state) =>
+                  !!state && (state.folderChoice !== undefined || state.phase !== "running"),
+              ),
+              Stream.runHead,
+            ),
+          );
+          if (source === "empty thread") {
+            assert.isDefined(snapshot?.folderChoice);
+            assert.isTrue(
+              yield* tracker.chooseFolder({
+                threadId,
+                requestId: snapshot!.folderChoice!.requestId,
+                choice: { type: "root" },
+              }),
+            );
+            yield* tracker.stream(threadId).pipe(
+              Stream.filter((state) => !!state && state.phase !== "running"),
+              Stream.runHead,
+            );
+            const projection = yield* threads.getThreadProjection(threadId);
+            assert.equal(projection.thread.worktreePath, worktreePath);
+            assert.isTrue(
+              projection.turnItems.some(
+                (item) =>
+                  item.type === "system_notice" &&
+                  item.runId === null &&
+                  item.message.includes(worktreePath),
+              ),
+            );
+          } else {
+            assert.equal(snapshot?.phase, "failed");
+            assert.include(snapshot?.error ?? "", "my-project");
+            assert.include(snapshot?.error ?? "", "beta");
+            const projection = yield* preparationSettled(threadId);
+            assert.equal(projection.runs[0]?.status, "failed");
+            assert.equal(launch.runSetup.mock.calls.length, 0);
+            assert.isFalse(yield* fs.exists(worktreePath));
+          }
+        }).pipe(Effect.provide(launch.layer));
+      }),
+    ),
 );
 
 it.live("refuses to bind an existing checkout removed during launch", () =>

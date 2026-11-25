@@ -6016,7 +6016,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         operation: "GitVcsDriver.pendingWorktree",
         cwd: root,
         command: "git worktree",
-        detail: `The checkout changed while setup was paused. Kept ${root} and its branch.`,
+        detail: `The checkout contains local work or no longer matches the checkout created for this thread.`,
       });
       const verify = Effect.fn("GitVcsDriver.pendingWorktree.verify")(function* (
         ownedBranch: string,
