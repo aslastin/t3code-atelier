@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import type { FileReviewExcerpt, ReviewCommentContext } from "~/reviewCommentContext";
+import { cn } from "~/lib/utils";
 import { readPagedSourceExcerpt } from "./fileCommentAnnotations";
 import { useFileComments, type FileCommentTarget } from "./useFileComments";
 import VirtualTablePreview from "./VirtualTablePreview";
@@ -195,7 +196,12 @@ export function PagedSourcePreview({
             {line}
             <PlusIcon
               aria-hidden="true"
-              className="invisible absolute top-1/2 left-full ml-px size-5 -translate-y-1/2 rounded-sm bg-file-comment-gutter p-0.5 text-background group-hover/line:visible group-focus-visible/comment:visible"
+              className={cn(
+                "invisible absolute top-1/2 left-full ml-px size-5 -translate-y-1/2 rounded-sm bg-file-comment-gutter p-0.5 text-background",
+                fileProps.selectedLines
+                  ? line === fileProps.selectedLines.end && "visible"
+                  : "group-hover/line:visible group-focus-visible/comment:visible",
+              )}
             />
           </button>
         )}

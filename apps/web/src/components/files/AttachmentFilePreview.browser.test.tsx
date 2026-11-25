@@ -927,22 +927,33 @@ describe("large text preview recovery", () => {
       act(() => {
         worker.dispatchEvent(new MessageEvent("message", { data }));
       });
-    await userEvent.click(screen.getByRole("button", { name: "Comment on lines L3" }));
-    const draft = screen.getByRole("textbox", { name: "Comment on lines L3" });
-    await userEvent.fill(draft, "Keep this line");
-    const disabled = screen.getByRole("button", { name: "Comment on lines L2" }).element();
-    const rect = disabled.getBoundingClientRect();
-    const frame = window.frameElement?.getBoundingClientRect();
-    for (const type of ["mousePressed", "mouseReleased"] as const) {
-      await cdp().send("Input.dispatchMouseEvent", {
+    const number = (line: number) =>
+      screen.getByRole("button", { name: `Comment on lines L${line}` });
+    const icon = (line: number) => number(line).element().querySelector("svg");
+    const mouse = (type: "mousePressed" | "mouseMoved" | "mouseReleased", line: number) => {
+      const rect = number(line).element().getBoundingClientRect();
+      const frame = window.frameElement?.getBoundingClientRect();
+      return cdp().send("Input.dispatchMouseEvent", {
         type,
         x: rect.left + rect.width / 2 + (frame?.left ?? 0),
         y: rect.top + rect.height / 2 + (frame?.top ?? 0),
         button: "left",
-        buttons: type === "mousePressed" ? 1 : 0,
+        buttons: type === "mouseReleased" ? 0 : 1,
         clickCount: 1,
       });
-    }
+    };
+    await mouse("mousePressed", 3);
+    await mouse("mouseMoved", 2);
+    await expect.element(icon(2)).toBeVisible();
+    await expect.element(icon(3)).not.toBeVisible();
+    await mouse("mouseMoved", 3);
+    await expect.element(icon(3)).toBeVisible();
+    await expect.element(icon(2)).not.toBeVisible();
+    await mouse("mouseReleased", 3);
+    const draft = screen.getByRole("textbox", { name: "Comment on lines L3" });
+    await userEvent.fill(draft, "Keep this line");
+    await mouse("mousePressed", 2);
+    await mouse("mouseReleased", 2);
     await expect.element(draft).toHaveValue("Keep this line");
     await reply({ type: "meta", count: 2, columns: 1, complete: true });
     await expect.element(draft).toHaveValue("Keep this line");
