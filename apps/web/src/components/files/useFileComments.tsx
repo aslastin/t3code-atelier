@@ -52,7 +52,6 @@ export function useFileComments({
     (store) => store.getComposerDraft(composerDraftTarget)?.reviewComments ?? EMPTY_REVIEW_COMMENTS,
   );
   const promptCommentIds = new Set(promptComments.map((comment) => comment.id));
-  const [draftText, setDraftText] = useState("");
   const [lineAnnotations, setLineAnnotations] = useState<FileCommentLineAnnotation[]>([]);
   const [selectionOverride, setSelectionOverride] = useState<{
     revealRequestId: number;
@@ -128,7 +127,6 @@ export function useFileComments({
   };
 
   const beginComment = (range: SelectedLineRange) => {
-    setDraftText("");
     onBeginComment?.();
     onDraftChange?.(true);
     const { startLine, endLine } = normalizeFileCommentRange(range);
@@ -191,8 +189,7 @@ export function useFileComments({
             ownerKey={JSON.stringify([environmentId, composerDraftTarget, filePath, entry.id])}
             kind={entry.kind}
             rangeLabel={formatFileCommentRange(entry.startLine, entry.endLine, messages)}
-            text={entry.kind === "draft" ? draftText : entry.text}
-            onTextChange={setDraftText}
+            text={entry.text}
             onCancel={() => removeAnnotationEntry(entry)}
             onComment={(text) => submitAnnotationEntry(entry, text)}
             onDelete={() => removeAnnotationEntry(entry)}

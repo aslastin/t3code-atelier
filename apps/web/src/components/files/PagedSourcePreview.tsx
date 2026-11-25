@@ -9,8 +9,10 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import type { FileReviewExcerpt, ReviewCommentContext } from "~/reviewCommentContext";
 import { cn } from "~/lib/utils";
+import { useStableCallback } from "~/hooks/useStableCallback";
 import { readPagedSourceExcerpt } from "./fileCommentAnnotations";
 import { useFileComments, type FileCommentTarget } from "./useFileComments";
 import VirtualTablePreview from "./VirtualTablePreview";
@@ -21,6 +23,26 @@ type ReadExcerpt = (
   lastLine: number,
   ready: (result: FileReviewExcerpt | Error) => void,
 ) => () => void;
+
+// Keep the same textarea, selection and dictation session when its virtual row leaves the DOM.
+function moveDraftHost(host: HTMLDivElement, parent: HTMLDivElement | null) {
+  if (!parent || parent === host.parentElement) return;
+  if (parent.moveBefore && parent.isConnected && host.isConnected) {
+    parent.moveBefore(host, null);
+    return;
+  }
+  const focused = host.ownerDocument.activeElement;
+  const selection =
+    focused instanceof HTMLTextAreaElement && host.contains(focused)
+      ? ([focused.selectionStart, focused.selectionEnd, focused.selectionDirection] as const)
+      : null;
+  parent.appendChild(host);
+  if (focused instanceof HTMLElement && host.contains(focused)) {
+    focused.focus({ preventScroll: true });
+    if (focused instanceof HTMLTextAreaElement && selection)
+      focused.setSelectionRange(...selection);
+  }
+}
 
 function MatchingFileComment({
   comment,
@@ -65,7 +87,16 @@ export function PagedSourcePreview({
 }) {
   const gt = useGT();
   const surface = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ pointerId: number; start: number } | null>(null);
+  const [draftHost] = useState(() => document.createElement("div"));
+  const footer = useRef<HTMLDivElement | null>(null);
+  const attachFooter = useStableCallback((node: HTMLDivElement | null) => {
+    footer.current = node;
+    if (node && !draftHost.isConnected) node.appendChild(draftHost);
+  });
+  const attachInline = useStableCallback((node: HTMLDivElement | null) => {
+    moveDraftHost(draftHost, node ?? footer.current);
+  });
+  const drag = useRef<{ pointerId: number; start: number; end: number } | null>(null);
   // Keep the selected rows while the worker's page cache scrolls past them.
   const [selection, setSelection] = useState<{
     excerpt: FileReviewExcerpt;
@@ -104,12 +135,13 @@ export function PagedSourcePreview({
   };
 
   const rangeAtPointer = (event: PointerEvent<HTMLDivElement>) => {
-    if (drag.current?.pointerId !== event.pointerId) return null;
+    const active = drag.current;
+    if (active?.pointerId !== event.pointerId) return null;
     const row = document
       .elementFromPoint(event.clientX, event.clientY)
       ?.closest<HTMLElement>("[data-preview-row]");
-    if (!row || !event.currentTarget.contains(row)) return null;
-    return { start: drag.current.start, end: Number(row.dataset.previewRow) + 1 };
+    if (row && event.currentTarget.contains(row)) active.end = Number(row.dataset.previewRow) + 1;
+    return { start: active.start, end: active.end };
   };
 
   const anchors = new Map(
@@ -142,24 +174,22 @@ export function PagedSourcePreview({
         metadata: { entries: openDraft.metadata.entries.filter((entry) => entry.kind === "draft") },
       })
     : null;
-  if (!table.count) return form;
   // Keep the original draft accessible if Retry opens another revision or indexing removes its row.
   const displaced =
     openDraft && (selection?.revision !== sourceRevision || openDraft.lineNumber > table.count);
   return (
     <div
       ref={surface}
-      className="flex min-h-0 flex-1 flex-col"
+      className={cn("flex min-h-0 flex-col", table.count > 0 && "flex-1")}
       onPointerMove={(event) => {
         const range = rangeAtPointer(event);
         if (range && range.end !== fileProps.selectedLines?.end) setSelectedRange(range);
       }}
       onPointerUp={(event) => {
-        if (drag.current?.pointerId !== event.pointerId) return;
         const range = rangeAtPointer(event);
+        if (!range) return;
         drag.current = null;
-        if (range) select(range);
-        else setSelectedRange(null);
+        select(range);
       }}
       onLostPointerCapture={(event) => {
         if (drag.current?.pointerId !== event.pointerId) return;
@@ -167,85 +197,91 @@ export function PagedSourcePreview({
         setSelectedRange(null);
       }}
     >
-      <VirtualTablePreview
-        key={sourceRevision}
-        {...table}
-        selectedLines={fileProps.selectedLines}
-        renderLineNumber={(line, loaded) => (
-          <button
-            type="button"
-            className="group/comment relative w-full cursor-pointer touch-none text-right hover:text-primary focus-visible:text-primary disabled:cursor-default disabled:[&>svg]:hidden"
-            disabled={!loaded || hasOpenCommentForm || reading}
-            aria-label={gt("Comment on lines {rangeLabel}", { rangeLabel: `L${line}` })}
-            onPointerDown={(event) => {
-              if (
-                event.currentTarget.disabled ||
-                !event.isPrimary ||
-                event.button !== 0 ||
-                !surface.current
-              )
-                return;
-              surface.current.setPointerCapture(event.pointerId);
-              drag.current = { pointerId: event.pointerId, start: line };
-              setSelectedRange({ start: line, end: line });
-            }}
-            onClick={(event) => {
-              if (event.detail === 0) select({ start: line, end: line });
-            }}
-          >
-            {line}
-            <PlusIcon
-              aria-hidden="true"
-              className={cn(
-                "invisible absolute top-1/2 left-full ml-px size-5 -translate-y-1/2 rounded-sm bg-file-comment-gutter p-0.5 text-background",
-                fileProps.selectedLines
-                  ? line === fileProps.selectedLines.end && "visible"
-                  : "group-hover/line:visible group-focus-visible/comment:visible",
-              )}
-            />
-          </button>
-        )}
-        renderAnnotation={(line) => {
-          const comments = byLine.get(line);
-          const draft = openDraft && !displaced && openDraft.lineNumber === line ? form : null;
-          if (!comments) return draft;
-          return (
-            <>
-              {comments.map((comment) => {
-                const start = comment.startIndex + 1;
-                const end = comment.endIndex + 1;
-                const node = fileProps.renderAnnotation({
-                  lineNumber: line,
-                  metadata: {
-                    entries: [
-                      {
-                        id: comment.id,
-                        kind: "comment",
-                        startLine: start,
-                        endLine: end,
-                        text: comment.text,
-                      },
-                    ],
-                  },
-                });
-                return (
-                  <MatchingFileComment
-                    key={comment.id}
-                    comment={comment}
-                    readExcerpt={readExcerpt}
-                    getRows={table.getRows}
-                    indexed={indexed}
-                  >
-                    {node}
-                  </MatchingFileComment>
-                );
-              })}
-              {draft}
-            </>
-          );
-        }}
-      />
-      {displaced ? form : null}
+      <div ref={attachFooter} className="order-last max-h-full overflow-y-auto" />
+      {form && createPortal(form, draftHost)}
+      {table.count > 0 && (
+        <VirtualTablePreview
+          key={sourceRevision}
+          {...table}
+          selectedLines={fileProps.selectedLines}
+          renderLineNumber={(line, loaded) => (
+            <button
+              type="button"
+              className="group/comment relative w-full cursor-pointer touch-none text-right hover:text-primary focus-visible:text-primary disabled:cursor-default disabled:[&>svg]:hidden"
+              disabled={!loaded || hasOpenCommentForm || reading}
+              aria-label={gt("Comment on lines {rangeLabel}", { rangeLabel: `L${line}` })}
+              onPointerDown={(event) => {
+                if (
+                  event.currentTarget.disabled ||
+                  !event.isPrimary ||
+                  event.button !== 0 ||
+                  !surface.current
+                )
+                  return;
+                surface.current.setPointerCapture(event.pointerId);
+                drag.current = { pointerId: event.pointerId, start: line, end: line };
+                setSelectedRange({ start: line, end: line });
+              }}
+              onClick={(event) => {
+                if (event.detail === 0) select({ start: line, end: line });
+              }}
+            >
+              {line}
+              <PlusIcon
+                aria-hidden="true"
+                className={cn(
+                  "invisible absolute top-1/2 left-full ml-px size-5 -translate-y-1/2 rounded-sm bg-file-comment-gutter p-0.5 text-background",
+                  fileProps.selectedLines
+                    ? line === fileProps.selectedLines.end && "visible"
+                    : "group-hover/line:visible group-focus-visible/comment:visible",
+                )}
+              />
+            </button>
+          )}
+          renderAnnotation={(line) => {
+            const comments = byLine.get(line);
+            const draft =
+              openDraft && !displaced && openDraft.lineNumber === line ? (
+                <div ref={attachInline} />
+              ) : null;
+            if (!comments) return draft;
+            return (
+              <>
+                {comments.map((comment) => {
+                  const start = comment.startIndex + 1;
+                  const end = comment.endIndex + 1;
+                  const node = fileProps.renderAnnotation({
+                    lineNumber: line,
+                    metadata: {
+                      entries: [
+                        {
+                          id: comment.id,
+                          kind: "comment",
+                          startLine: start,
+                          endLine: end,
+                          text: comment.text,
+                        },
+                      ],
+                    },
+                  });
+                  return (
+                    <MatchingFileComment
+                      key={comment.id}
+                      comment={comment}
+                      readExcerpt={readExcerpt}
+                      getRows={table.getRows}
+                      indexed={indexed}
+                    >
+                      {node}
+                    </MatchingFileComment>
+                  );
+                })}
+                {draft}
+              </>
+            );
+          }}
+        />
+      )}
     </div>
   );
 }

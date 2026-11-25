@@ -930,8 +930,12 @@ describe("large text preview recovery", () => {
     const number = (line: number) =>
       screen.getByRole("button", { name: `Comment on lines L${line}` });
     const icon = (line: number) => number(line).element().querySelector("svg");
-    const mouse = (type: "mousePressed" | "mouseMoved" | "mouseReleased", line: number) => {
-      const rect = number(line).element().getBoundingClientRect();
+    const mouse = (
+      type: "mousePressed" | "mouseMoved" | "mouseReleased",
+      line: number | "header",
+    ) => {
+      const target = line === "header" ? screen.getByText(/3 lines.*Indexing/) : number(line);
+      const rect = target.element().getBoundingClientRect();
       const frame = window.frameElement?.getBoundingClientRect();
       return cdp().send("Input.dispatchMouseEvent", {
         type,
@@ -949,7 +953,7 @@ describe("large text preview recovery", () => {
     await mouse("mouseMoved", 3);
     await expect.element(icon(3)).toBeVisible();
     await expect.element(icon(2)).not.toBeVisible();
-    await mouse("mouseReleased", 3);
+    await mouse("mouseReleased", "header");
     const draft = screen.getByRole("textbox", { name: "Comment on lines L3" });
     await userEvent.fill(draft, "Keep this line");
     await mouse("mousePressed", 2);
@@ -976,6 +980,57 @@ describe("large text preview recovery", () => {
     await expect
       .element(screen.getByRole("textbox", { name: "Comment on lines L2" }))
       .toBeVisible();
+  });
+
+  it("keeps the paged comment editable and preserves the message field's focus while scrolling", async () => {
+    const environmentId = EnvironmentId.make("env");
+    await using screen = await render(
+      <>
+        <input aria-label="Message" />
+        <div style={{ display: "flex", height: 400, width: 600 }}>
+          <LargeTextViewer
+            name="log.txt"
+            text={Array.from({ length: 200 }, (_, line) => String(line + 1)).join("\n")}
+            delimiter={null}
+            commentTarget={{
+              environmentId,
+              filePath: "log.txt",
+              composerDraftTarget: { environmentId, threadId: ThreadId.make("scroll-comment") },
+            }}
+          />
+        </div>
+      </>,
+    );
+    await expect.element(screen.getByText(/200 lines/)).toBeVisible();
+    const viewport = screen
+      .getByRole("region", { name: "log.txt" })
+      .element()
+      .querySelector<HTMLElement>("[tabindex]")!;
+    const scroll = async (top: number, visibleLine: number) => {
+      viewport.scrollTop = top;
+      await expect
+        .element(
+          screen.getByRole("button", { name: `Comment on lines L${visibleLine}`, exact: true }),
+        )
+        .toBeInTheDocument();
+    };
+    await userEvent.click(screen.getByRole("button", { name: "Comment on lines L2", exact: true }));
+    const draft = screen.getByRole("textbox", { name: "Comment on lines L2", exact: true });
+    await userEvent.fill(draft, "Keep");
+    const textarea = screen.container.querySelector("textarea")!;
+    textarea.setSelectionRange(1, 1);
+    await scroll(viewport.scrollHeight, 200);
+    await expect.element(draft).toHaveFocus();
+    expect(textarea.selectionStart).toBe(1);
+    await userEvent.keyboard("x");
+    const message = screen.getByRole("textbox", { name: "Message", exact: true });
+    await userEvent.click(message);
+    await scroll(0, 2);
+    await expect.element(draft).toHaveValue("Kxeep");
+    expect(draft.element().closest<HTMLElement>("[data-preview-row]")?.dataset.previewRow).toBe(
+      "1",
+    );
+    await expect.element(message).toHaveFocus();
   });
 
   it("fills the horizontal viewport using measured column widths", async () => {
