@@ -1318,27 +1318,29 @@ const make = Effect.gen(function* () {
             ).pipe(
               Effect.andThen(detach),
               Effect.catchCause((removeCause) =>
-                Effect.logWarning("Failed to remove an abandoned thread worktree", {
-                  commandId: input.commandId,
-                  threadId,
-                  path: removedPath,
-                  cause: removeCause,
-                }).pipe(
-                  Effect.andThen(
-                    cancelled && discardPending
-                      ? recordNotice(
-                          threadId,
-                          runId,
-                          "worktree-kept",
-                          "Worktree kept",
-                          `Kept ${removedPath} and its branch. ${failureDetail(Cause.squash(removeCause))}`,
-                        ).pipe(
-                          Effect.andThen(workspaceRecorded ? detach : Effect.void),
-                          Effect.ignoreCause({ log: true }),
-                        )
-                      : Effect.void,
-                  ),
-                ),
+                Effect.gen(function* () {
+                  yield* Effect.logWarning("Failed to remove an abandoned thread worktree", {
+                    commandId: input.commandId,
+                    threadId,
+                    path: removedPath,
+                    cause: removeCause,
+                  });
+                  if (!discardPending) return;
+                  const kept = yield* fs
+                    .exists(removedPath)
+                    .pipe(Effect.orElseSucceed(() => false));
+                  const detail = failureDetail(Cause.squash(removeCause));
+                  yield* recordNotice(
+                    threadId,
+                    runId,
+                    "worktree-kept",
+                    kept ? "Worktree kept" : "Worktree cleanup incomplete",
+                    kept
+                      ? `Kept ${removedPath} (branch ${removedBranch}). ${detail}`
+                      : `Could not finish cleaning up ${removedPath} (branch ${removedBranch}). ${detail}`,
+                  ).pipe(Effect.ignoreCause({ log: true }));
+                  if (workspaceRecorded && cancelled) yield* detach;
+                }),
               ),
             );
           }

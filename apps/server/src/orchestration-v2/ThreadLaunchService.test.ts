@@ -1997,6 +1997,14 @@ it.live.each([
             const kept = yield* preparationSettled(threadId);
             assert.equal(kept.runs[0]?.status, "failed");
             assert.isTrue(yield* fs.exists(worktreePath));
+            assert.isTrue(
+              kept.turnItems.some(
+                (item) =>
+                  item.type === "system_notice" &&
+                  item.title === "Worktree kept" &&
+                  item.message.includes(worktreePath),
+              ),
+            );
             assert.isFalse(
               launch.runSetup.mock.calls.some(([setup]) => setup.threadId === threadId),
             );
