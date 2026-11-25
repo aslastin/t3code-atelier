@@ -1041,14 +1041,17 @@ describe("large text preview recovery", () => {
     resetDraft();
     using _draft = { [Symbol.dispose]: resetDraft };
     await using screen = await render(
-      <div style={{ display: "flex", height: 400, width: 600 }}>
-        <LargeTextViewer
-          name="log.txt"
-          text={Array.from({ length: 200 }, (_, line) => String(line + 1)).join("\n")}
-          delimiter={null}
-          commentTarget={{ environmentId, filePath: "log.txt", composerDraftTarget: threadRef }}
-        />
-      </div>,
+      <>
+        <input aria-label="Message" />
+        <div style={{ display: "flex", height: 400, width: 600 }}>
+          <LargeTextViewer
+            name="log.txt"
+            text={Array.from({ length: 200 }, (_, line) => String(line + 1)).join("\n")}
+            delimiter={null}
+            commentTarget={{ environmentId, filePath: "log.txt", composerDraftTarget: threadRef }}
+          />
+        </div>
+      </>,
     );
     await expect.element(screen.getByText(/200 lines/)).toBeVisible();
     const line = (number: number) =>
@@ -1066,6 +1069,8 @@ describe("large text preview recovery", () => {
     await userEvent.click(screen.getByRole("button", { name: "Edit comment" }).first());
     const edit = screen.getByRole("textbox", { name: "Comment on lines L2", exact: true });
     await expect.element(edit).toHaveValue("First");
+    await expect.element(edit).toHaveFocus();
+    await expect.element(line(5)).toBeEnabled();
     await userEvent.fill(edit, "Edited");
     const viewport = screen
       .getByRole("region", { name: "log.txt" })
@@ -1073,8 +1078,11 @@ describe("large text preview recovery", () => {
       .querySelector<HTMLElement>("[tabindex]")!;
     viewport.scrollTop = viewport.scrollHeight;
     await expect.element(line(2)).not.toBeInTheDocument();
+    const message = screen.getByRole("textbox", { name: "Message", exact: true });
+    await userEvent.click(message);
     viewport.scrollTop = 0;
     await expect.element(edit).toHaveValue("Edited");
+    await expect.element(message).toHaveFocus();
     await userEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
     await expect.element(screen.getByText("Edited", { exact: true })).toBeVisible();
     expect(

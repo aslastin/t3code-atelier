@@ -7,7 +7,6 @@ import { useState } from "react";
 export function useCommentEdits() {
   const [edits, setEdits] = useState<Readonly<Record<string, string>>>({});
   return {
-    ids: Object.keys(edits),
     for: (id: string) => ({
       editText: edits[id] ?? null,
       onEditTextChange: (text: string | null) =>

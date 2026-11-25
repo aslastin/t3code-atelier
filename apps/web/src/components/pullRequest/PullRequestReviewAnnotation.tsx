@@ -111,6 +111,8 @@ export function PendingReviewCommentCard({
   onEditTextChange?: (body: string | null) => void;
 }) {
   const gt = useGT();
+  // The editor takes focus when opened here, not when a virtualized row remounts it on scroll.
+  const [openedHere, setOpenedHere] = useState(false);
   if (editText !== null && onEdit && onEditTextChange) {
     return (
       <DiffCommentAnnotation
@@ -123,10 +125,12 @@ export function PendingReviewCommentCard({
         onTextChange={onEditTextChange}
         completionScope={completionScope}
         submitLabel={gt("Save", { $context: "verb" })}
+        focusOnMount={openedHere}
         onCancel={() => onEditTextChange(null)}
         onComment={(body) => {
           onEditTextChange(null);
-          onEdit(body);
+          // An unchanged comment keeps its identity, so a review in flight still counts it as sent.
+          if (body !== comment.body) onEdit(body);
         }}
       />
     );
@@ -148,7 +152,10 @@ export function PendingReviewCommentCard({
               size="icon-xs"
               variant="ghost"
               aria-label={gt("Edit comment")}
-              onClick={() => onEditTextChange(comment.body)}
+              onClick={() => {
+                setOpenedHere(true);
+                onEditTextChange(comment.body);
+              }}
             >
               <PencilIcon className="size-3.5" />
             </Button>

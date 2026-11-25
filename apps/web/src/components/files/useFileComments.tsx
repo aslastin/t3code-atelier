@@ -124,7 +124,11 @@ export function useFileComments({
   };
 
   const editAnnotationEntry = (entry: FileCommentAnnotationEntry, text: string) => {
-    const comment = promptCommentsById.get(entry.id);
+    // Dictation can finish a Save after a file edit has moved the comment's lines.
+    const comment = useComposerDraftStore
+      .getState()
+      .getComposerDraft(composerDraftTarget)
+      ?.reviewComments.find((candidate) => candidate.id === entry.id);
     if (comment) addReviewComment(composerDraftTarget, { ...comment, text });
   };
 
@@ -156,11 +160,9 @@ export function useFileComments({
       ];
     });
   };
-  const hasOpenCommentForm =
-    edits.ids.some((id) => promptCommentIds.has(id)) ||
-    lineAnnotations.some((annotation) =>
-      annotation.metadata.entries.some((entry) => entry.kind === "draft"),
-    );
+  const hasOpenCommentForm = lineAnnotations.some((annotation) =>
+    annotation.metadata.entries.some((entry) => entry.kind === "draft"),
+  );
   const handleLineSelectionEnd = (range: SelectedLineRange | null) => {
     setSelectedRange(range);
     if (range) {

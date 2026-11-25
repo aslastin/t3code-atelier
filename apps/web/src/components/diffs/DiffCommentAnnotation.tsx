@@ -75,11 +75,14 @@ export function DiffCommentAnnotation({
   const gt = useGT();
   const messages = useMessages();
   const [localDraftText, setLocalDraftText] = useState("");
+  // An edit takes focus when opened here, not when a virtualized row remounts it on scroll.
+  const [openedHere, setOpenedHere] = useState(false);
   const edit =
     kind === "comment" && editText !== null && onEditTextChange
       ? { text: editText, change: onEditTextChange }
       : null;
   const editing = edit !== null;
+  const takesFocus = focusOnMount && (!editing || openedHere);
   const displayedText = edit
     ? edit.text
     : kind === "draft" && !onTextChange
@@ -98,12 +101,12 @@ export function DiffCommentAnnotation({
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- focuses the draft textarea on the next animation frame after it opens
   useLayoutEffect(() => {
-    if ((kind !== "draft" && !editing) || !focusOnMount) return;
+    if ((kind !== "draft" && !editing) || !takesFocus) return;
     const frame = window.requestAnimationFrame(() => {
       textareaRef.current?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [editing, focusOnMount, kind]);
+  }, [editing, takesFocus, kind]);
 
   if (kind === "comment" && !editing) {
     return (
@@ -128,7 +131,10 @@ export function DiffCommentAnnotation({
                 variant="ghost-muted"
                 size="icon-xs"
                 aria-label={gt("Edit comment")}
-                onClick={() => onEditTextChange(text)}
+                onClick={() => {
+                  setOpenedHere(true);
+                  onEditTextChange(text);
+                }}
               >
                 <Pencil className="size-3" />
               </Button>
@@ -173,7 +179,7 @@ export function DiffCommentAnnotation({
         ref={textareaRef}
         completionScope={completionScope}
         readOnly={speech?.freezesEditor}
-        autoFocus={focusOnMount}
+        autoFocus={takesFocus}
         size="sm"
         value={displayedText}
         dir={textDirection(displayedText)}

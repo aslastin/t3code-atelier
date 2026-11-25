@@ -230,7 +230,10 @@ export function AnnotatableCodeView({
   };
 
   const editEntry = (entryId: string, text: string) => {
-    const comment = reviewComments.find((candidate) => candidate.id === entryId);
+    const comment = useComposerDraftStore
+      .getState()
+      .getComposerDraft(composerDraftTarget)
+      ?.reviewComments.find((candidate) => candidate.id === entryId);
     if (comment) addReviewComment(composerDraftTarget, { ...comment, text });
   };
 

@@ -359,14 +359,8 @@ describe("read-only source comments", () => {
     await userEvent.click(screen.getByRole("button", { name: "Edit comment", exact: true }));
     const edit = screen.getByRole("textbox", { name: "Comment on lines L1" });
     await userEvent.fill(edit, "Edited first line");
-    state.file = { ...state.file, contents: "inserted\nreplaced", byteLength: 17 };
-    await screen.rerender(panel());
-    await expect.element(edit).toHaveValue("Edited first line");
     await userEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
-    await expect.element(edit).not.toBeInTheDocument();
-    await expect
-      .element(screen.getByText("Edited first line", { exact: true }))
-      .not.toBeInTheDocument();
+    await expect.element(screen.getByText("Edited first line", { exact: true })).toBeVisible();
     const afterEdit = useComposerDraftStore.getState().getComposerDraft(threadRef)!;
     expect(afterEdit.prompt).toBe(beforeEdit.prompt);
     expect(afterEdit.reviewComments.map(({ id, text }) => ({ id, text }))).toEqual(
@@ -379,6 +373,11 @@ describe("read-only source comments", () => {
     await expect
       .element(page.getByRole("dialog").getByText("Edited first line", { exact: true }))
       .toBeVisible();
+    state.file = { ...state.file, contents: "inserted\nreplaced", byteLength: 17 };
+    await screen.rerender(panel());
+    await expect
+      .element(screen.getByText("Edited first line", { exact: true }))
+      .not.toBeInTheDocument();
     expect(afterEdit.reviewComments.at(-1)?.diff).toBe("replaced");
     expect(state.writeFile).not.toHaveBeenCalled();
   });
