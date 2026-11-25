@@ -1033,6 +1033,69 @@ describe("large text preview recovery", () => {
     await expect.element(message).toHaveFocus();
   });
 
+  it("keeps an unsaved comment edit while its row scrolls away and saves it at its own lines", async () => {
+    const environmentId = EnvironmentId.make("env");
+    const threadRef = { environmentId, threadId: ThreadId.make("paged-edit") };
+    const resetDraft = () =>
+      useComposerDraftStore.setState(useComposerDraftStore.getInitialState(), true);
+    resetDraft();
+    using _draft = { [Symbol.dispose]: resetDraft };
+    await using screen = await render(
+      <>
+        <input aria-label="Message" />
+        <div style={{ display: "flex", height: 400, width: 600 }}>
+          <LargeTextViewer
+            name="log.txt"
+            text={Array.from({ length: 200 }, (_, line) => String(line + 1)).join("\n")}
+            delimiter={null}
+            commentTarget={{ environmentId, filePath: "log.txt", composerDraftTarget: threadRef }}
+          />
+        </div>
+      </>,
+    );
+    await expect.element(screen.getByText(/200 lines/)).toBeVisible();
+    const line = (number: number) =>
+      screen.getByRole("button", { name: `Comment on lines L${number}`, exact: true });
+    const addComment = async (number: number, text: string) => {
+      await userEvent.click(line(number));
+      await userEvent.fill(
+        screen.getByRole("textbox", { name: `Comment on lines L${number}`, exact: true }),
+        text,
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Comment", exact: true }));
+    };
+    await addComment(2, "First");
+    await addComment(8, "Later");
+    await userEvent.click(screen.getByRole("button", { name: "Edit comment" }).first());
+    const edit = screen.getByRole("textbox", { name: "Comment on lines L2", exact: true });
+    await expect.element(edit).toHaveValue("First");
+    await expect.element(edit).toHaveFocus();
+    await expect.element(line(5)).toBeEnabled();
+    await userEvent.fill(edit, "Edited");
+    const viewport = screen
+      .getByRole("region", { name: "log.txt" })
+      .element()
+      .querySelector<HTMLElement>("[tabindex]")!;
+    viewport.scrollTop = viewport.scrollHeight;
+    await expect.element(line(2)).not.toBeInTheDocument();
+    const message = screen.getByRole("textbox", { name: "Message", exact: true });
+    await userEvent.click(message);
+    viewport.scrollTop = 0;
+    await expect.element(edit).toHaveValue("Edited");
+    await expect.element(message).toHaveFocus();
+    await userEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+    await expect.element(screen.getByText("Edited", { exact: true })).toBeVisible();
+    expect(
+      useComposerDraftStore
+        .getState()
+        .getComposerDraft(threadRef)
+        ?.reviewComments.map(({ rangeLabel, text, diff }) => ({ rangeLabel, text, diff })),
+    ).toEqual([
+      { rangeLabel: "L2", text: "Edited", diff: "2" },
+      { rangeLabel: "L8", text: "Later", diff: "8" },
+    ]);
+  });
+
   it("fills the horizontal viewport using measured column widths", async () => {
     const header = Array.from({ length: 20 }, (_, i) => "C" + i);
     await using screen = await render(

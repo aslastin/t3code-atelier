@@ -9,6 +9,7 @@ import {
   type ReviewCommentContext,
 } from "~/reviewCommentContext";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
+import { useCommentEdits } from "../diffs/useCommentEdits";
 import {
   type FileCommentAnnotationEntry,
   type FileCommentLineAnnotation,
@@ -16,6 +17,7 @@ import {
   nextFileCommentId,
   normalizeFileCommentRange,
   remapFileCommentAnnotations,
+  remappedPromptComments,
   promptFileCommentEntries,
 } from "./fileCommentAnnotations";
 
@@ -52,6 +54,9 @@ export function useFileComments({
     (store) => store.getComposerDraft(composerDraftTarget)?.reviewComments ?? EMPTY_REVIEW_COMMENTS,
   );
   const promptCommentIds = new Set(promptComments.map((comment) => comment.id));
+  // The composer record owns a comment's text; line annotations only place it.
+  const promptCommentsById = new Map(promptComments.map((comment) => [comment.id, comment]));
+  const edits = useCommentEdits();
   const [lineAnnotations, setLineAnnotations] = useState<FileCommentLineAnnotation[]>([]);
   const [selectionOverride, setSelectionOverride] = useState<{
     revealRequestId: number;
@@ -67,21 +72,11 @@ export function useFileComments({
     const remapped = remapFileCommentAnnotations(nextLineAnnotations);
     // The editor hands back the array it was given until an edit moves an annotation.
     setLineAnnotations((current) => (current === nextLineAnnotations ? current : remapped));
-    for (const annotation of remapped) {
-      for (const entry of annotation.metadata.entries) {
-        if (entry.kind !== "comment" || !promptCommentIds.has(entry.id)) continue;
-        addReviewComment(
-          composerDraftTarget,
-          buildFileReviewComment({
-            id: entry.id,
-            filePath,
-            startLine: entry.startLine,
-            endLine: entry.endLine,
-            text: entry.text,
-            contents,
-          }),
-        );
-      }
+    for (const comment of remappedPromptComments(remapped, promptComments, {
+      filePath,
+      contents,
+    })) {
+      addReviewComment(composerDraftTarget, comment);
     }
   };
 
@@ -126,6 +121,15 @@ export function useFileComments({
         },
       })),
     );
+  };
+
+  const editAnnotationEntry = (entry: FileCommentAnnotationEntry, text: string) => {
+    // Dictation can finish a Save after a file edit has moved the comment's lines.
+    const comment = useComposerDraftStore
+      .getState()
+      .getComposerDraft(composerDraftTarget)
+      ?.reviewComments.find((candidate) => candidate.id === entry.id);
+    if (comment) addReviewComment(composerDraftTarget, { ...comment, text });
   };
 
   const beginComment = (range: SelectedLineRange) => {
@@ -180,10 +184,12 @@ export function useFileComments({
             ownerKey={JSON.stringify([environmentId, composerDraftTarget, filePath, entry.id])}
             kind={entry.kind}
             rangeLabel={formatFileCommentRange(entry.startLine, entry.endLine, messages)}
-            text={entry.text}
+            text={promptCommentsById.get(entry.id)?.text ?? entry.text}
             onCancel={() => removeAnnotationEntry(entry)}
             onComment={(text) => submitAnnotationEntry(entry, text)}
             onDelete={() => removeAnnotationEntry(entry)}
+            onEdit={(text) => editAnnotationEntry(entry, text)}
+            {...edits.for(entry.id)}
           />
         ))}
       </div>

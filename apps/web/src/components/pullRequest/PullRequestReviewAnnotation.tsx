@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  ProjectId,
   PullRequestActor,
   PullRequestDiffSide,
   PullRequestRef,
@@ -12,6 +13,7 @@ import {
   HammerIcon,
   MessageSquareIcon,
   MessageSquarePlusIcon,
+  PencilIcon,
   Trash2Icon,
   CircleCheckIcon,
   CircleIcon,
@@ -28,6 +30,7 @@ import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PullRequestEditButton } from "./PullRequestEditButton";
 import { isCommentSubmitShortcut } from "../diffs/commentSubmitShortcut";
+import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import {
   editPullRequestThreadComment,
   mergePullRequestThreadComments,
@@ -88,12 +91,54 @@ export function getReviewPositionAnchor(position: PullRequestReviewPosition): {
 
 export function PendingReviewCommentCard({
   comment,
+  environmentId,
+  projectId,
+  completionScope = null,
   onRemove,
+  onEdit,
+  editText = null,
+  editStartText = null,
+  onEditTextChange,
 }: {
   comment: PendingReviewComment;
+  /** With an environment, the edit can be dictated, as when the comment was written. */
+  environmentId?: EnvironmentId | undefined;
+  projectId?: ProjectId | null | undefined;
+  completionScope?: PullRequestCompletionScope | null;
   onRemove: () => void;
+  onEdit?: (body: string) => void;
+  /** The unsaved body while the comment is being edited, owned by the caller. */
+  editText?: string | null;
+  /** The body the edit opened with; saving it unchanged writes nothing. */
+  editStartText?: string | null;
+  onEditTextChange?: (body: string | null) => void;
 }) {
   const gt = useGT();
+  // The editor takes focus when opened here, not when a virtualized row remounts it on scroll.
+  const [openedHere, setOpenedHere] = useState(false);
+  if (editText !== null && onEdit && onEditTextChange) {
+    return (
+      <DiffCommentAnnotation
+        environmentId={environmentId}
+        projectId={projectId}
+        ownerKey={JSON.stringify([environmentId, "pending-review-comment", comment.id])}
+        kind="draft"
+        rangeLabel={`${comment.path}:${getReviewPositionAnchor(comment.position).line}`}
+        text={editText}
+        onTextChange={onEditTextChange}
+        completionScope={completionScope}
+        submitLabel={gt("Save", { $context: "verb" })}
+        focusOnMount={openedHere}
+        onCancel={() => onEditTextChange(null)}
+        onComment={(body) => {
+          onEditTextChange(null);
+          // An untouched Save keeps the comment's identity, so a review in flight still counts it
+          // as sent, and it cannot overwrite an edit saved meanwhile from another view.
+          if (body !== (editStartText ?? comment.body)) onEdit(body);
+        }}
+      />
+    );
+  }
   return (
     <div
       className={cn(CARD_CLASS, "border-dashed")}
@@ -105,15 +150,29 @@ export function PendingReviewCommentCard({
         <span>
           <T>Pending. Sent when you submit the review</T>
         </span>
-        <Button
-          size="icon-xs"
-          variant="ghost"
-          className="ml-auto"
-          aria-label={gt("Discard this comment")}
-          onClick={onRemove}
-        >
-          <Trash2Icon className="size-3.5" />
-        </Button>
+        <span className="ml-auto flex">
+          {onEdit && onEditTextChange ? (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label={gt("Edit comment")}
+              onClick={() => {
+                setOpenedHere(true);
+                onEditTextChange(comment.body);
+              }}
+            >
+              <PencilIcon className="size-3.5" />
+            </Button>
+          ) : null}
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label={gt("Discard this comment")}
+            onClick={onRemove}
+          >
+            <Trash2Icon className="size-3.5" />
+          </Button>
+        </span>
       </div>
       <p className="mt-2 whitespace-pre-wrap leading-relaxed">{comment.body}</p>
     </div>

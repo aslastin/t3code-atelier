@@ -2,7 +2,11 @@ import type { LineAnnotation, SelectedLineRange } from "@pierre/diffs";
 import { COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS } from "@t3tools/contracts";
 import { msg } from "gt-react";
 import { m, type MessageResolver } from "~/i18n/messages";
-import type { FileReviewExcerpt } from "~/reviewCommentContext";
+import {
+  buildFileReviewComment,
+  type FileReviewExcerpt,
+  type ReviewCommentContext,
+} from "~/reviewCommentContext";
 import { PREVIEW_PAGE_ROWS } from "./largeTextProtocol";
 
 export interface FileCommentAnnotationEntry {
@@ -82,6 +86,34 @@ export function remapFileCommentAnnotations(
 }
 
 /** Drafts and the comments still in the prompt; sent or removed ones are not shown or re-added. */
+/**
+ * Rebuilds prompt comments at their remapped lines. The text comes from the prompt record: an
+ * editor's undo can hand back annotations that still carry text from before an edit.
+ */
+export function remappedPromptComments(
+  annotations: ReadonlyArray<FileCommentLineAnnotation>,
+  promptComments: ReadonlyArray<ReviewCommentContext>,
+  file: { filePath: string; contents: string },
+): ReviewCommentContext[] {
+  const promptById = new Map(promptComments.map((comment) => [comment.id, comment]));
+  return annotations.flatMap((annotation) =>
+    annotation.metadata.entries.flatMap((entry) => {
+      const comment = promptById.get(entry.id);
+      if (entry.kind !== "comment" || !comment) return [];
+      return [
+        buildFileReviewComment({
+          id: entry.id,
+          filePath: file.filePath,
+          startLine: entry.startLine,
+          endLine: entry.endLine,
+          text: comment.text,
+          contents: file.contents,
+        }),
+      ];
+    }),
+  );
+}
+
 export function promptFileCommentEntries(
   entries: ReadonlyArray<FileCommentAnnotationEntry>,
   promptCommentIds: ReadonlySet<string>,

@@ -18,6 +18,7 @@ import {
   PendingReviewCommentCard,
   toViewerSide,
 } from "../PullRequestReviewAnnotation";
+import { useCommentEdits } from "../../diffs/useCommentEdits";
 import type { PendingReviewComment } from "../pullRequestReviewStore";
 import {
   commentDraftFor,
@@ -43,6 +44,7 @@ export function GuideFileDiff({
   loadDiffFiles: FileDiffContentsLoader;
 }) {
   const resolvedTheme = useRenderedAppearance();
+  const pendingEdits = useCommentEdits();
   const [draft, setDraft] = useState<CommentDraft | null>(null);
   // Loading the unchanged lines rewrites the diff it is given; the excerpts read the same file
   // as a patch, so this view expands a copy of its own.
@@ -112,7 +114,14 @@ export function GuideFileDiff({
               <PendingReviewCommentCard
                 key={comment.id}
                 comment={comment}
+                completionScope={commenting?.completionScope ?? null}
                 onRemove={() => commenting?.onRemove(comment.id)}
+                {...(commenting?.canComment
+                  ? {
+                      onEdit: (body: string) => commenting.onEdit({ ...comment, body }),
+                      ...pendingEdits.for(comment.id),
+                    }
+                  : {})}
               />
             ))}
             {annotation.metadata.draft && draft !== null && commenting !== null ? (

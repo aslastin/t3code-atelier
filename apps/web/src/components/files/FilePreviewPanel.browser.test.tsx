@@ -3,7 +3,7 @@ import { EnvironmentId, ThreadId, type ProjectReadFileResult } from "@t3tools/co
 import { AsyncResult } from "effect/reactivity";
 import { StrictMode, useRef, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { cdp, userEvent } from "vite-plus/test/browser";
+import { cdp, page, userEvent } from "vite-plus/test/browser";
 import { act, fakeTimers, render } from "../../../test/render";
 import { useComposerDraftStore } from "~/composerDraftStore";
 import {
@@ -355,14 +355,37 @@ describe("read-only source comments", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Comment", exact: true }));
     await expect.element(screen.getByText("Old first line", { exact: true })).toBeVisible();
+    const beforeEdit = useComposerDraftStore.getState().getComposerDraft(threadRef)!;
+    await userEvent.click(screen.getByRole("button", { name: "Edit comment", exact: true }));
+    const edit = screen.getByRole("textbox", { name: "Comment on lines L1" });
+    await userEvent.fill(edit, "Edited first line");
+    await userEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+    await expect.element(screen.getByText("Edited first line", { exact: true })).toBeVisible();
+    const afterEdit = useComposerDraftStore.getState().getComposerDraft(threadRef)!;
+    expect(afterEdit.prompt).toBe(beforeEdit.prompt);
+    expect(afterEdit.reviewComments.map(({ id, text }) => ({ id, text }))).toEqual(
+      beforeEdit.reviewComments.map(({ id, text }) => ({
+        id,
+        text: text === "Old first line" ? "Edited first line" : text,
+      })),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /notes\.txt L1\. Show details/ }));
+    await expect
+      .element(page.getByRole("dialog").getByText("Edited first line", { exact: true }))
+      .toBeVisible();
     state.file = { ...state.file, contents: "inserted\nreplaced", byteLength: 17 };
     await screen.rerender(panel());
     await expect
-      .element(screen.getByText("Old first line", { exact: true }))
+      .element(screen.getByText("Edited first line", { exact: true }))
       .not.toBeInTheDocument();
-    expect(
-      useComposerDraftStore.getState().getComposerDraft(threadRef)!.reviewComments.at(-1)?.diff,
-    ).toBe("replaced");
+    expect(useComposerDraftStore.getState().getComposerDraft(threadRef)!.reviewComments).toEqual(
+      afterEdit.reviewComments,
+    );
+    expect(afterEdit.reviewComments.at(-1)).toMatchObject({
+      text: "Edited first line",
+      rangeLabel: "L1",
+      diff: "replaced",
+    });
     expect(state.writeFile).not.toHaveBeenCalled();
   });
 });

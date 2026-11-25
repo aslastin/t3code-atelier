@@ -2568,15 +2568,25 @@ describe("composerDraftStore inline context references", () => {
     resetComposerDraftStore();
   });
 
-  it("appends a link when a review comment is added and strips it on removal", () => {
+  it("appends a link when a review comment is added, keeps it in place on edit, and strips it on removal", () => {
     const store = useComposerDraftStore.getState();
+    const laterLink = "[b.ts L4](t3-context://v1/review-comment/review-comment_rc-2)";
     store.setPrompt(threadRef, "look");
     store.addReviewComment(threadRef, reviewComment);
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe(`look ${reviewLink} `);
+    store.addReviewComment(threadRef, { ...reviewComment, id: "rc-2" });
     store.addReviewComment(threadRef, { ...reviewComment, text: "edited" });
-    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe(`look ${reviewLink} `);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe(
+      `look ${reviewLink} ${laterLink} `,
+    );
+    expect(
+      draftFor(threadId, TEST_ENVIRONMENT_ID)?.reviewComments.map(({ id, text }) => [id, text]),
+    ).toEqual([
+      ["rc-1", "edited"],
+      ["rc-2", "Why?"],
+    ]);
     store.removeReviewComment(threadRef, "rc-1");
-    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("look");
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe(`look ${laterLink} `);
   });
 
   it("keeps bulk-set review records and their inline references in sync", () => {
