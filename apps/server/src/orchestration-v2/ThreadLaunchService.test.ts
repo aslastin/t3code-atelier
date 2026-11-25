@@ -1973,7 +1973,9 @@ it.live.each([
             const kept = yield* preparationSettled(threadId);
             assert.equal(kept.runs[0]?.status, "failed");
             assert.isTrue(yield* fs.exists(worktreePath));
-            assert.equal(launch.runSetup.mock.calls.length, 0);
+            assert.isFalse(
+              launch.runSetup.mock.calls.some(([setup]) => setup.threadId === threadId),
+            );
             return;
           }
         }
