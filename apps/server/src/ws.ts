@@ -3078,12 +3078,25 @@ export const layerWsRpc = (
                 }),
             ),
           ),
+        [WS_METHODS.projectsRemovalPreview]: () =>
+          projectService.removalPreview().pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2GetShellSnapshotError({
+                  message: "Failed to review project removal.",
+                  cause,
+                }),
+            ),
+          ),
         [WS_METHODS.projectsMutate]: (mutation) =>
           startup.enqueueCommand(mutateProject(mutation)).pipe(
             Effect.mapError(
               (cause) =>
                 new ProjectMutationError({
                   commandId: mutation.commandId,
+                  ...(cause._tag === "ProjectInvalidError" && cause.reason
+                    ? { reason: cause.reason }
+                    : {}),
                   message:
                     cause._tag === "ProjectNotEmptyError" || cause._tag === "ProjectInvalidError"
                       ? cause.message

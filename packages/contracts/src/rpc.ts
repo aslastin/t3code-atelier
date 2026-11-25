@@ -471,7 +471,12 @@ import {
   SourceControlSignInResult,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
-import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
+import {
+  Project,
+  ProjectMutation,
+  ProjectMutationError,
+  ProjectRemovalPreviewEntry,
+} from "./project.ts";
 
 export const WS_METHODS = {
   projectsListEntries: "projects.listEntries",
@@ -480,6 +485,7 @@ export const WS_METHODS = {
   projectsSearchContents: "projects.searchContents",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
+  projectsRemovalPreview: "projects.removalPreview",
   projectsMutate: "projects.mutate",
   projectsEnsureScratch: "projects.ensureScratch",
   projectsCreateNew: "projects.createNew",
@@ -1654,6 +1660,12 @@ const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   error: Schema.Union([ProjectWriteFileError, EnvironmentAuthorizationError]),
 });
 
+const WsProjectsRemovalPreviewRpc = Rpc.make(WS_METHODS.projectsRemovalPreview, {
+  payload: Schema.Struct({}),
+  success: Schema.Array(ProjectRemovalPreviewEntry),
+  error: Schema.Union([OrchestrationV2GetShellSnapshotError, EnvironmentAuthorizationError]),
+});
+
 const WsProjectsMutateRpc = Rpc.make(WS_METHODS.projectsMutate, {
   payload: ProjectMutation,
   success: Project,
@@ -2554,6 +2566,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsCreateNewRpc,
   WsProjectsCreateFromThreadRpc,
   WsProjectsWriteFileRpc,
+  WsProjectsRemovalPreviewRpc,
   WsProjectsMutateRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,

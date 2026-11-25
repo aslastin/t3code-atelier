@@ -8,6 +8,8 @@ import {
   type ProjectTrackedFolder,
   type ProjectUpdatePayload,
   type ProjectSnapshot,
+  type ProjectRemovalFolder,
+  type ProjectRemovalPreviewEntry,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -25,6 +27,7 @@ import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
+import { nativeRealPath } from "../nativeRealPath.ts";
 import { withCommandMetrics } from "../observability/Metrics.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -74,6 +77,7 @@ export interface ProjectDeleteInput {
   readonly commandId: CommandId;
   readonly projectId: ProjectId;
   readonly force?: boolean;
+  readonly expectedFolder?: ProjectRemovalFolder;
 }
 
 export class ProjectNotFoundError extends Schema.TaggedError<ProjectNotFoundError>()(
@@ -110,7 +114,11 @@ export class ProjectNotEmptyError extends Schema.TaggedError<ProjectNotEmptyErro
 /** A change the project's rules refuse, such as an invalid script ID: the caller's input is wrong, nothing failed. */
 export class ProjectInvalidError extends Schema.TaggedError<ProjectInvalidError>()(
   "ProjectInvalidError",
-  { projectId: ProjectId, detail: Schema.String },
+  {
+    projectId: ProjectId,
+    detail: Schema.String,
+    reason: Schema.optional(Schema.Literal("clone_running")),
+  },
 ) {
   override get message(): string {
     return this.detail;
@@ -156,6 +164,10 @@ export class ProjectService extends Context.Service<
       ProjectServiceError
     >;
     readonly update: (input: ProjectUpdateInput) => Effect.Effect<Project, ProjectServiceError>;
+    readonly removalPreview: () => Effect.Effect<
+      ReadonlyArray<ProjectRemovalPreviewEntry>,
+      ProjectOperationError
+    >;
     readonly delete: (input: ProjectDeleteInput) => Effect.Effect<Project, ProjectServiceError>;
     readonly getById: (
       projectId: ProjectId,
@@ -767,6 +779,28 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  // Missing components can hide a case alias or symlink, so their ancestry is unknown.
+  const resolveRemovalPath = Effect.fn("ProjectService.resolveRemovalPath")(
+    (workspaceRoot: string) => nativeRealPath(workspaceRoot).pipe(Effect.orElseSucceed(() => null)),
+  );
+  const removalPreview = Effect.fn("ProjectService.removalPreview")(function* () {
+    const rows = yield* projects
+      .listRemovalRows()
+      .pipe(
+        Effect.mapError(
+          (cause) => new ProjectOperationError({ operation: "list-projects", cause }),
+        ),
+      );
+    return yield* Effect.forEach(
+      rows,
+      (row) =>
+        resolveRemovalPath(row.workspaceRoot).pipe(
+          Effect.map((resolvedWorkspaceRoot) => ({ ...row, resolvedWorkspaceRoot })),
+        ),
+      { concurrency: 8 },
+    );
+  });
+
   const deleteProject: ProjectService["Service"]["delete"] = Effect.fn("ProjectService.delete")(
     function* (input) {
       const { projectId } = input;
@@ -777,10 +811,27 @@ export const make = Effect.gen(function* () {
       }
 
       const isFirstDelete = existing.value.deletedAt === null;
-      if (isFirstDelete) {
-        yield* deleteChildThreads(input);
-      }
-      yield* commit({ type: "project.delete", commandId: input.commandId, projectId });
+      const command = { type: "project.delete", commandId: input.commandId, projectId } as const;
+      yield* commit(
+        command,
+        Effect.fnUntraced(function* (current) {
+          if (current?.deletedAt === null) {
+            if (
+              input.expectedFolder !== undefined &&
+              (current.workspaceRoot !== input.expectedFolder.workspaceRoot ||
+                (yield* resolveRemovalPath(current.workspaceRoot)) !==
+                  input.expectedFolder.resolvedWorkspaceRoot)
+            ) {
+              return yield* new ProjectInvalidError({
+                projectId,
+                detail: "The project folder changed. Review the removal again.",
+              });
+            }
+            yield* deleteChildThreads(input);
+          }
+          return command;
+        }),
+      );
       if (isFirstDelete) {
         yield* clearProjectSettingsOverrides(projectId);
       }
@@ -864,6 +915,7 @@ export const make = Effect.gen(function* () {
     bootstrap,
     update,
     delete: deleteProject,
+    removalPreview,
     getById,
     getByWorkspaceRoot,
     workspaceScanDirectory,

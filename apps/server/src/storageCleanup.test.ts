@@ -2236,7 +2236,13 @@ describe("orphan worktree reports", () => {
         const sibling = `${fixture.worktree}/sibling`;
         yield* fixture.fs.makeDirectory(sibling);
         yield* fixture.fs.writeFileString(`${sibling}/draft`, "unsaved");
-        fixture.setProjectRoots([projectFolder, sibling]);
+        // Following the symlink before ".." reaches the sibling project in this checkout.
+        const childLink = `${fixture.repo}/child-link`;
+        yield* fixture.fs.symlink(threadFolder, childLink);
+        const registered = (yield* HostProcess.isWindows)
+          ? `${alias}/sibling`
+          : `${childLink}/../sibling`;
+        fixture.setProjectRoots([projectFolder, registered]);
         const localThread = ThreadId.make("sibling-local-thread");
         fixture.setThreads([
           shell({ id: localThread, projectId: ProjectId.make("project-2"), worktreePath: null }),
@@ -2253,6 +2259,15 @@ describe("orphan worktree reports", () => {
           }),
         );
         expect(protectedProject.detail).toContain("project");
+        fixture.setThreads([shell({ branch: "feature", worktreePath: threadFolder })]);
+        expect((yield* fixture.service.runNow).entries[0]).toMatchObject({
+          outcome: "kept",
+          reason: "Contains a project checkout",
+        });
+        fixture.setThreads([]);
+        fixture.setStoredWorktreePaths([]);
+        yield* fixture.fs.utimes(fixture.worktree, 1, 1);
+        expect((yield* fixture.service.runNow).entries).toEqual([]);
         expect(yield* fixture.fs.readFileString(`${sibling}/draft`)).toBe("unsaved");
       }),
     ),
@@ -2770,9 +2785,10 @@ describe("orphan worktree reports", () => {
           }
           fixture.setStoredWorktreePaths([fixture.worktree, referenced.toUpperCase()]);
           fixture.setProjectRoots([fixture.repo, project, `${nested}/child`]);
+          const resolvesOnDisk = yield* fixture.fs.exists(referenced.toUpperCase());
           const report = yield* fixture.service.runNow;
           expect(report.entries.map((entry) => entry.path).sort()).toEqual(
-            platform === "win32" ? [] : [referenced],
+            platform === "win32" || resolvesOnDisk ? [] : [referenced],
           );
         }),
       ),

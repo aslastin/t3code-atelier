@@ -45,6 +45,7 @@ import { parse as parseYaml } from "yaml";
 import * as ServerConfig from "./config.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
+import { nativeRealPath, nativeRealPathWithMissingTail } from "./nativeRealPath.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import { scratchFolderRoot } from "./project/ManagedProjectFolders.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -434,9 +435,9 @@ const make = Effect.gen(function* () {
     return yield* Effect.gen(function* () {
       const root = yield* removalRoot(folder, projectCwd);
       const threadIds = yield* boundThreads(root);
-      const paths = [root, yield* worktreePathsForCheck().canonical(root)];
+      const contains = yield* projectInWorktree(root);
       for (const project of yield* projectStore.listShells()) {
-        if (!(yield* containsProjectRoot(paths, [project]))) continue;
+        if (!(yield* contains(project))) continue;
         const snapshot = yield* projections.getShellSnapshot({ projectId: project.id });
         for (const thread of [...snapshot.threads, ...snapshot.archivedThreads]) {
           if (thread.worktreePath === null) threadIds.push(thread.id);
@@ -640,33 +641,42 @@ const make = Effect.gen(function* () {
     return { projects, threads: [...snapshot.threads, ...snapshot.archivedThreads] };
   });
 
-  const containsProjectRoot = Effect.fn("StorageCleanup.containsProjectRoot")(function* (
-    worktreePaths: ReadonlyArray<string>,
-    projects: ReadonlyArray<{ readonly workspaceRoot: string }>,
-  ) {
+  const projectInWorktree = Effect.fn("StorageCleanup.projectInWorktree")(function* (root: string) {
+    const worktreePaths = [
+      root,
+      yield* nativeRealPath(root).pipe(Effect.orElseSucceed(() => root)),
+    ];
     const contains = (projectPath: string) =>
       worktreePaths.some(
         (worktreePath) =>
           pathKey(projectPath) === pathKey(worktreePath) || inside(worktreePath, projectPath),
       );
-    for (const project of projects) {
-      const projectPath = path.resolve(project.workspaceRoot);
+    return Effect.fnUntraced(function* ({ workspaceRoot }: { readonly workspaceRoot: string }) {
+      const projectPath = path.resolve(workspaceRoot);
       if (contains(projectPath)) return true;
-      const realPath = yield* resolveWorkspaceLocation(fs, path, projectPath).pipe(
+      const realPath = yield* nativeRealPathWithMissingTail(workspaceRoot).pipe(
         Effect.orElseSucceed(() => projectPath),
       );
-      if (contains(realPath)) return true;
-    }
-    return false;
+      return contains(realPath);
+    });
+  });
+  const containsProjectRoot = Effect.fn("StorageCleanup.containsProjectRoot")(function* (
+    root: string,
+    projects: ReadonlyArray<{ readonly workspaceRoot: string }>,
+  ) {
+    return Option.isSome(yield* Effect.findFirst(projects, yield* projectInWorktree(root)));
   });
 
   const reportOrphanWorktrees = Effect.fn("StorageCleanup.reportOrphanWorktrees")(function* (
-    roots: ReadonlyArray<string>,
+    managedRoots: ReadonlyArray<string>,
     projects: ReadonlyArray<{ readonly workspaceRoot: string }>,
     entries: StorageCleanupReportEntry[],
     scratchRoot: string | null,
     trigger: StorageCleanupReport["trigger"],
   ) {
+    const roots = yield* Effect.forEach(managedRoots, (root) =>
+      nativeRealPath(root).pipe(Effect.orElseSucceed(() => root)),
+    );
     const rows = yield* sql<{ worktreePath: string }>`
       SELECT DISTINCT json_extract(payload_json, '$.worktreePath') AS "worktreePath"
       FROM orchestration_v2_projection_threads
@@ -681,9 +691,7 @@ const make = Effect.gen(function* () {
       referenced.add(pathKey(resolved));
       referenced.add(
         pathKey(
-          yield* resolveWorkspaceLocation(fs, path, resolved).pipe(
-            Effect.orElseSucceed(() => resolved),
-          ),
+          yield* nativeRealPathWithMissingTail(folder).pipe(Effect.orElseSucceed(() => resolved)),
         ),
       );
     }
@@ -696,11 +704,11 @@ const make = Effect.gen(function* () {
     }
     const projectRoots = (yield* Effect.forEach(
       yield* Effect.filter(projects, (project) =>
-        fs.exists(path.resolve(project.workspaceRoot)).pipe(Effect.orElseSucceed(() => true)),
+        fs.exists(project.workspaceRoot).pipe(Effect.orElseSucceed(() => true)),
       ),
       (project) => {
         const resolved = path.resolve(project.workspaceRoot);
-        return fs.realPath(resolved).pipe(
+        return nativeRealPath(project.workspaceRoot).pipe(
           Effect.orElseSucceed(() => resolved),
           Effect.map((realPath) => [resolved, realPath]),
         );
@@ -791,8 +799,10 @@ const make = Effect.gen(function* () {
         }).pipe(Effect.orElseSucceed(() => undefined));
       }
     }
-    if (scratchRoot !== null)
-      for (const folder of yield* directories(scratchRoot, null)) yield* report(folder, true);
+    if (scratchRoot !== null) {
+      const root = yield* nativeRealPath(scratchRoot).pipe(Effect.orElseSucceed(() => scratchRoot));
+      for (const folder of yield* directories(root, null)) yield* report(folder, true);
+    }
 
     // Discovery runs git probes, so the measurement budget starts after it.
     const measurementDeadline = (yield* Clock.currentTimeMillis) + 30_000;
@@ -1276,7 +1286,7 @@ const make = Effect.gen(function* () {
             if (yield* occupies(guardedPaths, pending.root))
               return "a thread is preparing this worktree";
           const latestProjects = yield* projectStore.listShells();
-          if (yield* containsProjectRoot(guardedPaths, [project, ...latestProjects]))
+          if (yield* containsProjectRoot(guardedPath, [project, ...latestProjects]))
             return "contains a project checkout";
           const bindings = yield* projections.getThreadWorktreePaths({ includeArchived: true });
           const latest = yield* Effect.filter(bindings, (binding) =>
@@ -1467,7 +1477,7 @@ const make = Effect.gen(function* () {
         }
         const pathReason = yield* worktreePathReason(worktreePath);
         if (pathReason !== null) return keep(pathReason);
-        if (yield* containsProjectRoot(worktreePaths, [project, ...snapshot.projects]))
+        if (yield* containsProjectRoot(worktreePath, [project, ...snapshot.projects]))
           return keep("contains a project checkout");
         if (yield* branchChanged(worktreePath, thread.branch)) {
           // A deleted owner cannot follow, so its remaining subagents stay on its branch.

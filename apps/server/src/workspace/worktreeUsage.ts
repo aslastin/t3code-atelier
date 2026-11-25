@@ -1,10 +1,9 @@
 import { GitCommandError, type ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
-import { resolveWorkspaceLocation } from "./workspaceLease.ts";
+import { nativeRealPathWithMissingTail } from "../nativeRealPath.ts";
 
 // A setup can wait for a choice before the thread has a durable worktree binding.
 const pending = new Set<{ root: string; threadId: ThreadId }>();
@@ -19,7 +18,6 @@ export const pendingWorktrees = () => pending.values();
 export const makeWorktreeUseGuard = Effect.gen(function* () {
   const projects = yield* ProjectStore.ProjectStoreV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
-  const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   return Effect.fn("WorktreeUsage.ensureUnused")(function* (root: string, owner?: ThreadId) {
     const refuse = (detail: string, cause?: unknown) =>
@@ -31,7 +29,7 @@ export const makeWorktreeUseGuard = Effect.gen(function* () {
         cause,
       });
     const check = Effect.gen(function* () {
-      const physical = yield* resolveWorkspaceLocation(fs, path, root);
+      const physical = yield* nativeRealPathWithMissingTail(root);
       const contains = (parent: string, child: string) => {
         const relative = path.relative(parent, child);
         return (
@@ -41,7 +39,7 @@ export const makeWorktreeUseGuard = Effect.gen(function* () {
       const occupies = (folder: string) =>
         contains(root, folder)
           ? Effect.succeed(true)
-          : resolveWorkspaceLocation(fs, path, folder).pipe(
+          : nativeRealPathWithMissingTail(folder).pipe(
               Effect.map((resolved) => contains(physical, resolved)),
             );
       for (const entry of pendingWorktrees())

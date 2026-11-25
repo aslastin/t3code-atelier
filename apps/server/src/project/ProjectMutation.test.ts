@@ -34,7 +34,10 @@ describe("mutateProjectWithClone", () => {
           update: () => Effect.die("unused"),
           delete: () => Effect.fail(rejected),
         },
-        { discard: () => Effect.die("must not discard a project that still exists") },
+        {
+          discard: () => Effect.die("must not discard a project that still exists"),
+          withReviewedRemoval: () => Effect.die("unused"),
+        },
         { type: "project.delete", commandId: CommandId.make("rejected-delete"), projectId },
       ).pipe(Effect.flip);
 
@@ -58,6 +61,7 @@ describe("mutateProjectWithClone", () => {
           ),
       };
       const clones = {
+        withReviewedRemoval: () => Effect.die("unused"),
         discard: (id: ProjectId) => Effect.sync(() => void discarded.push(id)),
       };
 
