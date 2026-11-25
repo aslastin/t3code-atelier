@@ -1,7 +1,7 @@
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { T, useGT, useMessages } from "gt-react";
 import { reviewCommentRangeText } from "~/lib/composerContextRecords";
-import { MessageCircle, Trash2 } from "lucide-react";
+import { MessageCircle, Pencil, Trash2 } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { Button } from "~/components/ui/button";
@@ -37,6 +37,8 @@ interface DiffCommentAnnotationProps {
   onCancel: () => void;
   onComment: (text: string) => void;
   onDelete?: () => void;
+  /** Lets an added comment reopen the editor; saving hands back the new text. */
+  onEdit?: (text: string) => void;
   placeholder?: string;
   submitLabel?: string;
   pending?: boolean;
@@ -57,6 +59,7 @@ export function DiffCommentAnnotation({
   onCancel,
   onComment,
   onDelete,
+  onEdit,
   placeholder,
   submitLabel,
   pending = false,
@@ -67,20 +70,34 @@ export function DiffCommentAnnotation({
   const gt = useGT();
   const messages = useMessages();
   const [localDraftText, setLocalDraftText] = useState("");
-  const displayedText = kind === "draft" && !onTextChange ? localDraftText : text;
+  const [editText, setEditText] = useState<string | null>(null);
+  const editing = kind === "comment" && editText !== null;
+  const displayedText = editing
+    ? editText
+    : kind === "draft" && !onTextChange
+      ? localDraftText
+      : text;
+  const changeText = editing ? setEditText : (onTextChange ?? setLocalDraftText);
+  const cancel = editing ? () => setEditText(null) : onCancel;
+  const save = editing
+    ? (value: string) => {
+        setEditText(null);
+        onEdit?.(value);
+      }
+    : onComment;
   const trimmedText = displayedText.trim();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- focuses the draft textarea on the next animation frame after mount
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- focuses the draft textarea on the next animation frame after it opens
   useLayoutEffect(() => {
-    if (kind !== "draft" || !focusOnMount) return;
+    if ((kind !== "draft" && !editing) || !focusOnMount) return;
     const frame = window.requestAnimationFrame(() => {
       textareaRef.current?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [focusOnMount, kind]);
+  }, [editing, focusOnMount, kind]);
 
-  if (kind === "comment") {
+  if (kind === "comment" && !editing) {
     return (
       <div
         data-diff-comment-annotation
@@ -96,16 +113,28 @@ export function DiffCommentAnnotation({
         >
           {displayedText}
         </div>
-        {onDelete ? (
+        {onEdit || onDelete ? (
           <span className="-my-1 -mr-1 flex shrink-0 opacity-0 transition-opacity group-hover/comment:opacity-100 focus-within:opacity-100 max-sm:opacity-100">
-            <Button
-              variant="ghost-muted"
-              size="icon-xs"
-              aria-label={gt("Delete comment")}
-              onClick={onDelete}
-            >
-              <Trash2 className="size-3" />
-            </Button>
+            {onEdit ? (
+              <Button
+                variant="ghost-muted"
+                size="icon-xs"
+                aria-label={gt("Edit comment")}
+                onClick={() => setEditText(text)}
+              >
+                <Pencil className="size-3" />
+              </Button>
+            ) : null}
+            {onDelete ? (
+              <Button
+                variant="ghost-muted"
+                size="icon-xs"
+                aria-label={gt("Delete comment")}
+                onClick={onDelete}
+              >
+                <Trash2 className="size-3" />
+              </Button>
+            ) : null}
           </span>
         ) : null}
       </div>
@@ -144,7 +173,7 @@ export function DiffCommentAnnotation({
         aria-label={gt("Comment on lines {rangeLabel}", {
           rangeLabel: reviewCommentRangeText(rangeLabel, messages),
         })}
-        onValueChange={onTextChange ?? setLocalDraftText}
+        onValueChange={changeText}
         onFocus={(event) => {
           const end = event.currentTarget.value.length;
           event.currentTarget.setSelectionRange(end, end);
@@ -153,11 +182,11 @@ export function DiffCommentAnnotation({
           if (event.key === "Escape") {
             event.preventDefault();
             if (speech && speech.state.phase !== "idle") speech.cancel();
-            else onCancel();
+            else cancel();
           }
           if (isCommentSubmitShortcut(event, trimmedText, pending, speech?.blocksSubmission)) {
             event.preventDefault();
-            submit(speech, onComment);
+            submit(speech, save);
           }
         }}
       />
@@ -166,10 +195,10 @@ export function DiffCommentAnnotation({
           <T>⌘/Ctrl Enter to send</T>
         </span>
         {speech ? <TextFieldSpeechControls speech={speech} disabled={pending} /> : null}
-        <Button variant="ghost-muted" size="xs" onClick={onCancel}>
+        <Button variant="ghost-muted" size="xs" onClick={cancel}>
           <T>Cancel</T>
         </Button>
-        {secondaryAction ? (
+        {secondaryAction && !editing ? (
           <Button
             size="xs"
             variant="outline"
@@ -187,9 +216,11 @@ export function DiffCommentAnnotation({
         <Button
           size="xs"
           disabled={speech?.preparing || pending || (!speech?.blocksSubmission && !trimmedText)}
-          onClick={() => submit(speech, onComment)}
+          onClick={() => submit(speech, save)}
         >
-          {submitLabel ?? gt("Comment", { $context: "verb, submit button" })}
+          {editing
+            ? gt("Save", { $context: "verb" })
+            : (submitLabel ?? gt("Comment", { $context: "verb, submit button" }))}
         </Button>
       </div>
     </div>
@@ -202,7 +233,7 @@ export function DiffCommentAnnotation({
       ownerKey={ownerKey ?? rangeLabel}
       text={displayedText}
       textareaRef={textareaRef}
-      onTextChange={onTextChange ?? setLocalDraftText}
+      onTextChange={changeText}
       disabled={pending}
     >
       {renderDraft}

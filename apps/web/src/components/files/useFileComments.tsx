@@ -100,9 +100,7 @@ export function useFileComments({
     });
   };
 
-  const submitAnnotationEntry = (entry: FileCommentAnnotationEntry, text: string) => {
-    onDraftChange?.(false);
-    setSelectedRange(null);
+  const saveAnnotationEntry = (entry: FileCommentAnnotationEntry, text: string) => {
     addReviewComment(
       composerDraftTarget,
       buildFileReviewComment({
@@ -126,6 +124,12 @@ export function useFileComments({
         },
       })),
     );
+  };
+
+  const submitAnnotationEntry = (entry: FileCommentAnnotationEntry, text: string) => {
+    onDraftChange?.(false);
+    setSelectedRange(null);
+    saveAnnotationEntry(entry, text);
   };
 
   const beginComment = (range: SelectedLineRange) => {
@@ -184,6 +188,7 @@ export function useFileComments({
             onCancel={() => removeAnnotationEntry(entry)}
             onComment={(text) => submitAnnotationEntry(entry, text)}
             onDelete={() => removeAnnotationEntry(entry)}
+            onEdit={(text) => saveAnnotationEntry(entry, text)}
           />
         ))}
       </div>

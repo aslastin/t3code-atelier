@@ -37,9 +37,14 @@ export const usePullRequestReviewStore = create<PullRequestReviewStoreState>()((
   drafts: {},
   summaries: {},
   addComment: (key, comment) =>
-    set((state) => ({
-      drafts: { ...state.drafts, [key]: [...(state.drafts[key] ?? EMPTY), comment] },
-    })),
+    set((state) => {
+      const current = state.drafts[key] ?? EMPTY;
+      // An edit keeps the comment's place among the others.
+      const next = current.some((entry) => entry.id === comment.id)
+        ? current.map((entry) => (entry.id === comment.id ? comment : entry))
+        : [...current, comment];
+      return { drafts: { ...state.drafts, [key]: next } };
+    }),
   removeComment: (key, commentId) =>
     set((state) => {
       const remaining = (state.drafts[key] ?? EMPTY).filter((entry) => entry.id !== commentId);

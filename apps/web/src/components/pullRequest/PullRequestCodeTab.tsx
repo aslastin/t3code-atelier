@@ -1351,7 +1351,11 @@ function PullRequestCodeTab({
         <PendingReviewCommentCard
           key={comment.id}
           comment={comment}
+          completionScope={completionScope}
           onRemove={() => removeComment(reviewKey, comment.id)}
+          {...(canCommentOnLines
+            ? { onEdit: (body: string) => addComment(reviewKey, { ...comment, body }) }
+            : {})}
         />
       ))}
       {annotation.metadata.draft && draft && canSelectLines ? (

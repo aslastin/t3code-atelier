@@ -112,7 +112,11 @@ export function GuideFileDiff({
               <PendingReviewCommentCard
                 key={comment.id}
                 comment={comment}
+                completionScope={commenting?.completionScope ?? null}
                 onRemove={() => commenting?.onRemove(comment.id)}
+                {...(commenting?.canComment
+                  ? { onEdit: (body: string) => commenting.onEdit({ ...comment, body }) }
+                  : {})}
               />
             ))}
             {annotation.metadata.draft && draft !== null && commenting !== null ? (

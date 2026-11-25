@@ -12,6 +12,7 @@ import {
   HammerIcon,
   MessageSquareIcon,
   MessageSquarePlusIcon,
+  PencilIcon,
   Trash2Icon,
   CircleCheckIcon,
   CircleIcon,
@@ -28,6 +29,7 @@ import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PullRequestEditButton } from "./PullRequestEditButton";
 import { isCommentSubmitShortcut } from "../diffs/commentSubmitShortcut";
+import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import {
   editPullRequestThreadComment,
   mergePullRequestThreadComments,
@@ -88,12 +90,34 @@ export function getReviewPositionAnchor(position: PullRequestReviewPosition): {
 
 export function PendingReviewCommentCard({
   comment,
+  completionScope = null,
   onRemove,
+  onEdit,
 }: {
   comment: PendingReviewComment;
+  completionScope?: PullRequestCompletionScope | null;
   onRemove: () => void;
+  onEdit?: (body: string) => void;
 }) {
   const gt = useGT();
+  const [editBody, setEditBody] = useState<string | null>(null);
+  if (editBody !== null && onEdit) {
+    return (
+      <DiffCommentAnnotation
+        kind="draft"
+        rangeLabel={`${comment.path}:${getReviewPositionAnchor(comment.position).line}`}
+        text={editBody}
+        onTextChange={setEditBody}
+        completionScope={completionScope}
+        submitLabel={gt("Save", { $context: "verb" })}
+        onCancel={() => setEditBody(null)}
+        onComment={(body) => {
+          setEditBody(null);
+          onEdit(body);
+        }}
+      />
+    );
+  }
   return (
     <div
       className={cn(CARD_CLASS, "border-dashed")}
@@ -105,15 +129,26 @@ export function PendingReviewCommentCard({
         <span>
           <T>Pending. Sent when you submit the review</T>
         </span>
-        <Button
-          size="icon-xs"
-          variant="ghost"
-          className="ml-auto"
-          aria-label={gt("Discard this comment")}
-          onClick={onRemove}
-        >
-          <Trash2Icon className="size-3.5" />
-        </Button>
+        <span className="ml-auto flex">
+          {onEdit ? (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label={gt("Edit comment")}
+              onClick={() => setEditBody(comment.body)}
+            >
+              <PencilIcon className="size-3.5" />
+            </Button>
+          ) : null}
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label={gt("Discard this comment")}
+            onClick={onRemove}
+          >
+            <Trash2Icon className="size-3.5" />
+          </Button>
+        </span>
       </div>
       <p className="mt-2 whitespace-pre-wrap leading-relaxed">{comment.body}</p>
     </div>

@@ -30,6 +30,18 @@ describe("pull request review drafts", () => {
     ]);
   });
 
+  it("replaces an edited line comment in place", () => {
+    const store = usePullRequestReviewStore.getState();
+    store.addComment("review-a", comment("first"));
+    store.addComment("review-a", comment("second"));
+    store.addComment("review-a", comment("first", "Edited"));
+
+    expect(usePullRequestReviewStore.getState().drafts["review-a"]).toEqual([
+      comment("first", "Edited"),
+      comment("second"),
+    ]);
+  });
+
   it("keeps drafts on different hosts separate when a thread reviews the same repository and number", () => {
     const reference = {
       projectId: ProjectId.make("project-a"),

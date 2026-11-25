@@ -227,6 +227,11 @@ export function AnnotatableCodeView({
     setDraftText("");
   };
 
+  const editEntry = (entryId: string, text: string) => {
+    const comment = reviewComments.find((candidate) => candidate.id === entryId);
+    if (comment) addReviewComment(composerDraftTarget, { ...comment, text });
+  };
+
   const beginComment = (range: SelectedLineRange | null, context: DiffSelectionContext) => {
     if (!range) return;
     const item = context.item;
@@ -315,6 +320,7 @@ export function AnnotatableCodeView({
                 onCancel={() => removeEntry(entry.id)}
                 onComment={(text) => submitEntry(entry.id, text)}
                 onDelete={() => removeEntry(entry.id)}
+                onEdit={(text) => editEntry(entry.id, text)}
               />
             ))}
           </div>
