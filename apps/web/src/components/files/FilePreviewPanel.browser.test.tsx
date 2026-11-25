@@ -378,7 +378,14 @@ describe("read-only source comments", () => {
     await expect
       .element(screen.getByText("Edited first line", { exact: true }))
       .not.toBeInTheDocument();
-    expect(afterEdit.reviewComments.at(-1)?.diff).toBe("replaced");
+    expect(useComposerDraftStore.getState().getComposerDraft(threadRef)!.reviewComments).toEqual(
+      afterEdit.reviewComments,
+    );
+    expect(afterEdit.reviewComments.at(-1)).toMatchObject({
+      text: "Edited first line",
+      rangeLabel: "L1",
+      diff: "replaced",
+    });
     expect(state.writeFile).not.toHaveBeenCalled();
   });
 });

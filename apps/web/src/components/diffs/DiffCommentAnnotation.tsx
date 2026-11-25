@@ -41,6 +41,8 @@ interface DiffCommentAnnotationProps {
   onEdit?: (text: string) => void;
   /** The unsaved text while an added comment is being edited, owned by the caller. */
   editText?: string | null;
+  /** The text the edit opened with; saving it unchanged writes nothing. */
+  editStartText?: string | null;
   onEditTextChange?: (text: string | null) => void;
   placeholder?: string;
   submitLabel?: string;
@@ -64,6 +66,7 @@ export function DiffCommentAnnotation({
   onDelete,
   onEdit,
   editText = null,
+  editStartText = null,
   onEditTextChange,
   placeholder,
   submitLabel,
@@ -93,7 +96,7 @@ export function DiffCommentAnnotation({
   const save = edit
     ? (value: string) => {
         edit.change(null);
-        onEdit?.(value);
+        if (value !== (editStartText ?? text)) onEdit?.(value);
       }
     : onComment;
   const trimmedText = displayedText.trim();

@@ -97,6 +97,7 @@ export function PendingReviewCommentCard({
   onRemove,
   onEdit,
   editText = null,
+  editStartText = null,
   onEditTextChange,
 }: {
   comment: PendingReviewComment;
@@ -108,6 +109,8 @@ export function PendingReviewCommentCard({
   onEdit?: (body: string) => void;
   /** The unsaved body while the comment is being edited, owned by the caller. */
   editText?: string | null;
+  /** The body the edit opened with; saving it unchanged writes nothing. */
+  editStartText?: string | null;
   onEditTextChange?: (body: string | null) => void;
 }) {
   const gt = useGT();
@@ -129,8 +132,9 @@ export function PendingReviewCommentCard({
         onCancel={() => onEditTextChange(null)}
         onComment={(body) => {
           onEditTextChange(null);
-          // An unchanged comment keeps its identity, so a review in flight still counts it as sent.
-          if (body !== comment.body) onEdit(body);
+          // An untouched Save keeps the comment's identity, so a review in flight still counts it
+          // as sent, and it cannot overwrite an edit saved meanwhile from another view.
+          if (body !== (editStartText ?? comment.body)) onEdit(body);
         }}
       />
     );
