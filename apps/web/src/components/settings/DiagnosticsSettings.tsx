@@ -52,6 +52,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { useEnvironments } from "../../state/environments";
 import { EnvironmentScopeMenu } from "./SettingsScopeSentence";
+import { settingsScopeEnvironmentLabel } from "./settingsScopeAxis";
 import { DiagnosticsIntervalTime } from "./DiagnosticsIntervalTime";
 import { TelemetrySettings } from "./TelemetrySettings";
 
@@ -792,7 +793,7 @@ export function DiagnosticsSettingsPanel() {
 function DiagnosticsSettingsBody() {
   const gt = useGT();
   const m = useMessages();
-  const { environment, scope, groups, search, selectScope } = useSettingsScope();
+  const { environment, scope, groups, search, selectScope, singleEnvironment } = useSettingsScope();
   const { environments } = useEnvironments();
   const environmentId = environment?.environmentId ?? null;
   const canMaintainEnvironment = useEnvironmentScope(environmentId, AuthEnvironmentMaintainScope);
@@ -992,8 +993,8 @@ function DiagnosticsSettingsBody() {
         {gt("Diagnostics environment")}
         <EnvironmentScopeMenu
           ariaLabel={gt("Diagnostics environment")}
-          value={{ ...search, machine: environment.environmentId }}
-          singleEnvironment
+          value={search}
+          singleEnvironment={singleEnvironment}
           groups={groups}
           environments={environments}
           onChange={selectScope}
@@ -1002,7 +1003,8 @@ function DiagnosticsSettingsBody() {
       {(scope.kind === "all" || (scope.kind === "project" && scope.environmentId === null)) && (
         <p className="text-xs text-muted-foreground">
           {gt(
-            "Diagnostics show the first connected environment in this selection, giving priority to the primary environment.",
+            "Showing diagnostics for {environment}. The first connected environment in this selection is used, with priority given to the primary environment.",
+            { environment: settingsScopeEnvironmentLabel(environment, environments) },
           )}
         </p>
       )}

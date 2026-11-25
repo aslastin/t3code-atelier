@@ -36,6 +36,15 @@ test(
 
       const traces = browser.locator("#otlpTracesUrl");
       const exportSection = browser.locator("#telemetry-export");
+      const diagnosticsScope = screen.getByRole("button", /^Diagnostics environment:/);
+      await diagnosticsScope.tap();
+      await screen.getByRole("menuitemradio", /Scenario/).tap();
+      await expect(exportSection.getByText("Applies to Scenario", { exact: true })).toBeVisible();
+      await diagnosticsScope.tap();
+      await screen.getByRole("menuitemradio", "All environments").tap();
+      await expect(
+        exportSection.getByText("Applies to All environments", { exact: true }),
+      ).toBeVisible();
       await exportSection.getByText("What to send", { exact: true }).tap();
       const environmentChoice = exportSection.getByRole("button", /Scenario/);
       expect(

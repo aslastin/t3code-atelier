@@ -1109,13 +1109,16 @@ function ResourceTelemetryDiagnosticsBody({ environment }: ResourceTelemetryDiag
         <div className="overflow-hidden rounded-[inherit]">
           <div className="flex flex-col gap-3 border-b border-border/60 bg-linear-to-r from-muted/45 via-muted/20 to-transparent px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
             <div className="min-w-0">
-              <div className="text-xs font-semibold wrap-anywhere text-foreground">
-                {gt("All T3 processes")}
-              </div>
+              {environment && (
+                <div className="text-xs font-semibold wrap-anywhere text-foreground">
+                  {gt("T3 processes in {environment}", { environment: environment.label })}
+                </div>
+              )}
               <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
                 <T>
-                  Live native counters for the server, providers, terminals, desktop processes, and
-                  the monitor itself.
+                  Includes this server and its child processes, such as providers, terminals, and
+                  the resource monitor. Desktop processes are included when available from this
+                  environment.
                 </T>
               </p>
             </div>

@@ -184,7 +184,14 @@ export function TelemetrySettings() {
     return (
       <label key={key} className="flex items-center justify-between gap-4 py-2">
         <span className="grid gap-0.5">
-          <span className="text-sm font-medium">{label}</span>
+          <span className="flex flex-wrap items-baseline gap-x-2">
+            <span className="text-sm font-medium">{label}</span>
+            {key === "enabled" && (
+              <span id="telemetry-scope" className="text-xs text-muted-foreground">
+                {gt("Applies to {scope}", { scope: scope.label })}
+              </span>
+            )}
+          </span>
           {states.map((state) => (
             <span key={state} className="text-xs text-muted-foreground">
               {state}
@@ -194,6 +201,7 @@ export function TelemetrySettings() {
         <Switch
           size="sm"
           aria-label={label}
+          aria-describedby={key === "enabled" ? "telemetry-scope" : undefined}
           checked={anyOn}
           mixed={mixed}
           disabled={saving || !eligible.some((t) => !telemetryChoiceIssue(t, key, next))}
