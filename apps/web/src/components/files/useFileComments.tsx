@@ -87,8 +87,10 @@ export function useFileComments({
 
   const removeAnnotationEntry = (entry: FileCommentAnnotationEntry) => {
     const entryId = entry.id;
-    if (entry.kind === "draft") onDraftChange?.(false);
-    setSelectedRange(null);
+    if (entry.kind === "draft") {
+      onDraftChange?.(false);
+      setSelectedRange(null);
+    }
     removeReviewComment(composerDraftTarget, entryId);
     setLineAnnotations((current) => {
       return current.flatMap((annotation) => {
@@ -143,26 +145,15 @@ export function useFileComments({
         const entries = annotation.metadata.entries.filter((entry) => entry.kind !== "draft");
         return entries.length > 0 ? [{ ...annotation, metadata: { entries } }] : [];
       });
-      const existingIndex = withoutDraft.findIndex(
-        (annotation) => annotation.lineNumber === anchorLine,
-      );
-      if (existingIndex < 0) {
-        return [
-          ...withoutDraft,
-          {
-            lineNumber: anchorLine,
-            metadata: { entries: [draftEntry] },
-          },
-        ];
-      }
-      return withoutDraft.map((annotation, index) =>
-        index === existingIndex
-          ? {
-              ...annotation,
-              metadata: { entries: [...annotation.metadata.entries, draftEntry] },
-            }
-          : annotation,
-      );
+      const group = withoutDraft.find((annotation) => annotation.lineNumber === anchorLine);
+      // Pierre keys slots by index. Slot zero keeps the form mounted when another group is deleted.
+      return [
+        {
+          lineNumber: anchorLine,
+          metadata: { entries: [...(group?.metadata.entries ?? []), draftEntry] },
+        },
+        ...withoutDraft.filter((annotation) => annotation !== group),
+      ];
     });
   };
   const hasOpenCommentForm = lineAnnotations.some((annotation) =>

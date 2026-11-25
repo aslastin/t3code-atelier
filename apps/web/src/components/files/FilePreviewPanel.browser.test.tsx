@@ -308,13 +308,27 @@ describe("read-only source comments", () => {
         clickCount: 1,
       });
     };
+    await drag("mousePressed", 1);
+    await drag("mouseReleased", 1);
+    await userEvent.fill(
+      screen.getByRole("textbox", { name: "Comment on lines L1", exact: true }),
+      "Earlier comment",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Comment", exact: true }));
     await drag("mousePressed", 2);
     await drag("mouseMoved", 3);
     await drag("mouseReleased", 3);
-    await userEvent.fill(
-      screen.getByRole("textbox", { name: /Comment on lines/ }),
-      "Explain this.",
-    );
+    const draftField = screen.getByRole("textbox", {
+      name: "Comment on lines L2 to L3",
+      exact: true,
+    });
+    await userEvent.fill(draftField, "Explain this.");
+    const textarea = screen.container.querySelector("textarea")!;
+    textarea.setSelectionRange(1, 4);
+    await userEvent.click(screen.getByRole("button", { name: "Delete comment", exact: true }));
+    await expect.element(draftField).toHaveValue("Explain this.");
+    expect(draftField.element()).toBe(textarea);
+    expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([1, 4]);
     state.file = { ...state.file!, absolutePath: filePath, contents: "replaced", byteLength: 8 };
     await screen.rerender(panel());
     await expect
