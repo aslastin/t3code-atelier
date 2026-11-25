@@ -239,6 +239,18 @@ export const ProjectUpdatePayload = Schema.Struct({
 });
 export type ProjectUpdatePayload = typeof ProjectUpdatePayload.Type;
 
+export const ProjectRemovalFolder = Schema.Struct({
+  workspaceRoot: TrimmedNonEmptyString,
+  resolvedWorkspaceRoot: Schema.NullOr(Schema.NonEmptyString),
+});
+export type ProjectRemovalFolder = typeof ProjectRemovalFolder.Type;
+export const ProjectRemovalPreviewEntry = Schema.Struct({
+  ...ProjectRemovalFolder.fields,
+  projectId: ProjectId,
+  threadCount: NonNegativeInt,
+});
+export type ProjectRemovalPreviewEntry = typeof ProjectRemovalPreviewEntry.Type;
+
 export const ProjectMutation = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("project.create"),
@@ -261,6 +273,13 @@ export const ProjectMutation = Schema.Union([
     projectId: ProjectId,
     force: Schema.optional(Schema.Boolean),
   }),
+  // A distinct tag makes older servers reject a removal whose preconditions they cannot check.
+  Schema.Struct({
+    type: Schema.Literal("project.removeReviewed"),
+    commandId: CommandId,
+    projectId: ProjectId,
+    expectedFolder: ProjectRemovalFolder,
+  }),
 ]);
 export type ProjectMutation = typeof ProjectMutation.Type;
 
@@ -268,6 +287,7 @@ export class ProjectMutationError extends Schema.TaggedError<ProjectMutationErro
   "ProjectMutationError",
   {
     commandId: CommandId,
+    reason: Schema.optional(Schema.Literal("clone_running")),
     message: Schema.String,
     cause: Schema.optional(Schema.Defect()),
   },

@@ -27,6 +27,7 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
+import "~/index.css";
 import { act, render, type Screen } from "../../../test/render";
 import type { Project } from "../../types";
 
@@ -48,7 +49,7 @@ const state = vi.hoisted(() => ({
         input: DeleteProjectInput;
       }) => Promise<AsyncResult.Success<void>>
     >(),
-  confirm: vi.fn<() => Promise<boolean>>(),
+  preview: vi.fn(),
   releaseUploads: vi.fn(),
   clearDraft: vi.fn(),
   toast: vi.fn(),
@@ -77,7 +78,8 @@ vi.mock(import("~/state/environments"), async (original) => ({
 vi.mock(import("~/state/entities"), async (original) => ({
   ...(await original()),
   useProjects: (() => state.projects) as never,
-  useThreadShells: () => [],
+  readThreadShells: () => [],
+  readProjects: () => state.projects,
   useServerConfigs: (() =>
     new Map(
       environments.map((environment) => [environment.environmentId, environment.serverConfig]),
@@ -90,6 +92,7 @@ vi.mock(import("~/state/projects"), async (original) => {
     ...actual,
     projectEnvironment: {
       ...actual.projectEnvironment,
+      removalPreview: "preview",
       update: "update",
       delete: "delete",
     } as unknown as typeof actual.projectEnvironment,
@@ -97,16 +100,12 @@ vi.mock(import("~/state/projects"), async (original) => {
 });
 vi.mock(import("~/state/use-atom-command"), async (original) => ({
   ...(await original()),
-  useAtomCommand: ((command: "update" | "delete") => state[command]) as never,
+  useAtomCommand: ((command: "update" | "delete" | "preview") => state[command]) as never,
 }));
 vi.mock(import("~/hooks/useSettings"), async (original) => ({
   ...(await original()),
   useClientSettings: ((selector?: (settings: typeof DEFAULT_CLIENT_SETTINGS) => unknown) =>
     selector ? selector(DEFAULT_CLIENT_SETTINGS) : DEFAULT_CLIENT_SETTINGS) as never,
-}));
-vi.mock(import("~/localApi"), async (original) => ({
-  ...(await original()),
-  readLocalApi: (() => ({ dialogs: { confirm: state.confirm } })) as never,
 }));
 vi.mock(import("~/lib/composerDraftUploads"), async (original) => ({
   ...(await original()),
@@ -154,7 +153,12 @@ const environments = [primaryId, remoteId].map((environmentId) => ({
   serverConfig: {
     keybindings: DEFAULT_RESOLVED_KEYBINDINGS,
     settings: DEFAULT_SERVER_SETTINGS,
-    environment: { platform: { machine: "server" }, capabilities: { projectOrganization: true } },
+    environment: {
+      platform: { machine: "server" },
+      get capabilities() {
+        return { projectOrganization: true, reviewedProjectRemoval: true };
+      },
+    },
   },
 }));
 const session = (scopes: ReadonlyArray<AuthEnvironmentScope>): AuthSessionState => ({
@@ -213,8 +217,19 @@ function setup() {
     );
     return AsyncResult.success(undefined);
   });
+  state.preview.mockImplementation(async ({ environmentId }: { environmentId: EnvironmentId }) =>
+    AsyncResult.success(
+      state.projects
+        .filter((project) => project.environmentId === environmentId)
+        .map((project) => ({
+          projectId: project.id,
+          workspaceRoot: project.workspaceRoot,
+          resolvedWorkspaceRoot: project.workspaceRoot,
+          threadCount: 0,
+        })),
+    ),
+  );
   state.delete.mockResolvedValue(AsyncResult.success(undefined));
-  state.confirm.mockResolvedValue(true);
   useComposerDraftStore.setState({ clearProjectDraftThreadId: state.clearDraft });
 }
 
@@ -309,7 +324,7 @@ const removeCheckout = (screen: Screen, root: string) =>
   screen.container.querySelector<HTMLButtonElement>(`[aria-label="Remove checkout ${root}"]`)!;
 const removeAll = (screen: Screen) =>
   [...screen.container.querySelectorAll("button")].find((button) =>
-    button.textContent?.includes("Remove all entries"),
+    button.textContent?.includes("Review entries"),
   )!;
 
 async function grant(id: EnvironmentId, result: SessionResult) {
@@ -409,10 +424,15 @@ describe("project settings permissions", () => {
     expect(removeAll(screen).disabled).toBe(true);
 
     await userEvent.click(removeCheckout(screen, "/work/primary"));
+    await page.getByRole("button", { name: "Remove 1 entry", exact: true }).click();
     await vi.waitFor(() => expect(state.delete).toHaveBeenCalledOnce());
     expect(state.delete).toHaveBeenCalledWith({
       environmentId: primaryId,
-      input: { projectId: state.projects[0]!.id, force: true },
+      input: {
+        projectId: state.projects[0]!.id,
+        expectedFolder: { workspaceRoot: "/work/primary", resolvedWorkspaceRoot: "/work/primary" },
+        force: true,
+      },
     });
     await vi.waitFor(() => expect(state.releaseUploads).toHaveBeenCalledOnce());
     expect(state.clearDraft).toHaveBeenCalledOnce();
@@ -439,6 +459,7 @@ describe("project settings permissions", () => {
     await using screen = await mountPanel();
 
     await userEvent.click(removeCheckout(screen, "/work/remote"));
+    await page.getByRole("button", { name: "Remove 1 entry", exact: true }).click();
     await vi.waitFor(() => expect(state.releaseUploads).toHaveBeenCalledOnce());
 
     expect(useComposerDraftStore.getState().getDraftSession(draftId)).toMatchObject({
@@ -452,21 +473,65 @@ describe("project settings permissions", () => {
 
   it("rechecks every removal target after confirmation before deleting or clearing drafts", async () => {
     setup();
-    const confirmed = deferred<boolean>();
-    state.confirm.mockReturnValueOnce(confirmed.promise);
     await using screen = await mountPanel();
     await userEvent.click(removeAll(screen));
-    expect(state.confirm).toHaveBeenCalledOnce();
+    await expect.element(page.getByRole("alertdialog")).toBeVisible();
 
     await grant(remoteId, AsyncResult.success(session([])));
-    await act(async () => {
-      confirmed.resolve(true);
-      await confirmed.promise;
-    });
+    await page.getByRole("button", { name: "Remove 2 entries", exact: true }).click();
     await expectProjectAccessDeniedToast("Failed to remove project");
     expect(state.delete).not.toHaveBeenCalled();
     expect(state.releaseUploads).not.toHaveBeenCalled();
     expect(state.clearDraft).not.toHaveBeenCalled();
+  });
+
+  it("requires an upgrade before sending a deletion to an older environment", async () => {
+    setup();
+    using _old = vi
+      .spyOn(environments[1]!.serverConfig.environment, "capabilities", "get")
+      .mockReturnValue({ projectOrganization: true, reviewedProjectRemoval: false });
+    await using screen = await mountPanel();
+    await userEvent.click(removeAll(screen));
+    expect(state.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Update this environment to review and remove project entries.",
+      }),
+    );
+    expect(state.delete).not.toHaveBeenCalled();
+  });
+
+  it("stops before the first deletion when another client moves a reviewed project", async () => {
+    setup();
+    await using screen = await mountPanel();
+    await userEvent.click(removeAll(screen));
+    await expect.element(page.getByRole("alertdialog")).toBeVisible();
+    state.projects = state.projects.map((project) =>
+      project.environmentId === remoteId ? { ...project, workspaceRoot: "/elsewhere" } : project,
+    );
+    await page.getByRole("button", { name: "Remove 2 entries", exact: true }).click();
+    expect(state.delete).not.toHaveBeenCalled();
+    expect(state.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "The project folder changed. Review the removal again." }),
+    );
+  });
+
+  it("keeps a newer selection while a confirmed group removal finishes", async () => {
+    setup();
+    const pending = deferred<AsyncResult.Success<void>>();
+    state.delete.mockReturnValueOnce(pending.promise);
+    await using screen = await mountPanel();
+    await userEvent.click(removeAll(screen));
+    await page.getByRole("button", { name: "Remove 2 entries", exact: true }).click();
+    await vi.waitFor(() => expect(state.delete).toHaveBeenCalledOnce());
+    await act(async () => {
+      await screen.router.navigate({
+        to: "/settings/projects",
+        search: { project: "another-project" },
+      });
+      pending.resolve(AsyncResult.success(undefined));
+    });
+    await vi.waitFor(() => expect(state.releaseUploads).toHaveBeenCalledTimes(2));
+    expect(screen.router.state.location.search.project).toBe("another-project");
   });
 
   it("does not save an edit whose grant was revoked mid-edit, and recovers when restored", async () => {
@@ -792,6 +857,7 @@ it("returns to the project overview after removal, clearing the selection but ke
   )!;
 
   await userEvent.click(removeProject);
+  await page.getByRole("button", { name: "Remove 1 entry", exact: true }).click();
 
   await vi.waitFor(() => {
     expect(screen.router.state.location.pathname).toBe("/settings/projects");

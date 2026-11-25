@@ -101,31 +101,6 @@ export function useOlderSettledShelfGrowth(
   }, [wanted, pages, grow]);
 }
 
-/**
- * Threads of these projects that this client does not hold (older settled threads), for counts
- * shown outside the shelf, such as a removal confirm.
- */
-export function readUnloadedThreadCount(
-  members: ReadonlyArray<{ readonly environmentId: EnvironmentId; readonly id: ProjectId }>,
-  threads: ReadonlyArray<EnvironmentThreadShell>,
-): number {
-  return unloadedOlderSettledCount({
-    olderSettled: (environmentId) =>
-      appAtomRegistry.get(olderSettledThreads.olderSettledAtom(environmentId)),
-    scopes: [...new Set(members.map((member) => member.environmentId))].map((environmentId) => ({
-      environmentId,
-      projectIds: members.flatMap((member) =>
-        member.environmentId === environmentId ? [member.id] : [],
-      ),
-    })),
-    threads: threads.filter((thread) =>
-      members.some(
-        (member) => member.environmentId === thread.environmentId && member.id === thread.projectId,
-      ),
-    ),
-  });
-}
-
 /** How many older settled threads one project has, loaded or not, kept current for render. */
 export function useOlderSettledCount(
   project: { readonly environmentId: EnvironmentId; readonly id: ProjectId } | null,

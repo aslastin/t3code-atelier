@@ -164,6 +164,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   agentActivityPublishing: Schema.optionalKey(Schema.Boolean),
   projectCloneTracking: Schema.optionalKey(Schema.Boolean),
   /** Server keeps `pinned` and `archived` from project.update. Older servers drop them. */
+  reviewedProjectRemoval: Schema.optionalKey(Schema.Boolean),
   projectOrganization: Schema.optionalKey(Schema.Boolean),
   /** Server answers projects.listIgnoredFiles. */
   ignoredFileListing: Schema.optionalKey(Schema.Boolean),

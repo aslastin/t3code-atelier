@@ -2,11 +2,25 @@ import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { T, useGT } from "gt-react-native";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { AppText as Text, AppTextInput } from "../../components/ui/AppText";
+import { Sheet } from "../../components/ui/Sheet";
 import { Button } from "../../components/ui/Button";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import * as Dialog from "../../components/ui/Dialog";
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
-import { planProjectRemoval } from "@t3tools/client-runtime/state/projects";
+import {
+  planProjectRemoval,
+  differentRepositoryFoldersNotice,
+  ambiguousProjectFoldersNotice,
+  changedProjectFolderNotice,
+  removalEnvironmentLabel,
+  removalFoldersMatch,
+  readProjectRemovalPreview,
+  reviewedFoldersMatch,
+  removalServerUpdateNotice,
+  projectRemovalNotice,
+  removalEntryDetail,
+  removeEntriesLabel,
+} from "@t3tools/client-runtime/state/projects";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -15,14 +29,17 @@ import {
   deriveProjectGroupLabel,
   type ProjectGroup,
 } from "@t3tools/client-runtime/state/project-grouping";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import type {
+  EnvironmentProject,
+  EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/shell";
 import { useNavigation } from "@react-navigation/native";
 import { useRef, useState } from "react";
 import { Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { projectEnvironment } from "../../state/projects";
-import { useThreadShells } from "../../state/entities";
+import { environmentProjects, projectEnvironment } from "../../state/projects";
+import { environmentThreadShells } from "../../state/threads";
 import { appAtomRegistry } from "../../state/atom-registry";
 import {
   clearComposerDraft,
@@ -46,7 +63,6 @@ import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-en
 import { leaveSettingsPage } from "./settings-navigation";
 import { workspaceHasColumns } from "../layout/workspace/workspace-selection-store";
 import { DEFAULT_SETTINGS_PAGE } from "../layout/workspace/workspace-tab-navigation";
-import { readUnloadedThreadCount } from "../../state/olderSettledShelf";
 import { m } from "../../i18n/messages";
 
 export function SettingsProjectOverviewRouteScreen() {
@@ -153,12 +169,12 @@ function ProjectOverviewContent(props: {
   });
   const [draftName, setDraftName] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const threads = useThreadShells();
   const allMembers = props.group.members.map((member) => member.project);
   const removableEnvironments = useEnvironmentsWithScope(allMembers, AuthOrchestrationOperateScope);
   const canRemoveGroup = props.members.every((member) =>
     removableEnvironments.has(member.environmentId),
   );
+  const readPreview = useAtomCommand(projectEnvironment.removalPreview, { reportFailure: false });
   const deleteProject = useAtomCommand(projectEnvironment.delete, { reportFailure: false });
   const updateProject = useAtomCommand(projectEnvironment.update, {
     label: "project name update",
@@ -237,75 +253,144 @@ function ProjectOverviewContent(props: {
     return false;
   };
 
-  const removeMembers = (members: readonly EnvironmentProject[]) => {
-    if (!checkRemovalAccess(members) || !startRemoval()) return;
-    const projectKey = props.projectKey;
-    const plan = planProjectRemoval(
-      {
-        members: members.map((member) => ({
-          ...member,
-          environmentLabel: props.environments.find(
-            (entry) => entry.environmentId === member.environmentId,
-          )?.label,
-        })),
-        groupMemberCount: props.members.length,
-        hasOtherMembers: props.hasOtherMembers,
-        displayName,
-        threads,
-        unloadedThreadCount: readUnloadedThreadCount(members, threads),
-      },
-      m,
-    );
-    Dialog.confirm({
-      title: plan.targetKind === "checkout" ? gt("Remove checkout") : gt("Remove project"),
-      message: plan.confirmationMessage,
-      confirmText: plan.targetKind === "checkout" ? gt("Remove checkout") : gt("Remove project"),
-      destructive: true,
-      onCancel: finishRemoval,
-      onConfirm: () => {
-        void (async () => {
-          setIsRemoving(true);
-          if (!checkRemovalAccess(members)) return;
-          for (const member of members) {
-            if (!checkRemovalAccess([member])) return;
-            const result = await deleteProject({
-              environmentId: member.environmentId,
-              input: { projectId: member.id, force: true },
-            });
-            if (result._tag === "Failure") {
-              if (!isAtomCommandInterrupted(result)) {
-                const error = squashAtomCommandFailure(result);
-                Dialog.alert(
-                  gt('Failed to remove "{project}"', { project: member.title }),
-                  error instanceof Error
-                    ? (errorDisplayMessage(error, m) ?? error.message)
-                    : gt("An error occurred."),
-                );
-              }
-              return;
-            }
-            await waitForComposerDraftsLoaded()
-              .then(() => {
-                for (const draftKey of findNewTaskDraftKeys(
-                  appAtomRegistry.get(composerDraftsAtom),
-                  {
-                    environmentId: member.environmentId,
-                    projectId: member.id,
-                  },
-                )) {
-                  clearComposerDraft(draftKey);
-                }
-              })
-              .catch((error) => {
-                console.warn("[project-removal] could not clear composer drafts", error);
-              });
-          }
-          // Nothing is left to show once the whole project is gone.
-          if (plan.targetKind === "project") props.onProjectRemoved(projectKey);
-        })().finally(finishRemoval);
-      },
-    });
+  type RemovalPlan = ReturnType<
+    typeof planProjectRemoval<EnvironmentProject, EnvironmentThreadShell>
+  >;
+  const [removal, setRemoval] = useState<RemovalPlan | null>(null);
+  const [includeNested, setIncludeNested] = useState(false);
+  const foldersStillMatch = (members: readonly EnvironmentProject[]) => {
+    if (removalFoldersMatch(members, appAtomRegistry.get(environmentProjects.projectsAtom)))
+      return true;
+    Dialog.alert(gt("Failed to remove project"), m(changedProjectFolderNotice));
+    return false;
   };
+  const loadPreview = async (members: readonly EnvironmentProject[]) => {
+    const result = await readProjectRemovalPreview(members, readPreview);
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        Dialog.alert(
+          gt("Failed to remove project"),
+          error instanceof Error
+            ? (errorDisplayMessage(error, m) ?? error.message)
+            : gt("An error occurred."),
+        );
+      }
+      return null;
+    }
+    return result.value;
+  };
+  const reviewRemoval = async (members: readonly EnvironmentProject[]) => {
+    if (!checkRemovalAccess(members)) return;
+    if (
+      members.some(
+        (member) =>
+          !props.connectedTargets.find((env) => env.environmentId === member.environmentId)
+            ?.serverConfig?.environment.capabilities.reviewedProjectRemoval,
+      )
+    ) {
+      Dialog.alert(gt("Failed to remove project"), m(removalServerUpdateNotice));
+      return;
+    }
+    if (!startRemoval()) return;
+    setIsRemoving(true);
+    const preview = await loadPreview(members);
+    finishRemoval();
+    if (!preview) return;
+    if (!foldersStillMatch(members)) return;
+    const plan = planProjectRemoval({
+      members,
+      groupMembers: allMembers,
+      projects: appAtomRegistry.get(environmentProjects.projectsAtom),
+      threads: appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
+      preview,
+    });
+    if (plan.foldersChanged) {
+      Dialog.alert(gt("Failed to remove project"), m(changedProjectFolderNotice));
+      return;
+    }
+    if (plan.ambiguousFolders) {
+      Dialog.alert(gt("Failed to remove project"), m(ambiguousProjectFoldersNotice));
+      return;
+    }
+    setIncludeNested(false);
+    setRemoval(plan);
+  };
+  const removeEntries = async (entries: RemovalPlan["entries"]) => {
+    const members = entries.map((entry) => entry.member);
+    const projectKey = props.projectKey;
+    if (!checkRemovalAccess(members) || !foldersStillMatch(members)) return;
+    const preview = await loadPreview(members);
+    if (!preview) return;
+    if (!reviewedFoldersMatch(entries, preview)) {
+      Dialog.alert(gt("Failed to remove project"), m(changedProjectFolderNotice));
+      return;
+    }
+    for (const { member, expectedFolder } of entries) {
+      if (!checkRemovalAccess([member]) || !foldersStillMatch([member])) return;
+      const result = await deleteProject({
+        environmentId: member.environmentId,
+        input: { projectId: member.id, expectedFolder, force: true },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          Dialog.alert(
+            gt('Failed to remove "{project}"', { project: member.title }),
+            error instanceof Error
+              ? (errorDisplayMessage(error, m) ?? error.message)
+              : gt("An error occurred."),
+          );
+        }
+        return;
+      }
+      await waitForComposerDraftsLoaded()
+        .then(() => {
+          for (const draftKey of findNewTaskDraftKeys(appAtomRegistry.get(composerDraftsAtom), {
+            environmentId: member.environmentId,
+            projectId: member.id,
+          })) {
+            clearComposerDraft(draftKey);
+          }
+        })
+        .catch((error) => {
+          console.warn("[project-removal] could not clear composer drafts", error);
+        });
+    }
+    if (
+      allMembers.every((candidate) =>
+        members.some(
+          (member) =>
+            member.environmentId === candidate.environmentId && member.id === candidate.id,
+        ),
+      )
+    ) {
+      props.onProjectRemoved(projectKey);
+    }
+  };
+  const selectedEntries = removal?.entriesToRemove(includeNested) ?? [];
+  const confirmRemoval = () => {
+    if (!startRemoval()) return;
+    setRemoval(null);
+    setIsRemoving(true);
+    void removeEntries(selectedEntries).finally(finishRemoval);
+  };
+  const removalRows = (entries: RemovalPlan["entries"]) =>
+    entries.map(({ member, threadCount }) => (
+      <View key={`${member.environmentId}:${member.id}`}>
+        <Text className="text-base text-foreground" selectable>
+          {member.workspaceRoot}
+        </Text>
+        <Text className="text-sm text-foreground-muted">
+          {m(
+            removalEntryDetail(
+              removalEnvironmentLabel(member.environmentId, props.connectedTargets),
+              threadCount,
+            ),
+          )}
+        </Text>
+      </View>
+    ));
 
   const saveName = () => {
     if (!canSave) return;
@@ -433,7 +518,7 @@ function ProjectOverviewContent(props: {
                 <RemoveCheckoutAction
                   member={member}
                   disabled={isRemoving}
-                  onPress={() => removeMembers([member])}
+                  onPress={() => reviewRemoval([member])}
                 />
               ) : null}
             </View>
@@ -464,30 +549,53 @@ function ProjectOverviewContent(props: {
         <SettingsActionRow
           icon="trash"
           label={
-            props.hasOtherMembers
-              ? gt("Remove checkout")
-              : props.members.length > 1
-                ? gt("Remove this project everywhere")
+            props.members.length > 1
+              ? gt("Review entries")
+              : props.hasOtherMembers
+                ? gt("Remove checkout")
                 : gt("Remove project")
           }
-          description={
-            props.hasOtherMembers
-              ? gt(
-                  "Deletes the selected machine's checkout entries and their threads. Other machines and files on disk are not touched.",
-                )
-              : props.members.length > 1
-                ? gt(
-                    "{count, plural, other {Deletes all {count} checkout entries and their threads on every machine. Files on disk are not touched.}}",
-                    { count: props.members.length },
-                  )
-                : gt("Deletes the project entry and its threads. Files on disk are not touched.")
-          }
+          description={gt("Review the folders and threads to remove.")}
           tone="danger"
           disabled={!canRemoveGroup || isRemoving}
           loading={isRemoving}
-          onPress={() => removeMembers(props.members)}
+          onPress={() => reviewRemoval(props.members)}
         />
       </SettingsSection>
+      {removal && (
+        <Sheet title={gt("Remove project entries")} onClose={() => setRemoval(null)}>
+          <ScrollView
+            contentInsetAdjustmentBehavior="automatic"
+            contentContainerClassName="gap-4 p-5 pb-10"
+          >
+            <Text className="text-base text-foreground-muted">{m(projectRemovalNotice)}</Text>
+            {removal.differentRepositoryFolders && (
+              <Text className="text-base text-foreground">
+                {m(differentRepositoryFoldersNotice)}
+              </Text>
+            )}
+            {removalRows(removal.entries)}
+            {removal.nestedEntries.length > 0 && (
+              <>
+                <SettingsSwitchRow
+                  icon="folder"
+                  label={gt("Also remove nested projects")}
+                  value={includeNested}
+                  onValueChange={setIncludeNested}
+                />
+                {removalRows(removal.nestedEntries)}
+              </>
+            )}
+            <Button
+              fullWidth
+              tone="danger"
+              label={m(removeEntriesLabel(selectedEntries.length))}
+              onPress={confirmRemoval}
+            />
+            <Button fullWidth label={gt("Cancel")} onPress={() => setRemoval(null)} />
+          </ScrollView>
+        </Sheet>
+      )}
     </>
   );
 }

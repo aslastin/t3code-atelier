@@ -2051,7 +2051,7 @@ export function requiredScopesForServerSettingsPatch(
 export function requiredScopesForProjectMutation(
   mutation: ProjectMutation,
 ): ReadonlyArray<AuthEnvironmentScope> {
-  if (mutation.type === "project.delete" || mutation.scripts === undefined) {
+  if (!("scripts" in mutation) || mutation.scripts === undefined) {
     return [AuthOrchestrationOperateScope];
   }
   return [
