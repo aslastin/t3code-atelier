@@ -486,6 +486,8 @@ export type ProjectReadFileInput = typeof ProjectReadFileInput.Type;
 
 export const ProjectReadFileResult = Schema.Struct({
   relativePath: Schema.NonEmptyString,
+  // Host paths such as ~/notes.txt can only be expanded by the environment.
+  absolutePath: Schema.optional(Schema.NonEmptyString),
   contents: Schema.String,
   byteLength: NonNegativeInt,
   truncated: Schema.Boolean,
