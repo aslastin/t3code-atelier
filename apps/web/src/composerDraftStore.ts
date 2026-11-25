@@ -4156,9 +4156,12 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             (contextInsertionHandlers.get(threadKey)?.([reference]) ?? false);
           set((state) => {
             const existing = state.draftsByThreadKey[threadKey] ?? createEmptyThreadDraft();
-            const reviewComments = existing.reviewComments.filter(
-              (entry) => entry.id !== comment.id,
-            );
+            // An edit keeps the comment's place among the others.
+            const reviewComments = existing.reviewComments.some((entry) => entry.id === comment.id)
+              ? existing.reviewComments.map((entry) =>
+                  entry.id === comment.id ? { ...comment } : entry,
+                )
+              : [...existing.reviewComments, { ...comment }];
             return {
               draftsByThreadKey: {
                 ...state.draftsByThreadKey,
@@ -4168,7 +4171,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                     !shouldPlaceReference || placedAtCaret
                       ? existing.prompt
                       : appendInlineContextReference(existing.prompt, reference),
-                  reviewComments: [...reviewComments, { ...comment }],
+                  reviewComments,
                 },
               },
             };

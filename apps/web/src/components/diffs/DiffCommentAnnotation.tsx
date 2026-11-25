@@ -39,6 +39,9 @@ interface DiffCommentAnnotationProps {
   onDelete?: () => void;
   /** Lets an added comment reopen the editor; saving hands back the new text. */
   onEdit?: (text: string) => void;
+  /** The unsaved text while an added comment is being edited, owned by the caller. */
+  editText?: string | null;
+  onEditTextChange?: (text: string | null) => void;
   placeholder?: string;
   submitLabel?: string;
   pending?: boolean;
@@ -60,6 +63,8 @@ export function DiffCommentAnnotation({
   onComment,
   onDelete,
   onEdit,
+  editText = null,
+  onEditTextChange,
   placeholder,
   submitLabel,
   pending = false,
@@ -70,18 +75,21 @@ export function DiffCommentAnnotation({
   const gt = useGT();
   const messages = useMessages();
   const [localDraftText, setLocalDraftText] = useState("");
-  const [editText, setEditText] = useState<string | null>(null);
-  const editing = kind === "comment" && editText !== null;
-  const displayedText = editing
-    ? editText
+  const edit =
+    kind === "comment" && editText !== null && onEditTextChange
+      ? { text: editText, change: onEditTextChange }
+      : null;
+  const editing = edit !== null;
+  const displayedText = edit
+    ? edit.text
     : kind === "draft" && !onTextChange
       ? localDraftText
       : text;
-  const changeText = editing ? setEditText : (onTextChange ?? setLocalDraftText);
-  const cancel = editing ? () => setEditText(null) : onCancel;
-  const save = editing
+  const changeText = edit ? edit.change : (onTextChange ?? setLocalDraftText);
+  const cancel = edit ? () => edit.change(null) : onCancel;
+  const save = edit
     ? (value: string) => {
-        setEditText(null);
+        edit.change(null);
         onEdit?.(value);
       }
     : onComment;
@@ -113,14 +121,14 @@ export function DiffCommentAnnotation({
         >
           {displayedText}
         </div>
-        {onEdit || onDelete ? (
+        {(onEdit && onEditTextChange) || onDelete ? (
           <span className="-my-1 -mr-1 flex shrink-0 opacity-0 transition-opacity group-hover/comment:opacity-100 focus-within:opacity-100 max-sm:opacity-100">
-            {onEdit ? (
+            {onEdit && onEditTextChange ? (
               <Button
                 variant="ghost-muted"
                 size="icon-xs"
                 aria-label={gt("Edit comment")}
-                onClick={() => setEditText(text)}
+                onClick={() => onEditTextChange(text)}
               >
                 <Pencil className="size-3" />
               </Button>

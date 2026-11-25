@@ -2580,10 +2580,11 @@ describe("composerDraftStore inline context references", () => {
       `look ${reviewLink} ${laterLink} `,
     );
     expect(
-      draftFor(threadId, TEST_ENVIRONMENT_ID)?.reviewComments.find(
-        (comment) => comment.id === "rc-1",
-      )?.text,
-    ).toBe("edited");
+      draftFor(threadId, TEST_ENVIRONMENT_ID)?.reviewComments.map(({ id, text }) => [id, text]),
+    ).toEqual([
+      ["rc-1", "edited"],
+      ["rc-2", "Why?"],
+    ]);
     store.removeReviewComment(threadRef, "rc-1");
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe(`look ${laterLink} `);
   });

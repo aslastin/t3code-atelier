@@ -21,6 +21,7 @@ import {
 import { nextFileCommentId } from "../files/fileCommentAnnotations";
 import { DiffCommentAnnotation } from "./DiffCommentAnnotation";
 import { StyledDiffCodeView, type StyledDiffCodeViewOptions } from "./StyledDiffCodeView";
+import { useCommentEdits } from "./useCommentEdits";
 
 interface DiffCommentAnnotationEntry {
   id: string;
@@ -142,6 +143,7 @@ export function AnnotatableCodeView({
     annotation: DiffCommentLineAnnotation;
   } | null>(null);
   const [draftText, setDraftText] = useState("");
+  const edits = useCommentEdits();
 
   const filesByKey = new Map(files.map((file) => [file.fileKey, file]));
   if (
@@ -321,6 +323,7 @@ export function AnnotatableCodeView({
                 onComment={(text) => submitEntry(entry.id, text)}
                 onDelete={() => removeEntry(entry.id)}
                 onEdit={(text) => editEntry(entry.id, text)}
+                {...edits.for(entry.id)}
               />
             ))}
           </div>

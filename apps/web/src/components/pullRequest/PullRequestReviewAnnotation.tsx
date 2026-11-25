@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  ProjectId,
   PullRequestActor,
   PullRequestDiffSide,
   PullRequestRef,
@@ -90,29 +91,41 @@ export function getReviewPositionAnchor(position: PullRequestReviewPosition): {
 
 export function PendingReviewCommentCard({
   comment,
+  environmentId,
+  projectId,
   completionScope = null,
   onRemove,
   onEdit,
+  editText = null,
+  onEditTextChange,
 }: {
   comment: PendingReviewComment;
+  /** With an environment, the edit can be dictated, as when the comment was written. */
+  environmentId?: EnvironmentId | undefined;
+  projectId?: ProjectId | null | undefined;
   completionScope?: PullRequestCompletionScope | null;
   onRemove: () => void;
   onEdit?: (body: string) => void;
+  /** The unsaved body while the comment is being edited, owned by the caller. */
+  editText?: string | null;
+  onEditTextChange?: (body: string | null) => void;
 }) {
   const gt = useGT();
-  const [editBody, setEditBody] = useState<string | null>(null);
-  if (editBody !== null && onEdit) {
+  if (editText !== null && onEdit && onEditTextChange) {
     return (
       <DiffCommentAnnotation
+        environmentId={environmentId}
+        projectId={projectId}
+        ownerKey={JSON.stringify([environmentId, "pending-review-comment", comment.id])}
         kind="draft"
         rangeLabel={`${comment.path}:${getReviewPositionAnchor(comment.position).line}`}
-        text={editBody}
-        onTextChange={setEditBody}
+        text={editText}
+        onTextChange={onEditTextChange}
         completionScope={completionScope}
         submitLabel={gt("Save", { $context: "verb" })}
-        onCancel={() => setEditBody(null)}
+        onCancel={() => onEditTextChange(null)}
         onComment={(body) => {
-          setEditBody(null);
+          onEditTextChange(null);
           onEdit(body);
         }}
       />
@@ -130,12 +143,12 @@ export function PendingReviewCommentCard({
           <T>Pending. Sent when you submit the review</T>
         </span>
         <span className="ml-auto flex">
-          {onEdit ? (
+          {onEdit && onEditTextChange ? (
             <Button
               size="icon-xs"
               variant="ghost"
               aria-label={gt("Edit comment")}
-              onClick={() => setEditBody(comment.body)}
+              onClick={() => onEditTextChange(comment.body)}
             >
               <PencilIcon className="size-3.5" />
             </Button>

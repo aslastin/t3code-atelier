@@ -32,6 +32,7 @@ import {
   PendingReviewCommentCard,
   toViewerSide,
 } from "../PullRequestReviewAnnotation";
+import { useCommentEdits } from "../../diffs/useCommentEdits";
 import type { PendingReviewComment } from "../pullRequestReviewStore";
 import { excerptRows, fileDiffRows, rowsToPatch } from "@t3tools/client-runtime/review-guide-tour";
 import type { PullRequestCompletionScope } from "../PullRequestMarkdownTextarea";
@@ -187,6 +188,7 @@ function ExcerptDiff({
   onOpenFile: (path: string) => void;
 }) {
   const resolvedTheme = useRenderedAppearance();
+  const pendingEdits = useCommentEdits();
   const loadExcerptFiles = excerptLoader(excerpt, file, slice.rows, loadDiffFiles);
 
   const annotations = (() => {
@@ -285,7 +287,10 @@ function ExcerptDiff({
                 completionScope={commenting?.completionScope ?? null}
                 onRemove={() => commenting?.onRemove(comment.id)}
                 {...(commenting?.canComment
-                  ? { onEdit: (body: string) => commenting.onEdit({ ...comment, body }) }
+                  ? {
+                      onEdit: (body: string) => commenting.onEdit({ ...comment, body }),
+                      ...pendingEdits.for(comment.id),
+                    }
                   : {})}
               />
             ))}
