@@ -40,6 +40,19 @@ export type WorktreeSetupStage = typeof WorktreeSetupStage.Type;
 export const WorktreeSetupPhase = Schema.Literals(["running", "done", "failed", "cancelled"]);
 export type WorktreeSetupPhase = typeof WorktreeSetupPhase.Type;
 
+export const WorktreeFolderChoice = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("root") }),
+  Schema.Struct({ type: Schema.Literal("branch"), baseRef: TrimmedNonEmptyString }),
+]);
+export type WorktreeFolderChoice = typeof WorktreeFolderChoice.Type;
+
+export const WorktreeSetupChooseFolderInput = Schema.Struct({
+  threadId: ThreadId,
+  requestId: TrimmedNonEmptyString,
+  choice: WorktreeFolderChoice,
+});
+export type WorktreeSetupChooseFolderInput = typeof WorktreeSetupChooseFolderInput.Type;
+
 export const WorktreeSetupSnapshot = Schema.Struct({
   threadId: ThreadId,
   phase: WorktreeSetupPhase,
@@ -48,6 +61,12 @@ export const WorktreeSetupSnapshot = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   baseRef: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  folderChoice: Schema.optionalKey(
+    Schema.Struct({
+      requestId: TrimmedNonEmptyString,
+      relativePath: TrimmedNonEmptyString,
+    }),
+  ),
   setupScript: Schema.NullOr(
     Schema.Struct({
       name: TrimmedNonEmptyString,

@@ -7889,6 +7889,55 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         }),
     );
 
+    it.effect(
+      "discards a paused checkout with clean submodules and keeps ignored drafts inside them",
+      () =>
+        withGitFileProtocol(
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const path = yield* Path.Path;
+            const repo = yield* makeTmpDir();
+            const { initialBranch } = yield* initRepoWithCommit(repo);
+            const nested = yield* makeTmpDir();
+            yield* initRepoWithCommit(nested);
+            yield* writeTextFile(nested, ".gitignore", "node_modules/\n");
+            yield* git(nested, ["add", ".gitignore"]);
+            yield* git(nested, ["commit", "-m", "ignore dependencies"]);
+            yield* git(repo, ["submodule", "add", nested, "library"]);
+            yield* git(repo, ["commit", "-m", "add library"]);
+            const cwd = path.join(repo, "my-project");
+            yield* fs.makeDirectory(cwd);
+            const root = path.join(yield* makeTmpDir(), "feature");
+            const pending =
+              yield* Deferred.make<
+                Parameters<
+                  NonNullable<GitVcsDriver.CreateWorktreeOptions["onMissingProjectFolder"]>
+                >[0]
+              >();
+            const driver = yield* GitVcsDriver.GitVcsDriver;
+            const { worktree } = yield* driver.createWorktree(
+              { cwd, path: root, newRefName: "feature", refName: initialBranch },
+              {
+                repositoryRoot: repo,
+                onMissingProjectFolder: (folder) =>
+                  Deferred.succeed(pending, folder).pipe(Effect.asVoid),
+              },
+            );
+            assert.isNull(worktree.projectPath);
+            const { discard } = yield* Deferred.await(pending);
+            assert.isTrue(yield* fs.exists(path.join(root, "library", ".git")));
+            const draft = path.join(root, "library", "node_modules", "draft");
+            yield* writeTextFile(root, "library/node_modules/draft", "keep me");
+            assert.isTrue(Exit.isFailure(yield* Effect.exit(discard("feature"))));
+            assert.equal(yield* fs.readFileString(draft), "keep me");
+            yield* fs.remove(path.dirname(draft), { recursive: true });
+            yield* discard("feature");
+            assert.isFalse(yield* fs.exists(root));
+            assert.equal(yield* git(repo, ["branch", "--list", "feature"]), "");
+          }),
+        ),
+    );
+
     it.effect("keeps a worktree whose untracked files status is configured to hide", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

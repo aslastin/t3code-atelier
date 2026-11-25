@@ -3204,6 +3204,7 @@ export const layerWsRpc = (
           vcsStatusBroadcaster.refreshBranchStatus(input).pipe(Effect.asVoid),
         [WS_METHODS.subscribeVcsStatus]: (input) => vcsStatusBroadcaster.streamStatus(input),
         [WS_METHODS.subscribeWorktreeSetup]: (input) => worktreeSetupTracker.stream(input.threadId),
+        [WS_METHODS.worktreeSetupChooseFolder]: (input) => worktreeSetupTracker.chooseFolder(input),
         [WS_METHODS.worktreeSetupCancel]: (input) =>
           worktreeSetupTracker
             .cancel(input.threadId)

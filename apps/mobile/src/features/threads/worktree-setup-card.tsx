@@ -1,3 +1,11 @@
+import { useAtomValue } from "@effect/atom-react";
+import { useState } from "react";
+import type { EnvironmentId, WorktreeFolderChoice } from "@t3tools/contracts";
+import { FormField } from "../../components/ui/FormSection";
+import { ListChoiceRow } from "../../components/ui/ListChoiceRow";
+import { useDebouncedValue, usePaginatedBranches } from "../../state/queries";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { vcsEnvironment } from "../../state/vcs";
 import { msg, T, useGT, useMessages } from "gt-react-native";
 
 import type { MessageResolver } from "../../i18n/messages";
@@ -20,6 +28,7 @@ import { ShimmeringWorkContent } from "./thread-work-log";
 import { useVisibleSecondClock } from "./use-visible-second-clock";
 
 export interface WorktreeSetupCardProps {
+  environmentId?: EnvironmentId;
   snapshot: WorktreeSetupSnapshot;
   turnStarted: boolean;
   onCancel: () => void;
@@ -72,28 +81,141 @@ export function WorktreeSetupCard(props: WorktreeSetupCardProps & SetupDetailsCo
   return <WorktreeSetupHeaderCard {...props} />;
 }
 
+function MissingProjectFolder({
+  snapshot,
+  environmentId,
+  onCancel,
+}: {
+  snapshot: WorktreeSetupSnapshot;
+  environmentId: EnvironmentId;
+  onCancel: () => void;
+}) {
+  const gt = useGT();
+  const allowed = useAtomValue(vcsEnvironment.chooseWorktreeFolder.permissionAtom(environmentId));
+  const choose = useAtomCommand(vcsEnvironment.chooseWorktreeFolder);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
+  const branches = usePaginatedBranches({
+    environmentId,
+    cwd: open ? snapshot.worktreePath : null,
+    query: useDebouncedValue(query, 180),
+  });
+  const request = snapshot.folderChoice;
+  if (!request) return null;
+  const respond = async (choice: WorktreeFolderChoice) => {
+    setBusy(true);
+    await choose({
+      environmentId,
+      input: { threadId: snapshot.threadId, requestId: request.requestId, choice },
+    }).finally(() => setBusy(false));
+  };
+  return (
+    <View className="my-2 gap-2 rounded-lg border border-warning-border bg-card-alt p-3">
+      <Text className="font-semibold text-warning-foreground">
+        <T>Project folder missing</T>
+      </Text>
+      <Text>
+        {gt(
+          "This checkout of {branch} does not contain {folder}. Choose another base branch, or run the setup script and agent from the worktree root.",
+          { branch: snapshot.baseRef ?? "HEAD", folder: request.relativePath },
+        )}
+      </Text>
+      <Text selectable className="text-xs text-foreground-secondary">
+        <T>Worktree root</T> · {snapshot.worktreePath}
+      </Text>
+      <View className="flex-row flex-wrap gap-2">
+        <Button
+          label={gt("Choose another branch")}
+          disabled={!allowed || busy}
+          onPress={() => setOpen(true)}
+        />
+        <Button
+          label={gt("Use worktree root")}
+          tone="secondary"
+          disabled={!allowed || busy}
+          onPress={() => void respond({ type: "root" })}
+        />
+        <Button label={gt("Cancel")} tone="text" disabled={busy} onPress={onCancel} />
+      </View>
+      {open && (
+        <Sheet title={gt("Choose another branch")} onClose={() => setOpen(false)}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ padding: 16, gap: 8 }}
+          >
+            <FormField
+              label={gt("Find a branch")}
+              accessibilityLabel={gt("Find a branch")}
+              placeholder={gt("Find a branch")}
+              value={query}
+              onChangeText={setQuery}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            {branches.refs.map((ref) => (
+              <ListChoiceRow
+                key={ref.name}
+                label={ref.name}
+                selected={ref.name === snapshot.baseRef}
+                disabled={
+                  busy || !allowed || ref.name === snapshot.baseRef || ref.name === snapshot.branch
+                }
+                onPress={() => void respond({ type: "branch", baseRef: ref.name })}
+              />
+            ))}
+            {branches.error ? (
+              <Text>{branches.error}</Text>
+            ) : (
+              branches.refs.length === 0 && (
+                <Text>
+                  {branches.isPending ? gt("Loading branches…") : gt("No matching branches")}
+                </Text>
+              )
+            )}
+            {branches.data?.nextCursor != null && (
+              <Button
+                tone="secondary"
+                label={gt("Load more")}
+                disabled={branches.isFetchingNextPage}
+                onPress={branches.loadNext}
+              />
+            )}
+          </ScrollView>
+        </Sheet>
+      )}
+    </View>
+  );
+}
+
 function WorktreeSetupHeaderCard(props: WorktreeSetupCardProps & SetupDetailsControl) {
   const { snapshot, detailsOpen } = props;
   const gt = useGT();
   const messages = useMessages();
   const running = snapshot.phase === "running";
-  const now = useVisibleSecondClock(running);
+  const now = useVisibleSecondClock(running && !snapshot.folderChoice);
   const failed =
     snapshot.phase === "failed" || snapshot.stages.some((stage) => stage.status === "failed");
-  const label = running
-    ? gt("Setting up worktree…")
-    : snapshot.phase === "cancelled"
-      ? gt("Worktree setup cancelled")
-      : snapshot.phase === "failed"
-        ? gt("Worktree setup failed")
-        : failed
-          ? gt("Setup script failed")
-          : gt("Worktree ready");
+  const label = snapshot.folderChoice
+    ? gt("Worktree setup paused")
+    : running
+      ? gt("Setting up worktree…")
+      : snapshot.phase === "cancelled"
+        ? gt("Worktree setup cancelled")
+        : snapshot.phase === "failed"
+          ? gt("Worktree setup failed")
+          : failed
+            ? gt("Setup script failed")
+            : gt("Worktree ready");
 
   return (
     <View accessibilityLabel={gt("Worktree setup")} className="py-1">
       <View className="min-h-11 flex-row items-center gap-2 border-b border-border px-1">
-        <HeaderLabel label={label} active={running && !detailsOpen} failed={failed} />
+        <HeaderLabel
+          label={label}
+          active={running && !detailsOpen && !snapshot.folderChoice}
+          failed={failed}
+        />
         <Text
           className="text-2xs text-foreground-secondary"
           style={{ fontVariant: ["tabular-nums"] }}
@@ -126,14 +248,23 @@ function WorktreeSetupHeaderCard(props: WorktreeSetupCardProps & SetupDetailsCon
         {snapshot.stages
           .filter((stage) => stage.id !== "agent")
           .map((stage) => (
-            <StageRow
-              key={stage.id}
-              stage={stage}
-              scriptName={snapshot.setupScript?.name ?? null}
-              now={now}
-              compact
-              animate={!detailsOpen}
-            />
+            <View key={stage.id}>
+              <StageRow
+                stage={stage}
+                scriptName={snapshot.setupScript?.name ?? null}
+                now={now}
+                compact
+                animate={!detailsOpen}
+              />
+              {stage.id === "checkout" && snapshot.folderChoice && props.environmentId && (
+                <MissingProjectFolder
+                  key={snapshot.folderChoice.requestId}
+                  snapshot={snapshot}
+                  environmentId={props.environmentId}
+                  onCancel={props.onCancel}
+                />
+              )}
+            </View>
           ))}
       </View>
     </View>
@@ -343,7 +474,7 @@ function SetupDetailsSheet({
                 onCancel();
               }}
             />
-            {onWorkLocally ? (
+            {onWorkLocally && !snapshot.folderChoice ? (
               <Button
                 label={gt("Work locally")}
                 tone="secondary"

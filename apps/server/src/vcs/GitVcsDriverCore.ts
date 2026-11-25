@@ -53,6 +53,7 @@ import {
   unsetInheritedRepositoryEnv,
 } from "./VcsProcess.ts";
 import { makeWorktreeCheckoutCache } from "./worktreeCheckoutCache.ts";
+import { worktreeRemovalChecks } from "./worktreeRemovalChecks.ts";
 import { removeLinkedWorktree } from "./worktreeRemoval.ts";
 import {
   relativeProjectFolder,
@@ -5685,6 +5686,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "git branch failed",
       );
     }
+    const initialCommit =
+      relative && newRefName && options?.onMissingProjectFolder
+        ? (yield* resolveCommit({ cwd: input.cwd, revision: `refs/heads/${newRefName}` })).commitSha
+        : null;
     const checkoutRef = newRefName ?? input.refName;
     const progress = options?.progress;
     const onCheckoutProgress = progress?.onCheckoutProgress;
@@ -5999,6 +6004,83 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const projectPath = relative
       ? yield* worktreeProjectFolder(fileSystem, path, path.normalize(relative), worktreePath)
       : undefined;
+    if (projectPath === null && initialCommit && newRefName && options?.onMissingProjectFolder) {
+      const root = worktreePath;
+      const identity = runGitStdout("GitVcsDriver.pendingWorktree.identity", root, [
+        "rev-parse",
+        "--show-toplevel",
+        "--absolute-git-dir",
+      ]);
+      const initialIdentity = yield* identity;
+      const changed = new GitCommandError({
+        operation: "GitVcsDriver.pendingWorktree",
+        cwd: root,
+        command: "git worktree",
+        detail: `The checkout changed while setup was paused. Kept ${root} and its branch.`,
+      });
+      const verify = Effect.fn("GitVcsDriver.pendingWorktree.verify")(function* (
+        ownedBranch: string,
+      ) {
+        const [head, branch, registration] = yield* Effect.all([
+          resolveCommit({ cwd: root, revision: "HEAD" }),
+          runGitStdout("GitVcsDriver.pendingWorktree.branch", root, ["symbolic-ref", "HEAD"]),
+          identity,
+        ]);
+        if (
+          head.commitSha !== initialCommit ||
+          branch.trim() !== `refs/heads/${ownedBranch}` ||
+          registration !== initialIdentity
+        )
+          return yield* changed;
+      });
+      const discard = Effect.fn("GitVcsDriver.discardPendingWorktree")(function* (
+        ownedBranch: string,
+      ) {
+        const checks = worktreeRemovalChecks(execute, fileSystem, path);
+        const retention = { worktreeKeepWhen: "all-files" } as const;
+        const submodules = yield* checks.submoduleRemoval(root, retention);
+        if (
+          submodules.reason !== null ||
+          (yield* checks
+            .localChangesReason(root, retention)
+            .pipe(Effect.mapError(() => changed))) !== null
+        )
+          return yield* changed;
+        yield* verify(ownedBranch);
+        yield* removeWorktree({ cwd: input.cwd, path: root, force: submodules.force });
+        // An external commit between removing the directory and deleting its ref keeps the branch.
+        yield* withSharedConfigLock(
+          input.cwd,
+          Effect.gen(function* () {
+            yield* runGit("GitVcsDriver.discardPendingWorktree.ref", input.cwd, [
+              "update-ref",
+              "-d",
+              `refs/heads/${ownedBranch}`,
+              initialCommit,
+            ]);
+            const removed = yield* executeGitWithStableDiagnostics(
+              "GitVcsDriver.discardPendingWorktree.config",
+              input.cwd,
+              ["config", "--local", "--remove-section", `branch.${ownedBranch}`],
+              { allowNonZeroExit: true },
+            );
+            if (removed.exitCode !== 0 && !removed.stderr.includes("no such section"))
+              return yield* new GitCommandError({
+                operation: "GitVcsDriver.discardPendingWorktree.config",
+                cwd: input.cwd,
+                command: "git config --remove-section",
+                detail: removed.stderr.trim(),
+              });
+          }),
+        );
+      });
+      yield* options.onMissingProjectFolder({
+        root,
+        relativePath: relative,
+        verify: verify(newRefName),
+        discard,
+      });
+    }
     return {
       worktree: {
         path: worktreePath,

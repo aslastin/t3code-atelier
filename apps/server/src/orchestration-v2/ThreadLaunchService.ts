@@ -1,3 +1,4 @@
+import { makeWorktreeUseGuard, trackPendingWorktree } from "../workspace/worktreeUsage.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
@@ -34,7 +35,10 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { withSharedWorkspaceReservation } from "../workspace/workspaceLease.ts";
+import {
+  withExclusiveWorkspaceReservation,
+  withSharedWorkspaceReservation,
+} from "../workspace/workspaceLease.ts";
 import { relativeProjectFolder, worktreeProjectFolder } from "../workspace/worktreeProjectPath.ts";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -280,6 +284,7 @@ function failureDetail(error: unknown): string {
 }
 
 const make = Effect.gen(function* () {
+  const ensureUnused = yield* makeWorktreeUseGuard;
   const projects = yield* ProjectService.ProjectService;
   const setupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
   const cloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
@@ -319,45 +324,45 @@ const make = Effect.gen(function* () {
         cause,
       });
 
-  const recordBranchRenameFailure = Effect.fn("ThreadLaunchService.recordBranchRenameFailure")(
-    function* (threadId: ThreadId, runId: RunId, branch: string, cause: Cause.Cause<unknown>) {
-      const error = Cause.squash(cause);
-      const now = yield* DateTime.now;
-      yield* eventSink.write({
-        events: [
-          {
-            id: yield* ids.allocate.event({ threadId }),
-            type: "turn-item.updated",
+  const recordNotice = Effect.fn("ThreadLaunchService.recordNotice")(function* (
+    threadId: ThreadId,
+    runId: RunId,
+    signal: string,
+    title: string,
+    message: string,
+  ) {
+    const now = yield* DateTime.now;
+    yield* eventSink.write({
+      events: [
+        {
+          id: yield* ids.allocate.event({ threadId }),
+          type: "turn-item.updated",
+          threadId,
+          runId,
+          occurredAt: now,
+          payload: {
+            id: ids.derive.runSignalTurnItem({ runId, signal }),
             threadId,
             runId,
-            occurredAt: now,
-            payload: {
-              id: ids.derive.runSignalTurnItem({ runId, signal: "branch-rename" }),
-              threadId,
-              runId,
-              nodeId: null,
-              providerThreadId: null,
-              providerTurnId: null,
-              nativeItemRef: null,
-              parentItemId: null,
-              // EventSink allocates the real position, after the run's existing items.
-              ordinal: 0,
-              status: "completed",
-              title: "Branch not renamed",
-              startedAt: now,
-              completedAt: now,
-              updatedAt: now,
-              type: "system_notice",
-              message: `Could not rename the worktree branch, so it stays ${branch}. ${error instanceof Error ? error.message : String(error)}`,
-            },
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            // EventSink allocates the real position, after the run's existing items.
+            ordinal: 0,
+            status: "completed",
+            title,
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            type: "system_notice",
+            message,
           },
-        ],
-      });
-    },
-    Effect.catchCause((cause) =>
-      Effect.logWarning("Could not record the branch rename failure", { cause }),
-    ),
-  );
+        },
+      ],
+    });
+  });
 
   const readReceipt = (input: ThreadLaunchInput, commandId: CommandId) =>
     receipts
@@ -579,6 +584,8 @@ const make = Effect.gen(function* () {
     const tracked = input.workspaceStrategy.type === "worktree" || reused !== undefined;
     let createdWorktreePath: string | null = null;
     let createdBranch: string | null = null;
+    let discardPending: ((branch: string) => Effect.Effect<void, GitCommandError>) | null = null;
+    let untrackPending: (() => void) | undefined;
     let createdTaskFolder: string | null = null;
     let setupTerminalId: string | null = null;
     let workspaceRecorded = false;
@@ -693,213 +700,286 @@ const make = Effect.gen(function* () {
             })
             .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
         }
-        const requestedBaseRef = input.workspaceStrategy.baseRef;
-        let startRef = requestedBaseRef;
-        let baseRefName = requestedBaseRef;
-        const remote =
-          input.workspaceStrategy.startFromOrigin === true && projectIsRepository
-            ? yield* git
-                .resolveWorktreeBaseRemote({
-                  cwd: project.workspaceRoot,
-                  refName: input.workspaceStrategy.baseRef,
-                })
-                .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))
-            : null;
-        const shouldFetch = remote !== null;
-        yield* setupTracker.stageStatus(threadId, "fetch", shouldFetch ? "running" : "skipped");
-        let fetchedBase = false;
-        if (remote !== null) {
-          const remoteBase = yield* git
-            .fetchWorktreeBaseCommit({
-              cwd: project.workspaceRoot,
-              refName: input.workspaceStrategy.baseRef,
-              remote,
-            })
-            .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
-          if (remoteBase !== null) {
-            startRef = remoteBase.commitSha;
-            baseRefName = `refs/remotes/${remoteBase.remoteRefName}`;
-            fetchedBase = true;
-          }
-        }
-        if (shouldFetch) yield* setupTracker.stageStatus(threadId, "fetch", "done");
-        // `:/text` bases are commit searches, not refs; `hasCommit` treats the appended
-        // `^{commit}` as part of the pattern (same guard as checkWorktreeBase).
-        const recordedBaseResolves =
-          !projectIsRepository ||
-          fetchedBase ||
-          startRef.startsWith(":") ||
-          (yield* git
-            .hasCommit({
-              cwd: project.workspaceRoot,
-              // `git worktree add` reads `-` as the previous checkout.
-              refName: startRef === "-" ? "@{-1}" : startRef,
-            })
-            .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId))));
-        if (!recordedBaseResolves) {
-          const remoteName =
-            remote?.remoteName ??
-            (yield* git
-              .resolvePrimaryRemoteName(project.workspaceRoot)
-              .pipe(Effect.orElseSucceed(() => null)));
-          const fallback = yield* worktreeFallbackBase(project.workspaceRoot, remoteName).pipe(
-            Effect.orElseSucceed(() => null),
-          );
-          if (fallback !== null) {
-            startRef = fallback.startRef;
-            baseRefName = fallback.baseRefName;
-            yield* setupTracker.update(threadId, (snapshot) => ({
-              ...snapshot,
-              baseRef: fallback.baseRefName,
-            }));
-          }
-        }
-        if (
-          branch !== null &&
-          projectIsRepository &&
-          (generatedTemporaryBranch || isTemporaryWorktreeBranch(branch))
-        ) {
-          const parts = branch.split("/");
-          for (let depth = 1; depth < parts.length; depth++) {
-            if (
-              yield* git
-                .hasCommit({
-                  cwd: project.workspaceRoot,
-                  refName: `refs/heads/${parts.slice(0, depth).join("/")}`,
-                })
-                .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))
-            ) {
-              branch = generatedTemporaryBranch
-                ? branch.replaceAll("/", "-")
-                : flattenTemporaryWorktreeBranchName(branch);
-              break;
-            }
-          }
-        }
-        yield* setupTracker.stageStatus(threadId, "checkout", "running");
-        let submoduleProgressReportedAt = Number.NEGATIVE_INFINITY;
-        const progress: GitVcsDriver.CreateWorktreeProgress = {
-          onWorktreeClaimed: (path) =>
-            Effect.sync(() => {
-              createdWorktreePath = path;
-              // A task folder has already claimed the name its repositories share.
-              createdBranch ??= branch;
-            }),
-          onCheckoutProgress: (progress) =>
-            setupTracker.stage(threadId, "checkout", { percent: progress.percent }),
-          onSubmodulesStarted: () =>
-            setupTracker
-              .stageStatus(threadId, "checkout", "done")
-              .pipe(Effect.andThen(setupTracker.stageStatus(threadId, "submodules", "running"))),
-          onSubmodulesDisabled: ({ source }) =>
-            setupTracker.stageStatus(threadId, "submodules", "skipped", `disabled in ${source}`),
-          onSubmoduleLine: (line) => {
-            // Paths may contain quotes; git closes the path with "': ".
-            const submodulePath = /^\s*Submodule path '(.+)': /.exec(line)?.[1];
-            if (submodulePath !== undefined) {
-              return setupTracker.stage(threadId, "submodules", { detail: submodulePath });
-            }
-            if (parseGitCloneProgressLine(line) === null) return Effect.void;
-            // Git redraws on every percent; hold the websocket to one update a second.
-            return Effect.flatMap(Clock.currentTimeMillis, (now) => {
-              if (now - submoduleProgressReportedAt < 1000) return Effect.void;
-              submoduleProgressReportedAt = now;
-              return setupTracker.stage(threadId, "submodules", {
-                detail: line.trim().replace(/\s+/g, " "),
-              });
-            });
-          },
-          onSubmodulesFinished: ({ ok, detail }) =>
-            setupTracker.stageStatus(
-              threadId,
-              "submodules",
-              ok ? "done" : "warning",
-              ok ? undefined : (detail ?? "submodule checkout failed"),
-            ),
-        };
-        const worktree =
-          taskPlan === null
-            ? (yield* git
-                .createWorktree(
-                  {
+        let requestedBaseRef = input.workspaceStrategy.baseRef;
+        let retry = false;
+        for (;;) {
+          let missingFolder:
+            | Parameters<
+                NonNullable<GitVcsDriver.CreateWorktreeOptions["onMissingProjectFolder"]>
+              >[0]
+            | undefined;
+
+          let startRef = requestedBaseRef;
+          let baseRefName = requestedBaseRef;
+          const remote =
+            !retry && input.workspaceStrategy.startFromOrigin === true && projectIsRepository
+              ? yield* git
+                  .resolveWorktreeBaseRemote({
                     cwd: project.workspaceRoot,
-                    refName: startRef,
-                    newRefName: branch!,
-                    baseRefName,
-                    path: null,
-                  },
-                  {
-                    progress,
-                    repositoryRoot: yield* git
-                      .repositoryRoot(project.workspaceRoot)
-                      .pipe(Effect.orElseSucceed(() => null)),
-                  },
-                )
-                .pipe(
-                  Effect.catchIf(
-                    (error) => error.reason === "ref_not_found",
-                    (cause) =>
-                      Effect.fail(
-                        new ThreadLaunchBaseRefError({
-                          projectId: project.id,
-                          projectTitle: project.title,
-                          workspaceRoot: project.workspaceRoot,
-                          baseRef: requestedBaseRef,
-                          cause,
+                    refName: requestedBaseRef,
+                  })
+                  .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))
+              : null;
+          const shouldFetch = remote !== null;
+          yield* setupTracker.stageStatus(threadId, "fetch", shouldFetch ? "running" : "skipped");
+          let fetchedBase = false;
+          if (remote !== null) {
+            const remoteBase = yield* git
+              .fetchWorktreeBaseCommit({
+                cwd: project.workspaceRoot,
+                refName: requestedBaseRef,
+                remote,
+              })
+              .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
+            if (remoteBase !== null) {
+              startRef = remoteBase.commitSha;
+              baseRefName = `refs/remotes/${remoteBase.remoteRefName}`;
+              fetchedBase = true;
+            }
+          }
+          if (shouldFetch) yield* setupTracker.stageStatus(threadId, "fetch", "done");
+          // `:/text` bases are commit searches, not refs; `hasCommit` treats the appended
+          // `^{commit}` as part of the pattern (same guard as checkWorktreeBase).
+          const recordedBaseResolves =
+            !projectIsRepository ||
+            fetchedBase ||
+            startRef.startsWith(":") ||
+            (yield* git
+              .hasCommit({
+                cwd: project.workspaceRoot,
+                // `git worktree add` reads `-` as the previous checkout.
+                refName: startRef === "-" ? "@{-1}" : startRef,
+              })
+              .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId))));
+          if (!recordedBaseResolves && !retry) {
+            const remoteName =
+              remote?.remoteName ??
+              (yield* git
+                .resolvePrimaryRemoteName(project.workspaceRoot)
+                .pipe(Effect.orElseSucceed(() => null)));
+            const fallback = yield* worktreeFallbackBase(project.workspaceRoot, remoteName).pipe(
+              Effect.orElseSucceed(() => null),
+            );
+            if (fallback !== null) {
+              startRef = fallback.startRef;
+              baseRefName = fallback.baseRefName;
+              yield* setupTracker.update(threadId, (snapshot) => ({
+                ...snapshot,
+                baseRef: fallback.baseRefName,
+              }));
+            }
+          }
+          if (
+            branch !== null &&
+            projectIsRepository &&
+            (generatedTemporaryBranch || isTemporaryWorktreeBranch(branch))
+          ) {
+            const parts = branch.split("/");
+            for (let depth = 1; depth < parts.length; depth++) {
+              if (
+                yield* git
+                  .hasCommit({
+                    cwd: project.workspaceRoot,
+                    refName: `refs/heads/${parts.slice(0, depth).join("/")}`,
+                  })
+                  .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))
+              ) {
+                branch = generatedTemporaryBranch
+                  ? branch.replaceAll("/", "-")
+                  : flattenTemporaryWorktreeBranchName(branch);
+                break;
+              }
+            }
+          }
+          yield* setupTracker.stageStatus(threadId, "checkout", "running");
+          let submoduleProgressReportedAt = Number.NEGATIVE_INFINITY;
+          const progress: GitVcsDriver.CreateWorktreeProgress = {
+            onWorktreeClaimed: (path) =>
+              Effect.sync(() => {
+                createdWorktreePath = path;
+                // A task folder has already claimed the name its repositories share.
+                createdBranch ??= branch;
+              }),
+            onCheckoutProgress: (progress) =>
+              setupTracker.stage(threadId, "checkout", { percent: progress.percent }),
+            onSubmodulesStarted: () =>
+              setupTracker
+                .stageStatus(threadId, "checkout", "done")
+                .pipe(Effect.andThen(setupTracker.stageStatus(threadId, "submodules", "running"))),
+            onSubmodulesDisabled: ({ source }) =>
+              setupTracker.stageStatus(threadId, "submodules", "skipped", `disabled in ${source}`),
+            onSubmoduleLine: (line) => {
+              // Paths may contain quotes; git closes the path with "': ".
+              const submodulePath = /^\s*Submodule path '(.+)': /.exec(line)?.[1];
+              if (submodulePath !== undefined) {
+                return setupTracker.stage(threadId, "submodules", { detail: submodulePath });
+              }
+              if (parseGitCloneProgressLine(line) === null) return Effect.void;
+              // Git redraws on every percent; hold the websocket to one update a second.
+              return Effect.flatMap(Clock.currentTimeMillis, (now) => {
+                if (now - submoduleProgressReportedAt < 1000) return Effect.void;
+                submoduleProgressReportedAt = now;
+                return setupTracker.stage(threadId, "submodules", {
+                  detail: line.trim().replace(/\s+/g, " "),
+                });
+              });
+            },
+            onSubmodulesFinished: ({ ok, detail }) =>
+              setupTracker.stageStatus(
+                threadId,
+                "submodules",
+                ok ? "done" : "warning",
+                ok ? undefined : (detail ?? "submodule checkout failed"),
+              ),
+          };
+          const worktree =
+            taskPlan === null
+              ? (yield* git
+                  .createWorktree(
+                    {
+                      cwd: project.workspaceRoot,
+                      refName: startRef,
+                      newRefName: branch!,
+                      baseRefName,
+                      path: null,
+                    },
+                    {
+                      progress,
+                      onMissingProjectFolder: (missing) =>
+                        Effect.sync(() => {
+                          missingFolder = missing;
+                          createdWorktreePath = missing.root;
+                          createdBranch = branch;
+                          untrackPending = trackPendingWorktree(missing.root, threadId);
+                          discardPending = (ownedBranch) =>
+                            withExclusiveWorkspaceReservation(
+                              fs,
+                              path,
+                              missing.root,
+                              ensureUnused(missing.root, threadId).pipe(
+                                Effect.andThen(missing.discard(ownedBranch)),
+                              ),
+                            );
                         }),
-                      ),
-                  ),
-                  Effect.mapError(mapError(input, "provision-worktree", threadId)),
-                )).worktree
-            : yield* taskFolders
-                .create({
-                  plan: taskPlan,
-                  branch: branch!,
-                  projectStart: { refName: startRef, baseRefName },
-                  baseBranch: input.workspaceStrategy.baseRef,
-                  startFromOrigin: input.workspaceStrategy.startFromOrigin === true,
-                  projectProgress: progress,
-                  onClaimed: (taskFolder, claimedBranch) =>
-                    Effect.sync(() => {
-                      createdTaskFolder = taskFolder.root;
-                      createdWorktreePath = taskFolder.projectPath;
-                      createdBranch = claimedBranch;
-                    }),
-                  onRepository: ({ name, done, total }) =>
-                    setupTracker.stage(threadId, "checkout", {
-                      detail: `${name} (${done} of ${total})`,
-                    }),
-                })
-                .pipe(
-                  Effect.map((created) => ({
-                    path: created.taskFolder.projectPath,
-                    refName: created.branch,
-                  })),
-                  Effect.mapError(mapError(input, "provision-worktree", threadId)),
-                );
-        const projectPath = "projectPath" in worktree ? worktree.projectPath : undefined;
-        worktreePath = projectPath ?? worktree.path;
-        branch = worktree.refName;
-        createdWorktreePath = worktree.path;
-        createdBranch = branch;
-        yield* setupTracker.update(threadId, (snapshot) => ({
-          ...snapshot,
-          worktreePath,
-          branch,
-          stages: snapshot.stages.map((stage) =>
-            stage.id === "submodules" && stage.status === "pending"
-              ? { ...stage, status: "skipped", detail: "none" }
-              : stage,
-          ),
-        }));
-        yield* setupTracker.stageStatus(
-          threadId,
-          "checkout",
-          projectPath === null ? "warning" : "done",
-          projectPath === null
-            ? "Project folder is missing in this checkout. Using the worktree root."
-            : undefined,
-        );
+                      repositoryRoot: yield* git
+                        .repositoryRoot(project.workspaceRoot)
+                        .pipe(Effect.orElseSucceed(() => null)),
+                    },
+                  )
+                  .pipe(
+                    Effect.catchIf(
+                      (error) => error.reason === "ref_not_found",
+                      (cause) =>
+                        Effect.fail(
+                          new ThreadLaunchBaseRefError({
+                            projectId: project.id,
+                            projectTitle: project.title,
+                            workspaceRoot: project.workspaceRoot,
+                            baseRef: requestedBaseRef,
+                            cause,
+                          }),
+                        ),
+                    ),
+                    Effect.mapError(mapError(input, "provision-worktree", threadId)),
+                  )).worktree
+              : yield* taskFolders
+                  .create({
+                    plan: taskPlan,
+                    branch: branch!,
+                    projectStart: { refName: startRef, baseRefName },
+                    baseBranch: input.workspaceStrategy.baseRef,
+                    startFromOrigin: input.workspaceStrategy.startFromOrigin === true,
+                    projectProgress: progress,
+                    onClaimed: (taskFolder, claimedBranch) =>
+                      Effect.sync(() => {
+                        createdTaskFolder = taskFolder.root;
+                        createdWorktreePath = taskFolder.projectPath;
+                        createdBranch = claimedBranch;
+                      }),
+                    onRepository: ({ name, done, total }) =>
+                      setupTracker.stage(threadId, "checkout", {
+                        detail: `${name} (${done} of ${total})`,
+                      }),
+                  })
+                  .pipe(
+                    Effect.map((created) => ({
+                      path: created.taskFolder.projectPath,
+                      refName: created.branch,
+                    })),
+                    Effect.mapError(mapError(input, "provision-worktree", threadId)),
+                  );
+          const projectPath = "projectPath" in worktree ? worktree.projectPath : undefined;
+          worktreePath = projectPath ?? worktree.path;
+          branch = worktree.refName;
+          createdWorktreePath = worktree.path;
+          createdBranch = branch;
+          yield* setupTracker.update(threadId, (snapshot) => ({
+            ...snapshot,
+            worktreePath,
+            branch,
+            stages: snapshot.stages.map((stage) =>
+              stage.id === "submodules" && stage.status === "pending"
+                ? { ...stage, status: "skipped", detail: "none" }
+                : stage,
+            ),
+          }));
+          yield* setupTracker.stageStatus(threadId, "checkout", "done");
+          if (projectPath !== null) break;
+          const missing = missingFolder;
+          if (!missing || !discardPending || !branch)
+            return yield* mapError(
+              input,
+              "provision-worktree",
+              threadId,
+            )("Cannot verify the missing project folder.");
+          const choice = yield* setupTracker.waitForFolder(
+            threadId,
+            yield* randomUuidV4,
+            missing.relativePath,
+          );
+          if (choice.type === "root") {
+            yield* missing.verify.pipe(
+              Effect.mapError(mapError(input, "provision-worktree", threadId)),
+            );
+            yield* setupTracker.stageStatus(
+              threadId,
+              "checkout",
+              "warning",
+              "Using the worktree root by request.",
+            );
+            if (runId !== null)
+              yield* recordNotice(
+                threadId,
+                runId,
+                "worktree-root-choice",
+                "Using the worktree root",
+                `You chose to run the setup script and agent from ${worktree.path} because this checkout does not contain ${missing.relativePath}.`,
+              ).pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+            break;
+          }
+          yield* discardPending(branch).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                untrackPending?.();
+                untrackPending = undefined;
+                discardPending = null;
+                createdWorktreePath = null;
+                createdBranch = null;
+              }),
+            ),
+            Effect.uninterruptible,
+            Effect.mapError(mapError(input, "provision-worktree", threadId)),
+          );
+          requestedBaseRef = choice.baseRef;
+          retry = true;
+          yield* setupTracker.begin({
+            threadId,
+            branch,
+            baseRef: requestedBaseRef,
+            stages: ["fetch", "checkout", "submodules", "setup-script", "agent"],
+            fiber: yield* Effect.fiber,
+          });
+        }
       }
 
       // Do not rewrite reused worktrees; that could undo the original branch rename.
@@ -1006,8 +1086,9 @@ const make = Effect.gen(function* () {
               }
             }),
           ),
-          Effect.catchCause((cause) =>
-            Effect.logWarning("Thread worktree branch rename failed", {
+          Effect.catchCause((cause) => {
+            const error = Cause.squash(cause);
+            return Effect.logWarning("Thread worktree branch rename failed", {
               commandId: input.commandId,
               threadId,
               oldBranch,
@@ -1016,10 +1097,16 @@ const make = Effect.gen(function* () {
               Effect.andThen(
                 runId === null || Cause.hasInterruptsOnly(cause)
                   ? Effect.void
-                  : recordBranchRenameFailure(threadId, runId, oldBranch, cause),
+                  : recordNotice(
+                      threadId,
+                      runId,
+                      "branch-rename",
+                      "Branch not renamed",
+                      `Could not rename the worktree branch, so it stays ${oldBranch}. ${error instanceof Error ? error.message : String(error)}`,
+                    ).pipe(Effect.ignoreCause({ log: true })),
               ),
-            ),
-          ),
+            );
+          }),
           Effect.forkIn(preparationScope),
         );
       }
@@ -1152,41 +1239,47 @@ const make = Effect.gen(function* () {
             const removedTaskFolder = createdTaskFolder;
             // Forget worktrees only after removal succeeds; failed removals must not reuse partially written checkouts.
             yield* Effect.suspend((): Effect.Effect<void, GitCommandError | TaskFolderError> =>
-              removedTaskFolder === null
-                ? git
-                    .removeWorktree({ cwd: project.workspaceRoot, path: removedPath, force: true })
-                    .pipe(
-                      Effect.andThen(
-                        removedBranch === null
-                          ? Effect.void
-                          : git
-                              .deleteLocalBranch({
-                                cwd: project.workspaceRoot,
-                                refName: removedBranch,
-                                force: true,
-                              })
-                              .pipe(Effect.ignoreCause({ log: true })),
+              discardPending && removedBranch
+                ? discardPending(removedBranch)
+                : removedTaskFolder === null
+                  ? git
+                      .removeWorktree({
+                        cwd: project.workspaceRoot,
+                        path: removedPath,
+                        force: true,
+                      })
+                      .pipe(
+                        Effect.andThen(
+                          removedBranch === null
+                            ? Effect.void
+                            : git
+                                .deleteLocalBranch({
+                                  cwd: project.workspaceRoot,
+                                  refName: removedBranch,
+                                  force: true,
+                                })
+                                .pipe(Effect.ignoreCause({ log: true })),
+                        ),
+                      )
+                  : taskFolders
+                      .remove({
+                        root: removedTaskFolder,
+                        force: true,
+                        forget: true,
+                        deleteBranch: removedBranch ?? undefined,
+                      })
+                      .pipe(
+                        Effect.flatMap(({ kept }) =>
+                          kept.length === 0
+                            ? Effect.void
+                            : Effect.fail(
+                                new TaskFolderError({
+                                  operation: "remove",
+                                  detail: `Kept ${kept.map((entry) => entry.path).join(", ")}.`,
+                                }),
+                              ),
+                        ),
                       ),
-                    )
-                : taskFolders
-                    .remove({
-                      root: removedTaskFolder,
-                      force: true,
-                      forget: true,
-                      deleteBranch: removedBranch ?? undefined,
-                    })
-                    .pipe(
-                      Effect.flatMap(({ kept }) =>
-                        kept.length === 0
-                          ? Effect.void
-                          : Effect.fail(
-                              new TaskFolderError({
-                                operation: "remove",
-                                detail: `Kept ${kept.map((entry) => entry.path).join(", ")}.`,
-                              }),
-                            ),
-                      ),
-                    ),
             ).pipe(
               Effect.andThen(
                 threads
@@ -1205,12 +1298,25 @@ const make = Effect.gen(function* () {
                   threadId,
                   path: removedPath,
                   cause: removeCause,
-                }),
+                }).pipe(
+                  Effect.andThen(
+                    cancelled && discardPending && runId !== null
+                      ? recordNotice(
+                          threadId,
+                          runId,
+                          "worktree-kept",
+                          "Worktree kept",
+                          `Kept ${removedPath}. ${failureDetail(Cause.squash(removeCause))}`,
+                        ).pipe(Effect.ignoreCause({ log: true }))
+                      : Effect.void,
+                  ),
+                ),
               ),
             );
           }
         }),
       ),
+      Effect.ensuring(Effect.sync(() => untrackPending?.())),
     );
   });
 

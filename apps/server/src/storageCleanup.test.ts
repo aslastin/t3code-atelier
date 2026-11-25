@@ -1,3 +1,4 @@
+import { trackPendingWorktree } from "./workspace/worktreeUsage.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
@@ -2158,6 +2159,30 @@ describe("orphan worktree reports", () => {
         yield* fixture.fs.makeDirectory(projectFolder);
         yield* fixture.fs.makeDirectory(threadFolder);
         fixture.setProjectRoots([projectFolder]);
+        yield* Effect.acquireUseRelease(
+          Effect.sync(() =>
+            trackPendingWorktree(fixture.worktree, ThreadId.make("awaiting-choice")),
+          ),
+          () =>
+            Effect.gen(function* () {
+              yield* fixture.fs.utimes(fixture.worktree, 1, 1);
+              expect(
+                (yield* fixture.service.runNow).entries.some((entry) =>
+                  entry.reason.includes("No thread uses"),
+                ),
+              ).toBe(false);
+              const busy = yield* fixture.service
+                .removeWorktree({
+                  cwd: projectFolder,
+                  path: fixture.worktree,
+                  force: true,
+                  onlyIfUnused: true,
+                })
+                .pipe(Effect.flip);
+              expect(busy.detail).toContain("preparing");
+            }),
+          (release) => Effect.sync(release),
+        );
         fixture.setThreads([
           shell({
             id: ThreadId.make("root-thread"),

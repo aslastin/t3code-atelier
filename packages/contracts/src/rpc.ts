@@ -141,6 +141,7 @@ import {
 } from "./checkpointDiff.ts";
 import {
   WorktreeSetupCancelInput,
+  WorktreeSetupChooseFolderInput,
   WorktreeSetupCancelResult,
   WorktreeSetupStreamEvent,
   WorktreeSetupSubscribeInput,
@@ -711,6 +712,7 @@ export const WS_METHODS = {
   vcsRefreshBranch: "vcs.refreshBranch",
   subscribeWorktreeSetup: "subscribeWorktreeSetup",
   worktreeSetupCancel: "worktreeSetup.cancel",
+  worktreeSetupChooseFolder: "worktreeSetup.chooseFolder",
   subscribeTerminalMetadata: "subscribeTerminalMetadata",
   subscribePreviewEvents: "subscribePreviewEvents",
   subscribeDiscoveredLocalServers: "subscribeDiscoveredLocalServers",
@@ -1843,6 +1845,12 @@ const WsSubscribeWorktreeSetupRpc = Rpc.make(WS_METHODS.subscribeWorktreeSetup, 
   stream: true,
 });
 
+const WsWorktreeSetupChooseFolderRpc = Rpc.make(WS_METHODS.worktreeSetupChooseFolder, {
+  payload: WorktreeSetupChooseFolderInput,
+  success: Schema.Boolean,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsWorktreeSetupCancelRpc = Rpc.make(WS_METHODS.worktreeSetupCancel, {
   payload: WorktreeSetupCancelInput,
   success: WorktreeSetupCancelResult,
@@ -2572,6 +2580,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsRefreshBranchRpc,
   WsSubscribeWorktreeSetupRpc,
   WsWorktreeSetupCancelRpc,
+  WsWorktreeSetupChooseFolderRpc,
   WsVcsPullRpc,
   WsVcsRefreshStatusRpc,
   WsGitRunStackedActionRpc,

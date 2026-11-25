@@ -148,6 +148,12 @@ export interface CreateWorktreeProgress {
 }
 
 export interface CreateWorktreeOptions {
+  readonly onMissingProjectFolder?: (input: {
+    readonly root: string;
+    readonly relativePath: string;
+    readonly verify: Effect.Effect<void, GitCommandError>;
+    readonly discard: (branch: string) => Effect.Effect<void, GitCommandError>;
+  }) => Effect.Effect<void>;
   readonly repositoryRoot?: string | null;
   readonly progress?: CreateWorktreeProgress;
   /** Null or omitted defers to the checkout's t3.json. */

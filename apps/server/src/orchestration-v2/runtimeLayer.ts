@@ -299,6 +299,7 @@ const layerManagedProjectFoldersProvided = ManagedProjectFolders.layer.pipe(
   Layer.provide(layerProjectService),
 );
 const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
+  Layer.provide(Layer.merge(ProjectionStore.layer, ProjectStore.layer)),
   Layer.provide(
     Layer.mergeAll(
       layerProjectSetupScriptRunner,
