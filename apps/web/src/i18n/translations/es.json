@@ -9645,7 +9645,7 @@
   "ca04162de1fbce83": "Actualizar instantánea de telemetría",
   "b1dccb692109581c": "Todos los procesos de T3",
   "7a8fff009bb51074": "Entorno de diagnóstico",
-  "6421b63e290a67b5": "En «Todos los entornos», se muestra el entorno principal si está conectado. En caso contrario, se muestra el primer entorno conectado.",
+  "8bb4e9161a9c176c": "El diagnóstico muestra el primer entorno conectado de esta selección, dando prioridad al entorno principal.",
   "68adbf70a881158a": "Contadores nativos en vivo del servidor, los proveedores, las terminales, los procesos de escritorio y el propio monitor.",
   "d8aa38c63052c605": "Reintentar monitor",
   "1486685f8451aff4": "Estado del host",

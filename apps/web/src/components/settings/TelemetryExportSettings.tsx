@@ -108,12 +108,25 @@ function endpointStatus(
 
 export function TelemetryExportSettings() {
   const gt = useGT();
-  const { environment, scope } = useSettingsScope();
+  const { connectedEnvironments, environment, scope } = useSettingsScope();
   if (scope.kind !== "environment" || !environment) {
+    const eligibleEnvironmentIds = connectedEnvironments.flatMap((entry) =>
+      entry.serverConfig?.observability?.telemetry ? [entry.environmentId] : [],
+    );
     return (
       <SettingsSection title={gt("OpenTelemetry export")}>
-        <SettingsScopeNotice inline target="environment" targetId="telemetry-endpoints">
-          {gt("Choose one environment to configure its telemetry exports.")}
+        <SettingsScopeNotice
+          inline
+          target="environment"
+          targetId="telemetry-endpoints"
+          eligibleEnvironmentIds={eligibleEnvironmentIds}
+        >
+          {eligibleEnvironmentIds.length > 0
+            ? gt("Choose one environment to configure its telemetry exports.")
+            : gt(
+                "{title} requires a supporting environment. Connect or update an environment to continue.",
+                { title: gt("OpenTelemetry export") },
+              )}
         </SettingsScopeNotice>
       </SettingsSection>
     );

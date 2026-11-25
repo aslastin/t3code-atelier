@@ -9649,7 +9649,7 @@
   "ca04162de1fbce83": "Telemetrie-Snapshot aktualisieren",
   "b1dccb692109581c": "Alle T3-Prozesse",
   "7a8fff009bb51074": "Diagnoseumgebung",
-  "6421b63e290a67b5": "Unter „Alle Umgebungen“ zeigt die Diagnose die primäre Umgebung, wenn sie verbunden ist, sonst die erste verbundene Umgebung.",
+  "8bb4e9161a9c176c": "Die Diagnose zeigt die erste verbundene Umgebung in dieser Auswahl an. Die primäre Umgebung hat Vorrang.",
   "68adbf70a881158a": "Native Live-Zähler für den Server, Anbieter, Terminals, Desktop-Prozesse und den Monitor selbst.",
   "d8aa38c63052c605": "Monitor erneut versuchen",
   "1486685f8451aff4": "Host-Zustand",

@@ -999,10 +999,10 @@ function DiagnosticsSettingsBody() {
           onChange={selectScope}
         />
       </div>
-      {scope.kind === "all" && (
+      {(scope.kind === "all" || (scope.kind === "project" && scope.environmentId === null)) && (
         <p className="text-xs text-muted-foreground">
           {gt(
-            "In All environments, diagnostics show the primary environment if connected, otherwise the first connected environment.",
+            "Diagnostics show the first connected environment in this selection, giving priority to the primary environment.",
           )}
         </p>
       )}

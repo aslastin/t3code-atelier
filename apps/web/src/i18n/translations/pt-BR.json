@@ -9647,7 +9647,7 @@
   "ca04162de1fbce83": "Atualizar snapshot de telemetria",
   "b1dccb692109581c": "Todos os processos do T3",
   "7a8fff009bb51074": "Ambiente de diagnóstico",
-  "6421b63e290a67b5": "Em “Todos os ambientes”, o diagnóstico mostra o ambiente principal se ele estiver conectado. Caso contrário, mostra o primeiro ambiente conectado.",
+  "8bb4e9161a9c176c": "O diagnóstico mostra o primeiro ambiente conectado desta seleção, dando prioridade ao ambiente principal.",
   "68adbf70a881158a": "Contadores nativos ao vivo do servidor, provedores, terminais, processos do desktop e do próprio monitor.",
   "d8aa38c63052c605": "Tentar o monitor novamente",
   "1486685f8451aff4": "Estado do host",

@@ -9657,7 +9657,7 @@
   "ca04162de1fbce83": "Refresh telemetry snapshot",
   "b1dccb692109581c": "All T3 processes",
   "7a8fff009bb51074": "Diagnostics environment",
-  "6421b63e290a67b5": "In All environments, diagnostics show the primary environment if connected, otherwise the first connected environment.",
+  "8bb4e9161a9c176c": "Diagnostics show the first connected environment in this selection, giving priority to the primary environment.",
   "68adbf70a881158a": "Live native counters for the server, providers, terminals, desktop processes, and the monitor itself.",
   "d8aa38c63052c605": "Retry monitor",
   "1486685f8451aff4": "Host state",

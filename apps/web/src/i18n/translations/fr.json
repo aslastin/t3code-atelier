@@ -9647,7 +9647,7 @@
   "ca04162de1fbce83": "Actualiser l’instantané de télémétrie",
   "b1dccb692109581c": "Tous les processus T3",
   "7a8fff009bb51074": "Environnement de diagnostic",
-  "6421b63e290a67b5": "Dans « Tous les environnements », le diagnostic affiche l’environnement principal s’il est connecté, sinon le premier environnement connecté.",
+  "8bb4e9161a9c176c": "Le diagnostic affiche le premier environnement connecté de cette sélection, en donnant la priorité à l’environnement principal.",
   "68adbf70a881158a": "Compteurs natifs en direct pour le serveur, les fournisseurs, les terminaux, les processus de bureau et le moniteur lui-même.",
   "d8aa38c63052c605": "Relancer le moniteur",
   "1486685f8451aff4": "État de l’hôte",

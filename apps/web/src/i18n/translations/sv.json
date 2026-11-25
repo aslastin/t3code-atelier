@@ -9655,7 +9655,7 @@
   "ca04162de1fbce83": "Uppdatera telemetriögonblicksbild",
   "b1dccb692109581c": "Alla T3-processer",
   "7a8fff009bb51074": "Diagnostikmiljö",
-  "6421b63e290a67b5": "Under ”Alla miljöer” visas diagnostik för den primära miljön om den är ansluten, annars för den första anslutna miljön.",
+  "8bb4e9161a9c176c": "Diagnostiken visar den första anslutna miljön i urvalet. Den primära miljön har företräde.",
   "68adbf70a881158a": "Aktiva inbyggda räknare för servern, leverantörer, terminaler, skrivbordsprocesser och själva övervakaren.",
   "d8aa38c63052c605": "Försök starta övervakaren igen",
   "1486685f8451aff4": "Värdens tillstånd",

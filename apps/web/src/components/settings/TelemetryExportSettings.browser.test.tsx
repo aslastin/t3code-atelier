@@ -5,6 +5,7 @@ import { userEvent } from "vite-plus/test/browser";
 
 const { state, updateSettings, checkOtlpEndpoint, checkOtlpEndpointCommand } = vi.hoisted(() => ({
   state: {
+    allEnvironments: false,
     listeners: new Set<() => void>(),
     observability: {} as typeof DEFAULT_SERVER_SETTINGS.observability,
     serverConfig: { environment: { capabilities: {} } } as {
@@ -18,6 +19,28 @@ const { state, updateSettings, checkOtlpEndpoint, checkOtlpEndpointCommand } = v
     value: { _tag: "Accepted" as const, latencyMs: 12 },
   })),
   checkOtlpEndpointCommand: { permissionAtom: () => null },
+}));
+
+function exportEnvironments() {
+  const serverConfig = {
+    ...state.serverConfig,
+    environment: { ...state.serverConfig.environment, platform: { machine: "server" } },
+  };
+  return [
+    { environmentId: "ready", label: "Ready", connected: true, serverConfig },
+    { environmentId: "offline", label: "Offline", connected: false, serverConfig },
+    {
+      environmentId: "legacy",
+      label: "Legacy",
+      connected: true,
+      serverConfig: { ...serverConfig, observability: { ...activeExport, telemetry: undefined } },
+    },
+  ];
+}
+
+vi.mock(import("../../state/environments"), async (original) => ({
+  ...(await original()),
+  useEnvironments: (() => ({ environments: exportEnvironments() })) as never,
 }));
 
 vi.mock(import("@effect/atom-react"), async (original) => ({
@@ -56,6 +79,14 @@ vi.mock(import("./SettingsScopeContext"), async (original) => {
     ...(await original()),
     useSettingsScope: (() => {
       const running = useSyncExternalStore(subscribe, () => state.serverConfig.observability);
+      if (state.allEnvironments) {
+        return {
+          scope: { kind: "all" },
+          groups: [],
+          search: {},
+          connectedEnvironments: exportEnvironments().filter((env) => env.connected),
+        };
+      }
       return {
         scope: { kind: "environment" },
         environment: {
@@ -88,12 +119,31 @@ const activeExport: ServerObservability = {
   },
 };
 function setup() {
+  state.allEnvironments = false;
   updateSettings.mockClear();
   checkOtlpEndpoint.mockReset();
   state.serverConfig = { environment: { capabilities: {} } };
 }
 
 describe("TelemetryExportSettings", () => {
+  it("offers only connected environments that support telemetry exports", async () => {
+    setup();
+    state.allEnvironments = true;
+    state.serverConfig.observability = activeExport;
+    await using screen = await render(<TelemetryExportSettings />, { router: "/settings" });
+    await expect.element(screen.getByRole("button", { name: /Ready/ })).toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("button", { name: /Offline|Legacy/ }).first())
+      .not.toBeInTheDocument();
+
+    delete state.serverConfig.observability;
+    await screen.rerender(<TelemetryExportSettings />);
+    await expect.element(screen.getByRole("button").first()).not.toBeInTheDocument();
+    await expect
+      .element(screen.getByText(/Connect or update an environment to continue/))
+      .toBeInTheDocument();
+  });
+
   it("does not resend a field the user restored after another client changed it", async () => {
     setup();
     state.observability = {
