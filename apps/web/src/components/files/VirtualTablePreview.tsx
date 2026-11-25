@@ -223,7 +223,7 @@ function RowPage(
             aria-rowindex={props.source ? undefined : index + 1}
             className={
               props.source
-                ? `flex min-h-[29px] flex-wrap font-mono ${highlighted ? "bg-primary/10" : ""}`
+                ? `group/line flex min-h-[29px] flex-wrap font-mono ${highlighted ? "bg-primary/10" : ""}`
                 : `flex min-h-[29px] border-b border-border/60 ${(index - (props.header ? 1 : 0)) % 2 ? "bg-muted/30" : ""}`
             }
             data-preview-reveal={line === revealLine ? "true" : undefined}

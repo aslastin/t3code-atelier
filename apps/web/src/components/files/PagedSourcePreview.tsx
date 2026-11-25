@@ -1,5 +1,6 @@
 import type { SelectedLineRange } from "@pierre/diffs";
 import { useGT } from "gt-react";
+import { PlusIcon } from "lucide-react";
 import {
   type ComponentProps,
   type PointerEvent,
@@ -172,7 +173,7 @@ export function PagedSourcePreview({
         renderLineNumber={(line, loaded) => (
           <button
             type="button"
-            className="w-full cursor-pointer touch-none text-right hover:text-primary focus-visible:text-primary disabled:cursor-default"
+            className="group/comment relative w-full cursor-pointer touch-none text-right hover:text-primary focus-visible:text-primary disabled:cursor-default disabled:[&>svg]:hidden"
             disabled={!loaded || hasOpenCommentForm || reading}
             aria-label={gt("Comment on lines {rangeLabel}", { rangeLabel: `L${line}` })}
             onPointerDown={(event) => {
@@ -192,6 +193,10 @@ export function PagedSourcePreview({
             }}
           >
             {line}
+            <PlusIcon
+              aria-hidden="true"
+              className="invisible absolute top-1/2 left-full ml-px size-5 -translate-y-1/2 rounded-sm bg-file-comment-gutter p-0.5 text-background group-hover/line:visible group-focus-visible/comment:visible"
+            />
           </button>
         )}
         renderAnnotation={(line) => {
