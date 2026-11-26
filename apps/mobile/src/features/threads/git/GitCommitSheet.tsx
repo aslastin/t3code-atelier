@@ -52,6 +52,8 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
   const busy = gitState.gitOperationLabel !== null;
   // A VCS plugin's commit starts no branch of its own.
   const offersFeatureBranch = vcsAllows(gitStatus.data, "featureBranch");
+  // A plugin whose commit takes no file list commits every change: no file is left out.
+  const offersPartialCommit = vcsAllows(gitStatus.data, "partialCommit");
   const isDefaultRef = gitStatus.data?.isDefaultRef ?? false;
   const allFiles = gitStatus.data?.workingTree?.files ?? [];
 
@@ -129,7 +131,7 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
               </T>
             </Text>
           </View>
-          {allFiles.length > 0 ? (
+          {allFiles.length > 0 && offersPartialCommit ? (
             <Button
               label={
                 allSelected
@@ -161,7 +163,8 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
                 className="min-h-16 flex-row items-center gap-3 border-t border-border-subtle py-3"
                 accessibilityRole="checkbox"
                 accessibilityLabel={file.path}
-                accessibilityState={{ checked: included }}
+                accessibilityState={{ checked: included, disabled: !offersPartialCommit }}
+                disabled={!offersPartialCommit}
                 onPress={() =>
                   setExcludedFiles((current) => {
                     const next = new Set(current);

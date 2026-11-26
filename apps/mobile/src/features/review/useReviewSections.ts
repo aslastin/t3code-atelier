@@ -1,3 +1,4 @@
+import { vcsAllows } from "@t3tools/client-runtime/state/vcs-capabilities";
 import { useAtomValue } from "@effect/atom-react";
 import { resolveFilesystemReadAccess } from "@t3tools/client-runtime/state/filesystem";
 import { Atom } from "effect/reactivity";
@@ -25,6 +26,7 @@ import {
   type ReviewGitSectionKind,
   type ReviewSectionItem,
 } from "./reviewModel";
+import { vcsEnvironment } from "../../state/vcs";
 import { setReviewSelectedSectionId, type ReviewCacheForThread } from "./reviewState";
 
 const NO_GIT_SECTIONS_ATOM = Atom.make<ReadonlyArray<ReviewDiffPreviewSource>>([]).pipe(
@@ -62,8 +64,19 @@ export function useReviewSections(input: {
   const selectedThread = useSelectedThreadProjection();
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const { selectedThreadProject } = useThreadSelection();
+  // A VCS plugin's repository has turn diffs, but no Git working-tree or branch previews.
+  const vcsStatus = useEnvironmentQuery(
+    enabled && environmentId !== undefined && selectedThreadCwd !== null
+      ? vcsEnvironment.status({ environmentId, input: { cwd: selectedThreadCwd } })
+      : null,
+  );
+  const offersGitSections = vcsAllows(vcsStatus.data, "reviewDiff");
   const diffPreviewQuery = (sourceKind: ReviewGitSectionKind) =>
-    canReadFiles && enabled && environmentId !== undefined && selectedThreadCwd !== null
+    canReadFiles &&
+    offersGitSections &&
+    enabled &&
+    environmentId !== undefined &&
+    selectedThreadCwd !== null
       ? reviewEnvironment.diffPreview({
           environmentId,
           input: { cwd: selectedThreadCwd, sourceKind },

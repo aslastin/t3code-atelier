@@ -1094,6 +1094,8 @@ function CheckoutGitActionsControl({
   const offersReviewDiff = vcsAllows(gitStatusForActions, "reviewDiff");
   // A VCS plugin's commit starts no branch of its own.
   const offersFeatureBranch = vcsAllows(gitStatusForActions, "featureBranch");
+  // A plugin whose commit takes no file list commits every change: no file is left out.
+  const offersPartialCommit = vcsAllows(gitStatusForActions, "partialCommit");
   const changesPreview = useEnvironmentQuery(
     showChanges &&
       isRepo &&
@@ -1873,7 +1875,7 @@ function CheckoutGitActionsControl({
                       </span>
                     )}
                   </div>
-                  {allFiles.length > 0 && (
+                  {allFiles.length > 0 && offersPartialCommit && (
                     <Button
                       variant="ghost"
                       size="xs"
@@ -2064,7 +2066,11 @@ function CheckoutGitActionsControl({
               className="w-full max-w-full sm:w-auto"
               size="sm-multiline"
               onClick={() => continuePendingDefaultBranchAction(true)}
-              disabled={!canCreateFeatureBranch || featureBranchUnavailableReason !== null}
+              disabled={
+                !canCreateFeatureBranch ||
+                featureBranchUnavailableReason !== null ||
+                !offersFeatureBranch
+              }
             >
               <T>Check out feature branch & continue</T>
             </Button>

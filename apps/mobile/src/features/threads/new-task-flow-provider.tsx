@@ -152,6 +152,8 @@ type NewTaskFlowContextValue = {
   readonly isGitRepoKnown: boolean;
   /** False when the project's VCS plugin cannot create worktrees. */
   readonly offersWorktrees: boolean;
+  /** False when the project's VCS plugin cannot switch branches in place. */
+  readonly canSwitchRefs: boolean;
   /** The project tracks a Git folder, so a worktree is possible without a Git project folder. */
   readonly tracksGitRepositories: boolean;
   /** The project's tracked Git folders; null while they load. */
@@ -416,11 +418,18 @@ export function NewTaskFlowProvider(
     Arr.filter((branch) => !branch.isRemote),
   );
 
+  // The VCS decides what can run: without worktrees, a worktree default or saved choice resolves
+  // as local, so its branch is the checkout's, not a worktree base.
+  const offersWorktrees = vcsAllows(projectGitStatus.data, "worktree");
+  const canSwitchRefs = vcsAllows(projectGitStatus.data, "switchRef");
   const resolveWorkspaceSelection = (selection: ComposerDraftWorkspaceSelection | undefined) =>
     resolveNewTaskDraftWorkspace({
-      selection,
+      selection:
+        selection !== undefined && !offersWorktrees && selection.mode === "worktree"
+          ? { ...selection, mode: "local", branch: null, worktreePath: null }
+          : selection,
       canChooseWorkspace,
-      defaultMode: defaultWorkspaceMode,
+      defaultMode: offersWorktrees ? defaultWorkspaceMode : "local",
       defaultModeSettled: projectDefaults.defaultWorkspaceModeSettled,
       isGitRepo,
       tracksGitRepositories,
@@ -428,7 +437,6 @@ export function NewTaskFlowProvider(
       projectCwd: selectedProject?.workspaceRoot ?? null,
     });
   const workspaceSelection = resolveWorkspaceSelection(selectedProjectDraft.workspaceSelection);
-  const offersWorktrees = vcsAllows(projectGitStatus.data, "worktree");
   const workspaceMode = offersWorktrees ? workspaceSelection.mode : "local";
   const selectedBranchName = workspaceSelection.branch;
   const selectedWorktreePath = workspaceSelection.worktreePath;
@@ -929,6 +937,7 @@ export function NewTaskFlowProvider(
     isGitRepo,
     isGitRepoKnown: knownIsGitRepo !== null,
     offersWorktrees,
+    canSwitchRefs,
     tracksGitRepositories,
     worktreeRepositoryChoices,
     worktreeRepositorySelection,

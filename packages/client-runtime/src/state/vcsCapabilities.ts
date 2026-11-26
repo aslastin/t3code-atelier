@@ -12,7 +12,8 @@ export type VcsCapability =
   | "featureBranch"
   | "publish"
   | "pull"
-  | "switchRef";
+  | "switchRef"
+  | "partialCommit";
 
 type CapabilityStatus = Pick<VcsStatusLocalResult, "capabilities"> | null | undefined;
 
@@ -40,6 +41,9 @@ export function vcsAllows(status: CapabilityStatus, capability: VcsCapability): 
       return capabilities.kind === GIT_VCS_KIND;
     case "pull":
       return capabilities.kind === GIT_VCS_KIND || capabilities.supportsPull === true;
+    // A plugin whose commit takes no file list commits every change.
+    case "partialCommit":
+      return capabilities.supportsPartialCommit !== false;
   }
 }
 

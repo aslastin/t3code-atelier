@@ -305,7 +305,10 @@ export function BranchToolbarBranchSelector({
           }).nextWorktreePath,
     });
   const checkoutPullRequestItemValue =
-    canChangeThreadBranch && prReference && onCheckoutPullRequestRequest
+    canChangeThreadBranch &&
+    prReference &&
+    onCheckoutPullRequestRequest &&
+    vcsAllows(branchStatusQuery.data, "pullRequest")
       ? `__checkout_pull_request__:${prReference}`
       : null;
   // A VCS plugin starts no branch in place and cannot switch one: only its worktrees are offered.

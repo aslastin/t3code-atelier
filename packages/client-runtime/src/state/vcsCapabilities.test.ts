@@ -62,6 +62,8 @@ describe("vcsCapabilities", () => {
     expect(limitGitQuickAction(pull, plugin(), copy)).toMatchObject({ kind: "show_hint" });
     expect(limitGitQuickAction(pull, plugin({ supportsPull: true }), copy)).toEqual(pull);
     expect(vcsAllows(plugin(), "switchRef")).toBe(false);
+    expect(vcsAllows(plugin({ supportsPartialCommit: false }), "partialCommit")).toBe(false);
+    expect(vcsAllows(plugin(), "partialCommit")).toBe(true);
     expect(vcsAllows(git, "switchRef")).toBe(true);
   });
 

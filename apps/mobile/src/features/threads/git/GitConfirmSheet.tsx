@@ -1,3 +1,4 @@
+import { vcsAllows } from "@t3tools/client-runtime/state/vcs-capabilities";
 import { resolveDefaultBranchActionDialogCopy } from "@t3tools/client-runtime/state/vcs";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { resolveAutoFeatureBranchName } from "@t3tools/shared/git";
@@ -15,6 +16,7 @@ import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-
 import { useSelectedThreadGitState } from "../../../state/use-selected-thread-git-state";
 import { useThreadSelection } from "../../../state/use-thread-selection";
 import { useEnvironmentQuery } from "../../../state/query";
+import { useSelectedThreadWorktree } from "../../../state/use-selected-thread-worktree";
 import {
   gitRepositoryTargetFromRoute,
   type GitRepositoryRouteParams,
@@ -52,6 +54,18 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
         })
       : null,
   );
+  // A VCS plugin without branchCreate cannot move the change to a new branch.
+  const { selectedThreadCwd } = useSelectedThreadWorktree();
+  const statusCwd = repository?.cwd ?? selectedThreadCwd;
+  const vcsStatus = useEnvironmentQuery(
+    statusCwd !== null && selectedThread !== null
+      ? vcsEnvironment.status({
+          environmentId: selectedThread.environmentId,
+          input: { cwd: statusCwd },
+        })
+      : null,
+  );
+  const offersFeatureBranch = vcsAllows(vcsStatus.data, "featureBranch");
   const terminology = sourceControlClients.get(
     repository === undefined
       ? selectedThreadProject?.repositoryIdentity?.provider
@@ -157,7 +171,7 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
         <SheetActionButton
           icon="arrow.branch"
           label={gt("Feature branch & continue")}
-          disabled={!canCreateFeatureBranch}
+          disabled={!canCreateFeatureBranch || !offersFeatureBranch}
           tone="primary"
           onPress={() => void movePendingActionToFeatureBranch()}
         />

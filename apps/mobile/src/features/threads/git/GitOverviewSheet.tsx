@@ -1,4 +1,4 @@
-import { limitGitMenuItems } from "@t3tools/client-runtime/state/vcs-capabilities";
+import { limitGitMenuItems, vcsAllows } from "@t3tools/client-runtime/state/vcs-capabilities";
 import * as Dialog from "../../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../../native/useOpenPullRequest";
 import {
@@ -374,7 +374,7 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
               onPress={() => void onPressMenuItem(item)}
             />
           ))}
-          {behindCount > 0 ? (
+          {behindCount > 0 && vcsAllows(gitStatus.data, "pull") ? (
             <ListRow
               icon="arrow.down.circle"
               label={gt("Pull latest")}
