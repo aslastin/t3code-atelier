@@ -337,6 +337,7 @@ describe("composer rich text document model", () => {
     "![image](https://t3.codes/a.png) stays literal",
     "[ spaced label ](https://t3.codes)",
     "[   ](https://t3.codes)",
+    "before [****](https://one.dev) after",
     `[open](https://t3.codes/?src=${formatComposerContextReference({ kind: "file", contextId: ComposerContextId.make("file_f1"), label: "r" })}) then ${formatComposerContextReference({ kind: "file", contextId: ComposerContextId.make("file_f2"), label: "doc" })}`,
     "[relative](./a.ts) stays literal",
   ])("round-trips %s through a real ProseMirror document", (value) => {
@@ -426,6 +427,17 @@ describe("composer rich text document model", () => {
       ]),
     );
     expect(markdownToFlat(longLabel, "[abc](https://t3".length)).toBe(2);
+    expect(markdownToFlat(longLabel, "[".length)).toBe(1);
+    const styledStart = serializeEditorDoc(
+      ProseMirrorNode.fromJSON(
+        schema,
+        buildDocJson("[**doc**s](https://t3.codes) after", (name) => ({
+          label: name,
+          description: null,
+        })),
+      ),
+    );
+    expect(markdownToFlat(styledStart, "[**doc**s](https://t3".length)).toBe("doc".length);
   });
 
   it("applies a shared mark to text on both sides of a chip", () => {

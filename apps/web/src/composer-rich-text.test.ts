@@ -165,6 +165,8 @@ describe("composer rich text markdown", () => {
     "[label] (https://t3.codes)",
     "`[code](https://t3.codes)`",
     "[   ](https://t3.codes)",
+    "before [****](https://one.dev) after",
+    "[~~~~](https://one.dev)",
     "[x](https://t3.codes/?tag=foo\\))",
     "[x](https://t3.codes/?src=\uFFFC)",
   ])("keeps %s literal", (text) => {

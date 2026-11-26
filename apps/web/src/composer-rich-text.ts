@@ -125,6 +125,8 @@ function parseInlineMarkdownPieces(text: string): SourcePiece[] {
     if (link && index >= link.labelEnd) {
       unwind(link.frame);
       stack.pop();
+      // A label that parses to nothing, like `[****](url)`, would drop the whole link.
+      if (link.frame.pieces.length === 0) push(link.frame.start, link.end);
       for (const piece of link.frame.pieces) {
         push(piece.start, piece.end, ["link", ...piece.marks], link.href);
       }

@@ -184,7 +184,11 @@ function typedLinkRule(): InputRule {
       // in the document when an IME commits it. Labels hold no chips, so text lengths fit.
       const tailStart = range.from + 1 + match[1]!.length;
       const $from = state.doc.resolve(range.from);
-      const before = $from.parent.textBetween(0, $from.parentOffset, undefined, "￼");
+      // A link before the `[` ends in `)` once written, whatever its label ends with.
+      const linkBefore = $from.nodeBefore?.marks.some((mark) => mark.type.name === "link");
+      const before = linkBefore
+        ? ")"
+        : $from.parent.textBetween(0, $from.parentOffset, undefined, "￼");
       const backslashes = /\\*$/.exec(before.endsWith("!") ? before.slice(0, -1) : before)![0];
       // `![label](url)` is an image and `\[` a literal bracket, unless that backslash is escaped.
       if (
@@ -202,7 +206,11 @@ function typedLinkRule(): InputRule {
       const labelEnd = tr.mapping.map(tailStart, -1);
       const end = tr.mapping.map(range.to, 1);
       // Retyping a shown link's selected `)` over itself: parsing its source made the link.
-      if (!state.selection.empty && from < end && linksWholeRange(tr.doc, from, end, href)) {
+      if (
+        state.selection.to - state.selection.from === 1 &&
+        from < end &&
+        linksWholeRange(tr.doc, from, end, href)
+      ) {
         tr.setSelection(TextSelection.create(tr.doc, end));
         return undefined;
       }
@@ -217,6 +225,13 @@ function typedLinkRule(): InputRule {
       const type = tr.doc.type.schema.marks.link!;
       // Links cannot nest; linking `[[docs](a)](b)` would drop the inner destination.
       if (tr.doc.rangeHasMark(from + 1, labelEnd, type)) return null;
+      // The `[` and `](address` are deleted, so they must be plain text, not part of a link.
+      let styledTail = false;
+      tr.doc.nodesBetween(labelEnd, labelEnd + tail.length, (node) => {
+        if (node.isInline && node.marks.length > 0) styledTail = true;
+        return !styledTail;
+      });
+      if (styledTail || tr.doc.rangeHasMark(from, from + 1, type)) return null;
       tr.delete(labelEnd, to).delete(from, from + 1);
       tr.addMark(from, labelEnd - 1, type.create({ href }));
       // Input rules for `**` need a space before them, so `[**bold**` is still plain text.
@@ -335,17 +350,23 @@ function linkSelection(tr: Transaction, href: string): boolean {
     return !holdsChip;
   });
   if (holdsChip) return false;
-  const mark = type.create({ href });
+  // Check with an address no other text in the line links to, so the read-back below
+  // tells this link apart from an existing one with the same address.
+  const probeMark = type.create({ href: PROBE_HREF });
   const probe = new Transform(tr.doc);
-  if (from === to) probe.insert(from, tr.doc.type.schema.text(href, [mark]));
-  else probe.removeMark(from, to, type).addMark(from, to, mark);
+  if (from === to) probe.insert(from, tr.doc.type.schema.text(href, [probeMark]));
+  else probe.removeMark(from, to, type).addMark(from, to, probeMark);
   // Text such as `!`, `[` or a backtick elsewhere in the line can turn the written link
   // into an image, plain text or code, so read the line back as a reload would.
-  if (!linkReadsBack(probe.doc.resolve(from).parent, href)) return false;
-  for (const step of probe.steps) tr.step(step);
+  if (!linkReadsBack(probe.doc.resolve(from).parent, PROBE_HREF)) return false;
+  const mark = type.create({ href });
+  if (from === to) tr.insert(from, tr.doc.type.schema.text(href, [mark]));
+  else tr.removeMark(from, to, type).addMark(from, to, mark);
   tr.setSelection(TextSelection.create(tr.doc, from === to ? from + href.length : to));
   return true;
 }
+
+const PROBE_HREF = "https://t3-link-probe.invalid/";
 
 /** Whether exactly the text linked to `href` in `block` is still linked to it once written as Markdown. */
 function linkReadsBack(block: ProseMirrorNode, href: string): boolean {

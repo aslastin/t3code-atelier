@@ -268,7 +268,8 @@ export const ComposerCodeExtension = Code.extend({
           handler: (props) => {
             if (
               literalBackticksBefore(props.state.doc.resolve(props.range.from)) % 2 === 1 ||
-              touchesMarkdownSource(props.state, props.range.from, props.range.to)
+              touchesMarkdownSource(props.state, props.range.from, props.range.to) ||
+              crossesLinkEdge(props.state, props.range.from, props.range.to)
             ) {
               return null;
             }
@@ -309,6 +310,20 @@ function touchesMarkdownSource(state: EditorState, from: number, to: number): bo
   return [$pos.nodeBefore, $pos.nodeAfter].some((node) => node && type.isInSet(node.marks));
 }
 
+/**
+ * Whether `from`-`to` spans a link's edge. A delimiter in a link's label cannot pair with
+ * one outside it, so styling across the edge would rewrite the label's Markdown.
+ */
+function crossesLinkEdge(state: EditorState, from: number, to: number): boolean {
+  const hrefs = new Set<unknown>();
+  state.doc.nodesBetween(from, to, (node) => {
+    if (node.isInline) {
+      hrefs.add(node.marks.find((mark) => mark.type.name === "link")?.attrs.href ?? null);
+    }
+  });
+  return hrefs.size > 1;
+}
+
 // Code permits nested emphasis, so Tiptap's exclusion check cannot protect literal delimiters.
 function markInputRuleOutsideCode(find: RegExp, type: MarkType) {
   const rule = markInputRule({ find, type });
@@ -321,6 +336,7 @@ function markInputRuleOutsideCode(find: RegExp, type: MarkType) {
       const textStart = range.from + match[0].indexOf(content);
       const textEnd = textStart + content.length;
       if (touchesMarkdownSource(state, range.from, range.to)) return null;
+      if (crossesLinkEdge(state, range.from, range.to)) return null;
       if (
         code &&
         (state.doc.rangeHasMark(range.from + match[0].search(/\S/), textStart, code) ||
@@ -1927,19 +1943,25 @@ export function markdownToFlat(map: RichDocMap, markdownOffset: number): number 
       if (run.kind === "prefix") return run.flatStart;
       if (run.kind === "text" || run.kind === "token") {
         const within = markdownOffset - run.mdStart;
-        if (within <= run.openLen) return run.flatStart;
+        const open = map.value.slice(run.mdStart, run.mdStart + run.openLen);
+        // Offsets in a link's `[` or `](address)` land inside its label, which shows them
+        // as source; the label's edges are outside the link.
+        if (within <= run.openLen) {
+          return within > 0 && open.includes("[") && run.kind === "text" && run.docLen > 1
+            ? run.flatStart + 1
+            : run.flatStart;
+        }
         // A chip is one document position however long its source is.
         if (run.kind === "token") return run.flatStart + run.docLen;
         if (within >= run.openLen + run.docLen) {
-          // An offset in a link's `](address)` lands inside its label, which shows the
-          // address as source; the end of the label is outside the link.
           const close = map.value.slice(
             run.mdStart + run.openLen + run.docLen,
             run.mdStart + run.mdLen,
           );
-          return close.includes("](") && run.docLen > 1
-            ? run.flatStart + run.docLen - 1
-            : run.flatStart + run.docLen;
+          if (!close.includes("](")) return run.flatStart + run.docLen;
+          // A later run of a label starts inside the link.
+          if (run.docLen > 1) return run.flatStart + run.docLen - 1;
+          return open.includes("[") ? run.flatStart + run.docLen : run.flatStart;
         }
         return run.flatStart + (within - run.openLen);
       }

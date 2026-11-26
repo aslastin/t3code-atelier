@@ -92,7 +92,10 @@ function revealsFaithfully(doc: ProseMirrorNode, range: StyledRange): boolean {
   // A delimiter beside a link's brackets stays a literal character either way.
   const edges = styledRangeLinkEdges(range);
   const adjacent = withAdjacentDelimiters(doc, range);
-  if (!(edges.start && edges.end) && (adjacent.from !== range.from || adjacent.to !== range.to)) {
+  if (
+    !(edges.start !== undefined && edges.end !== undefined) &&
+    (adjacent.from !== range.from || adjacent.to !== range.to)
+  ) {
     return false;
   }
   // Parsing keeps escapes as text, so styled `path\` or `2*3` stays styled, unshown.
@@ -127,41 +130,34 @@ function revealsFaithfully(doc: ProseMirrorNode, range: StyledRange): boolean {
   );
 }
 
-/** Which ends of a range are a link's own brackets, rather than another style's markers. */
-type LinkEdges = { start: boolean; end: boolean };
-
-const NO_LINK_EDGES: LinkEdges = { start: false, end: false };
+/** Where a range's outermost link starts (its `[`) and ends (after its `)`), if it has one. */
+type LinkEdges = { start?: number; end?: number };
 
 /**
  * A caret at the outer edge of a link stays beside it, so typing a link's
  * closing `)` shows it as a link at once. Other styles show their markers there.
  */
-function touches(
-  selection: Selection,
-  { from, to }: TextRange,
-  link: LinkEdges = NO_LINK_EDGES,
-): boolean {
+function touches(selection: Selection, { from, to }: TextRange, link: LinkEdges = {}): boolean {
   if (!selection.empty) return selection.from < to && selection.to > from;
   return (
-    (link.start ? selection.from > from : selection.from >= from) &&
-    (link.end ? selection.from < to : selection.from <= to)
+    (link.start === undefined ? selection.from >= from : selection.from > link.start) &&
+    (link.end === undefined ? selection.from <= to : selection.from < link.end)
   );
 }
 
 function styledRangeLinkEdges(range: StyledRange): LinkEdges {
-  return {
-    start: range.markers.some(
-      ({ at, closing, text }) => !closing && at === range.from && text.startsWith("["),
-    ),
-    end: range.markers.some(
-      ({ at, closing, text }) => closing && at === range.to && text.endsWith(")"),
-    ),
-  };
+  const opens = range.markers.some(
+    ({ at, closing, text }) => !closing && at === range.from && text.startsWith("["),
+  );
+  const closes = range.markers.some(
+    ({ at, closing, text }) => closing && at === range.to && text.endsWith(")"),
+  );
+  return { ...(opens ? { start: range.from } : {}), ...(closes ? { end: range.to } : {}) };
 }
 
 /**
  * Only a link drops brackets and parentheses when parsed. Literal delimiters typed
- * beside it, like the `*` in `[a](url)*`, do not move its edges inward.
+ * beside it, like the `*` in `[a](url)*`, lie outside its edges.
  */
 function sourceLinkEdges(doc: ProseMirrorNode, region: TextRange): LinkEdges {
   const { text, units } = regionUnits(doc, region);
@@ -169,10 +165,36 @@ function sourceLinkEdges(doc: ProseMirrorNode, region: TextRange): LinkEdges {
   const last = units.lastIndexOf(null);
   const literal = (from: number, to: number) =>
     units.slice(from, to).every((unit) => unit !== null);
+  const opens = first !== -1 && text[first] === "[" && literal(0, first);
+  const closes = last !== -1 && text[last] === ")" && literal(last + 1, units.length);
   return {
-    start: first !== -1 && text[first] === "[" && literal(0, first),
-    end: last !== -1 && text[last] === ")" && literal(last + 1, units.length),
+    ...(opens ? { start: region.from + first } : {}),
+    ...(closes ? { end: region.from + last + 1 } : {}),
   };
+}
+
+/**
+ * Splits shown source between adjacent links, like `[a](x)[b](y)`, so each
+ * collapses once the caret leaves it, where parsing the parts apart reads the same.
+ */
+function splitBetweenLinks(doc: ProseMirrorNode, region: TextRange): TextRange[] {
+  const { text, units } = regionUnits(doc, region);
+  if (!text.includes(")[")) return [region];
+  const parts: TextRange[] = [];
+  let start = 0;
+  for (let index = start + 1; index < text.length; index++) {
+    if (text[index - 1] !== ")" || text[index] !== "[" || units[index - 1] !== null) continue;
+    if (units[index] !== null) continue;
+    const apart = [
+      ...inlineMarkdownUnits(text.slice(start, index)).marks,
+      ...inlineMarkdownUnits(text.slice(index)).marks,
+    ];
+    if (!apart.every((marks, offset) => sameMarks(marks, units[start + offset]!))) continue;
+    parts.push({ from: region.from + start, to: region.from + index });
+    start = index;
+  }
+  parts.push({ from: region.from + start, to: region.to });
+  return parts;
 }
 
 function touchesSource(selection: Selection, doc: ProseMirrorNode, region: TextRange): boolean {
@@ -309,11 +331,12 @@ export function collapseMarkdownSource(
     if (previous && extended.from <= previous.to) previous.to = Math.max(previous.to, extended.to);
     else regions.push(extended);
   }
-  for (const region of regions.toReversed()) {
-    if (keep(region)) tr.addMark(region.from, region.to, type.create());
-    else collapseRegion(tr, region, type);
+  const parts = regions.flatMap((region) => splitBetweenLinks(tr.doc, region));
+  for (const part of parts.toReversed()) {
+    if (keep(part)) tr.addMark(part.from, part.to, type.create());
+    else collapseRegion(tr, part, type);
   }
-  return regions;
+  return parts;
 }
 
 function mapSelection(tr: Transaction, selection: Selection, map: (pos: number) => number) {

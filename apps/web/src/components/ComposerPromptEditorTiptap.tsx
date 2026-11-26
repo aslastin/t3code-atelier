@@ -1533,6 +1533,12 @@ function ComposerPromptEditorTiptapInner(
                     markAsClipboardEdit(tr, "paste");
                     return true;
                   })
+                  // Replace the selection first: parsing shown Markdown can remove selected
+                  // source, like a link's address, and leave the paste beside it.
+                  .command(({ tr }) => {
+                    if (!tr.selection.empty) tr.deleteSelection();
+                    return true;
+                  })
                   // Pasted chips and lines would split shown Markdown, so parse it first.
                   .command(collapseShownMarkdownSource)
                   .insertContent(content)

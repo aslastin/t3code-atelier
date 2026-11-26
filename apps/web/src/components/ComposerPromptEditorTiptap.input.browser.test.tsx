@@ -1618,6 +1618,123 @@ describe("Markdown links", () => {
     expect(editorRef.current?.openLinkEditor()).toBe(false);
   });
 
+  it("keeps an existing link when a typed link's address would swallow it", async () => {
+    await using screen = await mountEditor("[docs](https://one.dev)");
+    const { editor } = screen;
+    await focusAt(editor, 1);
+    await userEvent.keyboard("[[outer](https://{End})");
+    await vi.waitFor(() =>
+      expect(serializeEditorDoc(editor.state.doc).value).toBe(
+        "[outer](https://[docs](https://one.dev))",
+      ),
+    );
+  });
+
+  it("refuses to link an occurrence that would read back as an image", async () => {
+    const editorRef = createRef<ComposerPromptEditorHandle>();
+    await using screen = await render(
+      <Composer value="" richTextEnabled skills={[]} editorRef={editorRef} />,
+    );
+    const editor = editorIn(screen.container);
+    const text = "[docs](https://example.com) !docs";
+    await act(async () => {
+      editor.commands.setContent({
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+      });
+      editor.commands.setTextSelection({ from: text.length - 3, to: text.length + 1 });
+    });
+    expect(editorRef.current?.openLinkEditor()).toBe(false);
+  });
+
+  it.each([
+    { value: "[literal *open](https://one.dev)", keys: " now*" },
+    { value: "[literal `open](https://one.dev)", keys: " now`" },
+  ])(
+    "keeps a delimiter in $value from pairing with one typed after it",
+    async ({ value, keys }) => {
+      await using screen = await mountEditor(value);
+      const { editor } = screen;
+      await focusAt(editor, "end");
+      await userEvent.keyboard(keys);
+      await vi.waitFor(() =>
+        expect(serializeEditorDoc(editor.state.doc).value).toBe(`${value}${keys}`),
+      );
+    },
+  );
+
+  it("replaces a shown address with pasted lines", async () => {
+    const value = `[docs](${href}) after`;
+    await using screen = await mountEditor(value);
+    const { editor } = screen;
+    await focusAt(editor, 3);
+    expect(editor.state.doc.textContent).toBe(value);
+    const start = value.indexOf(href);
+    await act(async () => {
+      editor.commands.setTextSelection({ from: start + 1, to: start + 1 + href.length });
+      const clipboardData = new DataTransfer();
+      clipboardData.setData("text/plain", "https://other.dev\n");
+      editor.view.dom.dispatchEvent(
+        new ClipboardEvent("paste", { clipboardData, cancelable: true }),
+      );
+    });
+    const result = serializeEditorDoc(editor.state.doc).value;
+    // Pasted lines become their own lines; the selected address is gone.
+    expect(result).toBe("[docs](\nhttps://other.dev\n\n) after");
+  });
+
+  it("replaces a selected `)` and the markers after it", async () => {
+    const value = `**Read [docs](${href})** after`;
+    await using screen = await mountEditor(value);
+    const { editor } = screen;
+    await focusAt(editor, 3);
+    expect(editor.state.doc.textContent).toBe(value);
+    const close = value.indexOf(")**");
+    await act(async () => {
+      editor.commands.setTextSelection({ from: close + 1, to: close + 4 });
+    });
+    await userEvent.keyboard("){End}");
+    await vi.waitFor(() =>
+      expect(serializeEditorDoc(editor.state.doc).value).toBe(`**Read [docs](${href}) after`),
+    );
+  });
+
+  it("styles a typed link right after a link whose label ends in `!`", async () => {
+    await using screen = await mountEditor("[wow!](https://one.dev)");
+    const { editor } = screen;
+    await focusAt(editor, "end");
+    await userEvent.keyboard("[[docs](https://two.dev) ");
+    await vi.waitFor(() => expect(textWithMark(editor, "link")).toEqual(["wow!", "docs"]));
+  });
+
+  it("hides a link's Markdown with the caret between its `)` and literal markers", async () => {
+    const value = "see [docs](https://one.dev)** after";
+    await using screen = await mountEditor(value);
+    const { editor } = screen;
+    await focusAt(editor, "see do".length + 1);
+    expect(editor.state.doc.textContent).toBe(value);
+    await act(async () => {
+      editor.commands.setTextSelection(value.indexOf("** after") + 1);
+    });
+    expect(editor.state.doc.textContent).toBe("see docs** after");
+  });
+
+  it("hides the Markdown of a neighbouring link the caret has left", async () => {
+    const value = "[first](https://one.dev)[second](https://two.dev) after";
+    await using screen = await mountEditor(value);
+    const { editor } = screen;
+    await focusAt(editor, "end");
+    await act(async () => {
+      editor.commands.selectAll();
+    });
+    expect(editor.state.doc.textContent).toBe(value);
+    await act(async () => {
+      editor.commands.setTextSelection(3);
+    });
+    expect(textWithMark(editor, "markdownSource")).toEqual(["[first](https://one.dev)"]);
+    expect(textWithMark(editor, "link")).toEqual(["second"]);
+  });
+
   it("does not open the URL field for a link's revealed address", async () => {
     const editorRef = createRef<ComposerPromptEditorHandle>();
     const value = "[docs](https://old.test) after";
