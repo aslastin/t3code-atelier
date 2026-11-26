@@ -134,7 +134,10 @@ switch (command) {
     if (fs.existsSync(path.join(dir, "rewrite-on-check"))) {
       const manifestFile = path.join(dir, "plugin.json");
       const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
-      manifest.label = "Rewritten";
+      // "extra" touches only a field of its own, one T3 Code does not read.
+      if (fs.readFileSync(path.join(dir, "rewrite-on-check"), "utf8") === "extra")
+        manifest.formatVersion = 2;
+      else manifest.label = "Rewritten";
       fs.writeFileSync(manifestFile, JSON.stringify(manifest));
     }
     const problemsFile = path.join(process.env.T3_PLUGIN_DIR ?? "", "problems.txt");

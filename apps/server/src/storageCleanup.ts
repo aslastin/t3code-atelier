@@ -1,8 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFSP from "node:fs/promises";
 import {
+  CheckpointRef,
   CheckpointScopeId,
   GitCommandError,
+  type VcsDriverKind,
   type VcsWorkflowCommandError,
   OrchestrationV2AppThreadJson,
   OrchestrationV2ProviderSessionJson,
@@ -61,6 +63,7 @@ import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirectory.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
+import { pluginCheckpointsWithPrefixes } from "./plugins/pluginCheckpoints.ts";
 import { VcsPluginDrivers } from "./plugins/VcsPluginDrivers.ts";
 import { isNonRepositoryGitStderr } from "./vcs/GitVcsDriverCore.ts";
 import { worktreeRemovalChecks } from "./vcs/worktreeRemovalChecks.ts";
@@ -2054,6 +2057,34 @@ const make = Effect.gen(function* () {
       }).pipe(
         Effect.catch((cause) => Effect.logWarning("checkpoint ref cleanup failed", { cause })),
       );
+    }
+    // Atelier fork: a VCS plugin's checkpoints live in its own store, found by their records. A
+    // plugin turned off keeps them until it is back.
+    if (plugins === undefined) return;
+    const allPrefixes = new Set([...targets.values()].flatMap((prefixes) => [...prefixes]));
+    const records = yield* pluginCheckpointsWithPrefixes(allPrefixes);
+    if (records.length === 0) return;
+    const drivers = yield* plugins.current;
+    const groups = Map.groupBy(records, (record) => `${record.pluginId}\0${record.repositoryRoot}`);
+    for (const group of groups.values()) {
+      const { pluginId, repositoryRoot } = group[0]!;
+      const driver = drivers.get(pluginId as VcsDriverKind);
+      if (driver === undefined) continue;
+      yield* driver.checkpoints
+        .deleteCheckpointRefs({
+          cwd: repositoryRoot,
+          checkpointRefs: group.map((record) => CheckpointRef.make(record.checkpointRef)),
+        })
+        .pipe(
+          Effect.tap(() =>
+            Effect.logInfo("storage cleanup removed VCS plugin checkpoints", {
+              refCount: group.length,
+            }),
+          ),
+          Effect.catch((cause) =>
+            Effect.logWarning("VCS plugin checkpoint cleanup failed", { cause }),
+          ),
+        );
     }
   });
   // Only deleted threads' worktrees wait on session stops: any stop while one waits, or a stop inside one kept for another reason.

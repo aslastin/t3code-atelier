@@ -142,14 +142,17 @@ a new thread starts from the top of the list again.
 
 - `native` uses `checkpointCapture`, `checkpointDiff`, and `checkpointRestore`. After each
   capture, T3 Code diffs the new snapshot against itself to make sure it reads back, and moves on
-  to the next strategy if it does not.
+  to the next strategy if it does not. A native snapshot covers the whole repository, so it is
+  used only for a project at the repository's root with no repository nested inside that keeps its
+  own checkpoints. **Ignore whitespace** does not change its diffs.
 - `changed-files` asks `changedFiles` for the changed paths and keeps a copy of them in a Git
   repository under T3 home. Only modified and added files are read, and deletions are recorded
   without reading anything. A new folder reported as one entry is read in full. Unchanged files
   are never read; when a diff needs their committed version, it comes from `readFile`. Two
   snapshots can be compared only when `changedFiles` reported the same `revision` for both.
 - `full` copies the whole thread folder into that Git repository. It reads every file, so on a
-  network or FUSE mount it downloads the whole folder. Only list it if that is acceptable.
+  network or FUSE mount it downloads the whole folder. Only list it if that is acceptable. A Git
+  repository inside the folder is kept as its commit alone, so a rollback never removes it.
 
 If no listed strategy works, the turn has no checkpoint. Its changes cannot be shown or rolled
 back, and the conversation says why.

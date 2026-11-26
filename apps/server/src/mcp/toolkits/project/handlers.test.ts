@@ -888,14 +888,16 @@ it.effect("a launch into a VCS plugin's repository asks the plugin, not Git", ()
     const checkout = `${base}/worktrees/feature`;
     for (const folder of [`${repo}/my-project`, `${checkout}/my-project`])
       yield* fileSystem.makeDirectory(folder, { recursive: true });
-    const status = (supportsWorktrees: boolean) =>
+    const status = (supportsWorktrees: boolean, refName: string | null) =>
       ({
-        refName: "main",
+        refName,
         capabilities: { kind: VcsDriverKind.make("kite"), supportsWorktrees },
       }) as never;
-    for (const [supportsWorktrees, expected] of [
-      [true, { type: "worktree", baseRef: "main" }],
-      [false, { type: "root" }],
+    for (const [supportsWorktrees, expected, refName] of [
+      [true, { type: "worktree", baseRef: "main" }, "main"],
+      [false, { type: "root" }, "main"],
+      // Detached: no branch to start one from, so the launch shares the checkout.
+      [true, { type: "root" }, null],
     ] as const) {
       const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
       const { projectId, dependencies } = clientLaunchHarness({
@@ -904,7 +906,7 @@ it.effect("a launch into a VCS plugin's repository asks the plugin, not Git", ()
         workspaceRoot: `${repo}/my-project`,
         defaultThreadEnvMode: "worktree",
         workflow: {
-          localStatus: () => Effect.succeed(status(supportsWorktrees)),
+          localStatus: () => Effect.succeed(status(supportsWorktrees, refName)),
           // A plugin lists its worktrees, not the repository they come from.
           listWorktrees: () => Effect.succeed([checkout]),
           repositoryRoot: () => Effect.succeed(repo),
@@ -922,7 +924,7 @@ it.effect("a launch into a VCS plugin's repository asks the plugin, not Git", ()
         .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
       expect(launched.map((launch) => launch.workspaceStrategy)).toMatchObject([expected]);
 
-      if (!supportsWorktrees) continue;
+      if (!supportsWorktrees || refName === null) continue;
       // An existing checkout works in the project's subfolder there.
       yield* toolkit
         .handle("t3_thread_launch", {

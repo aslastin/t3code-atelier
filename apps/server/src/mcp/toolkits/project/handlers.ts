@@ -231,7 +231,8 @@ const defaultWorktreeStrategy = Effect.fn("mcp.defaultWorktreeStrategy")(functio
   const capabilities = status?.capabilities;
   if (status !== null && capabilities !== undefined && capabilities.kind !== GIT_VCS_KIND) {
     if (!capabilities.supportsWorktrees) return undefined;
-    if (status.refName === null) return yield* unreadable;
+    // A detached checkout has no branch to start from; it stays shared, as Git's does.
+    if (status.refName === null) return undefined;
     return { type: "worktree" as const, baseRef: status.refName };
   }
   const commit = yield* git

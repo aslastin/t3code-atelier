@@ -114,6 +114,32 @@ export interface PluginCheckpointContext {
   readonly repositoryRoot: (cwd: string) => Effect.Effect<string, VcsError>;
 }
 
+/**
+ * Recorded plugin checkpoints named `<prefix><ordinal>`, for cleanup of deleted threads. Empty
+ * when no plugin ever recorded one.
+ */
+export const pluginCheckpointsWithPrefixes = Effect.fn("pluginCheckpoints.withPrefixes")(function* (
+  prefixes: ReadonlySet<string>,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql<{
+    repositoryRoot: string;
+    pluginId: string;
+    checkpointRef: string;
+  }>`
+      SELECT repository_root AS "repositoryRoot", plugin_id AS "pluginId",
+        checkpoint_ref AS "checkpointRef"
+      FROM atelier_vcs_plugin_checkpoint_records
+    `.pipe(Effect.orElseSucceed(() => []));
+  return rows.filter((row) => {
+    const ordinalStart = row.checkpointRef.lastIndexOf("/") + 1;
+    return (
+      prefixes.has(row.checkpointRef.slice(0, ordinalStart)) &&
+      /^(0|[1-9]\d*)$/.test(row.checkpointRef.slice(ordinalStart))
+    );
+  });
+});
+
 /** Checkpoints through the strategies a plugin lists, in its order. */
 export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(function* (
   context: PluginCheckpointContext,

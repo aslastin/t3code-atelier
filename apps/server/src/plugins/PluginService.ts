@@ -2,6 +2,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import {
+  PLUGIN_MANIFEST_FILE_NAME,
   PluginCheckOutput,
   PluginError,
   type PluginListResult,
@@ -425,14 +426,20 @@ const make = Effect.gen(function* () {
           yield* cleanupStaging;
           return yield* failure(operation, "The plugin's id changed while it was imported.", id);
         }
+        // Compared as written: fields T3 Code does not read still configure the plugin.
+        const manifestText = (folder: string) =>
+          fs
+            .readFileString(path.join(folder, PLUGIN_MANIFEST_FILE_NAME))
+            .pipe(Effect.orElseSucceed(() => null));
+        const approved = yield* manifestText(staging);
         const checked = yield* check(staged);
         // The check runs in the copy and can write there, so the limits are checked once more.
         yield* walkSource(staging).pipe(Effect.tapError(() => cleanupStaging));
-        const sameManifest = (entry: PluginEntry) =>
-          entry.manifest !== null &&
-          JSON.stringify(entry.manifest) === JSON.stringify(staged.manifest);
+        const sameManifest = Effect.fnUntraced(function* (folder: string) {
+          return approved !== null && (yield* manifestText(folder)) === approved;
+        });
         // What installs is what the check approved, not a manifest it rewrote.
-        if (!sameManifest(yield* load(id, staged.enabled, staging))) {
+        if (!(yield* sameManifest(staging))) {
           yield* cleanupStaging;
           return yield* failure(
             operation,
@@ -465,7 +472,7 @@ const make = Effect.gen(function* () {
         entries.set(
           id,
           checked.status === "available"
-            ? sameManifest(installed)
+            ? (yield* sameManifest(path.join(directory, id))) && installed.manifest !== null
               ? yield* withDriver(
                   installed,
                   installed.manifest!,

@@ -18,6 +18,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as PluginService from "./PluginService.ts";
+import { pluginCheckpointsWithPrefixes } from "./pluginCheckpoints.ts";
 import { fakeCalls, makeFakeRepository, writeFakeVcsPlugin } from "./testing/fakeVcsPlugin.ts";
 import type { FakeVcsPluginOptions } from "./testing/fakeVcsPlugin.ts";
 import { VcsPluginDrivers } from "./VcsPluginDrivers.ts";
@@ -120,6 +121,10 @@ it.live("installs the manifest its one check approved", () =>
     const refused = yield* plugins.importFolder(source).pipe(Effect.flip);
     assert.include(refused.detail, "changed while it was checked");
     assert.notInclude(NodeFS.readFileSync(`${home}/plugins/kite/plugin.json`, "utf8"), "Rewritten");
+    // A field only the plugin reads counts too.
+    NodeFS.writeFileSync(`${source}/rewrite-on-check`, "extra");
+    const extra = yield* plugins.importFolder(source).pipe(Effect.flip);
+    assert.include(extra.detail, "changed while it was checked");
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
@@ -759,7 +764,7 @@ describe("ManifestVcsDriver", () => {
 
   it.live("full stages the whole folder, but never the VCS's own metadata", () =>
     Effect.gen(function* () {
-      const { driver, repository } = yield* setup({ checkpoints: ["full"] });
+      const { driver, repository, sql } = yield* setup({ checkpoints: ["full"] });
       const checkpoints = driver!.checkpoints;
       yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
       NodeFS.writeFileSync(`${repository}/a.txt`, "edited\n");
@@ -820,6 +825,23 @@ describe("ManifestVcsDriver", () => {
         excludePaths: ["sub"],
       });
       assert.strictEqual(NodeFS.readFileSync(`${repository}/sub/b.txt`, "utf8"), "changed\n");
+
+      // Cleanup finds a deleted thread's checkpoints by their names, and deleting them through
+      // the driver forgets them.
+      const prefixes = new Set(["refs/t3/checkpoints/test/"]);
+      const recorded = pluginCheckpointsWithPrefixes(prefixes).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+      );
+      const owned = yield* recorded;
+      assert.sameMembers(
+        owned.map((record) => record.checkpointRef),
+        ["0", "1", "2", "3"].map(ref),
+      );
+      yield* checkpoints.deleteCheckpointRefs({
+        cwd: repository,
+        checkpointRefs: owned.map((record) => CheckpointRef.make(record.checkpointRef)),
+      });
+      assert.isEmpty(yield* recorded);
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 });
