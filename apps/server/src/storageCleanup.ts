@@ -392,7 +392,7 @@ const make = Effect.gen(function* () {
     branch: string | null,
     rules: WorktreeCleanupRules,
   ) {
-    const status = yield* gitWorkflow.localStatus({ cwd: worktreePath });
+    const status = yield* gitWorkflow.status({ cwd: worktreePath });
     const plugin = plugins?.describe(status.capabilities?.kind ?? "");
     // Untracked files count unless the rule keeps only tracked changes. A plugin lists no
     // ignored files, so "any local files" sees only what its status shows.
@@ -404,7 +404,12 @@ const make = Effect.gen(function* () {
       recreates: plugin?.recreatesWorktrees === true,
       branchChanged: status.refName !== branch,
       changes:
-        files > 0 ? `has uncommitted changes (${files} ${files === 1 ? "file" : "files"})` : null,
+        files > 0
+          ? `has uncommitted changes (${files} ${files === 1 ? "file" : "files"})`
+          : // Some VCSs keep a worktree's branch only in the worktree, so its commits go with it.
+            status.aheadCount > 0
+            ? "has commits that are not pushed"
+            : null,
     };
   });
   const worktreePathsForCheck = () => {
@@ -1548,8 +1553,17 @@ const make = Effect.gen(function* () {
             if (!deleted) yield* followBranch(thread.worktreePath!);
             return keep("repository or branch changed");
           }
-          // A live thread's next turn brings its checkout back, which needs the plugin's help.
-          if (!deleted && !first.recreates)
+          // A live thread's next turn brings its checkout back: the plugin checks the branch out
+          // again, so the repository must still list it once the worktree is gone.
+          const branch = thread.branch;
+          if (
+            !deleted &&
+            (!first.recreates ||
+              branch === null ||
+              !(yield* gitWorkflow
+                .listLocalBranchNames(project.workspaceRoot)
+                .pipe(Effect.map((names) => names.includes(branch)))))
+          )
             return keep(`${first.label} could not recreate it for the thread's next turn`);
           if (first.changes !== null) return keep(first.changes);
           const blocked = yield* blockedSinceCheck();

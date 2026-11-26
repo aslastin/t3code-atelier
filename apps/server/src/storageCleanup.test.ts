@@ -363,6 +363,8 @@ const cleanupFixture = (
     let pluginStatus = {
       refName: "feature",
       files: [] as ReadonlyArray<{ readonly path: string; readonly untracked?: boolean }>,
+      aheadCount: 0,
+      repositoryBranches: ["feature"] as ReadonlyArray<string>,
     };
     if (plugin) {
       yield* fs.makeDirectory(`${pluginWorktree}/.kite`, { recursive: true });
@@ -488,12 +490,14 @@ const cleanupFixture = (
           ),
         ...(plugin && {
           listWorktrees: () => Effect.succeed([pluginWorktree]),
-          localStatus: () =>
+          status: () =>
             Effect.sync(() => ({
               refName: pluginStatus.refName,
               capabilities: { kind: "kite" },
               workingTree: { files: pluginStatus.files },
+              aheadCount: pluginStatus.aheadCount,
             })),
+          listLocalBranchNames: () => Effect.sync(() => pluginStatus.repositoryBranches),
           removeWorktree: (input: { readonly path: string }) =>
             fs.remove(input.path, { recursive: true }).pipe(Effect.orDie),
         }),
@@ -2188,67 +2192,81 @@ describe("deleted thread worktrees", () => {
 describe("VCS plugin worktrees", () => {
   const untracked = [{ path: "new.txt", untracked: true }];
   it.effect.each([
-    { name: "a deleted thread's clean worktree", deleted: true, recreates: false, files: [] },
-    { name: "an old thread's clean worktree", deleted: false, recreates: true, files: [] },
+    { name: "a deleted thread's clean worktree", deleted: true, removed: true },
+    { name: "an old thread's clean worktree", recreates: true, removed: true },
     {
       name: "a worktree with changes",
       deleted: true,
-      recreates: true,
       files: [{ path: "a.txt" }],
+      reason: "Has uncommitted changes (1 file)",
     },
     {
       name: "an old thread's worktree it cannot bring back",
-      deleted: false,
-      recreates: false,
-      files: [],
+      reason: "Kite could not recreate it for the thread's next turn",
     },
-    { name: "an untracked file", deleted: true, recreates: true, files: untracked },
+    {
+      // Some VCSs keep a worktree's branch in the worktree; recovery would find nothing.
+      name: "an old thread's worktree whose branch the repository does not list",
+      recreates: true,
+      repositoryBranches: [],
+      reason: "Kite could not recreate it for the thread's next turn",
+    },
+    {
+      name: "a worktree with commits that are not pushed",
+      deleted: true,
+      aheadCount: 2,
+      reason: "Has commits that are not pushed",
+    },
+    {
+      name: "an untracked file",
+      deleted: true,
+      files: untracked,
+      reason: "Has uncommitted changes (1 file)",
+    },
     {
       name: "an untracked file under the tracked-changes rule",
       deleted: true,
-      recreates: true,
       files: untracked,
       keepWhen: "tracked-changes" as const,
+      removed: true,
     },
-  ])("removes or keeps $name through the plugin", ({ deleted, recreates, files, keepWhen }) =>
+  ])("removes or keeps $name through the plugin", (row) =>
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture(
-        keepWhen
+        row.keepWhen
           ? {
               ...DEFAULT_SERVER_SETTINGS.storageCleanup,
               worktreeAfterDays: 8,
               worktreeOnDelete: true,
-              worktreeKeepWhen: keepWhen,
+              worktreeKeepWhen: row.keepWhen,
             }
           : undefined,
         undefined,
-        { recreates },
+        { recreates: row.recreates === true },
       );
       const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
-      fixture.setThreads(deleted ? [] : [thread]);
-      fixture.setDeletedThreads(deleted ? [thread] : []);
-      fixture.setPluginStatus({ refName: "feature", files });
+      fixture.setThreads(row.deleted ? [] : [thread]);
+      fixture.setDeletedThreads(row.deleted ? [thread] : []);
+      fixture.setPluginStatus({
+        refName: "feature",
+        files: row.files ?? [],
+        aheadCount: row.aheadCount ?? 0,
+        repositoryBranches: row.repositoryBranches ?? ["feature"],
+      });
       const entry = (yield* fixture.service.runNow).entries.find(
         (candidate) => candidate.threadId === thread.id,
       );
-      // Untracked files do not count when the rule keeps only tracked changes.
-      const counted = files.filter(
-        (file) => keepWhen !== "tracked-changes" || !("untracked" in file),
-      ).length;
-      const removed = counted === 0 && (deleted || recreates);
       expect(entry).toMatchObject({
         path: fixture.pluginWorktree,
-        outcome: removed ? "removed" : "kept",
-        reason: removed
-          ? deleted
+        outcome: row.removed ? "removed" : "kept",
+        reason: row.removed
+          ? row.deleted
             ? "Thread was deleted"
             : "Inactive for 30 days"
-          : counted > 0
-            ? "Has uncommitted changes (1 file)"
-            : "Kite could not recreate it for the thread's next turn",
+          : row.reason,
       });
-      expect(yield* fixture.fs.exists(fixture.pluginWorktree)).toBe(!removed);
+      expect(yield* fixture.fs.exists(fixture.pluginWorktree)).toBe(row.removed !== true);
     }).pipe(Effect.provide(cleanupTestLayer)),
   );
 });

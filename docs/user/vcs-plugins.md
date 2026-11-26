@@ -113,11 +113,17 @@ When a project is a subfolder of the repository, a new worktree's thread works i
 subfolder of the new checkout.
 
 Storage cleanup removes a plugin's worktrees as it does Git's, when their thread is deleted,
-inactive or settled. The merged and unchanged rules need Git history, so they do not apply. Any
-file `status` lists keeps a worktree, except one marked `"untracked": true` when cleanup keeps
-worktrees only for tracked changes. A thread's next turn brings a removed worktree back with
-`worktreeAttach`, after `listRefs` shows its branch is still there. Without both commands,
-cleanup removes only a deleted thread's worktree.
+inactive or settled. The merged and unchanged rules need Git history, so they do not apply. A
+worktree stays when:
+
+- `status` lists a file, except one marked `"untracked": true` when cleanup keeps worktrees only
+  for tracked changes.
+- `status` reports an `aheadCount` above 0. If your VCS keeps a worktree's branch inside the
+  worktree, report unpushed commits there, counted from the branch's base when it has no
+  upstream, or they are lost with the worktree.
+- Its thread is still live and the plugin cannot bring it back. A thread's next turn checks its
+  branch out again with `worktreeAttach`, so the repository's `listRefs` must still list that
+  branch. Without both commands, cleanup removes only a deleted thread's worktree.
 
 ### Checkpoints
 
