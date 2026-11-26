@@ -1485,7 +1485,7 @@ describe("Markdown links", () => {
       typeText(editor, from, to, `[new](${href})`);
     });
     expect(serializeEditorDoc(editor.state.doc).value).toBe(`[new](${href})`);
-    expect(textWithMark(editor, "link")).toEqual([]);
+    expect(textWithMark(editor, "link")).toEqual(["new"]);
   });
 
   it("keeps an inner link's address when an outer link is typed around it", async () => {
@@ -1638,10 +1638,18 @@ describe("Markdown links", () => {
     const editor = editorIn(screen.container);
     const text = "[docs](https://example.com) !docs";
     await act(async () => {
-      editor.commands.setContent({
-        type: "doc",
-        content: [{ type: "paragraph", content: [{ type: "text", text }] }],
-      });
+      // Plain Markdown that stays text, as undo leaves it.
+      editor
+        .chain()
+        .command(({ tr }) => {
+          tr.setMeta("addToHistory", false);
+          return true;
+        })
+        .setContent({
+          type: "doc",
+          content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+        })
+        .run();
       editor.commands.setTextSelection({ from: text.length - 3, to: text.length + 1 });
     });
     expect(editorRef.current?.openLinkEditor()).toBe(false);
@@ -1766,6 +1774,68 @@ describe("Markdown links", () => {
     expect(
       editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to),
     ).toContain("d");
+  });
+
+  it.each([
+    {
+      name: "brackets added around existing words",
+      value: "see project link(http://localhost:3000) now",
+      edits: async (editor: Editor) => {
+        await act(async () => {
+          editor.commands.setTextSelection("see ".length + 1);
+        });
+        await userEvent.keyboard("[[");
+        await act(async () => {
+          editor.commands.setTextSelection("see [project link".length + 1);
+        });
+        await userEvent.keyboard("]{End}");
+      },
+    },
+    {
+      name: "an address typed into empty parentheses",
+      value: "see [project link]() now",
+      edits: async (editor: Editor) => {
+        await act(async () => {
+          editor.commands.setTextSelection("see [project link](".length + 1);
+        });
+        await userEvent.keyboard("http://localhost:3000{End}");
+      },
+    },
+  ])("links Markdown completed by $name once the caret leaves", async ({ value, edits }) => {
+    await using screen = await mountEditor(value);
+    const { editor } = screen;
+    await focusAt(editor, "end");
+    await edits(editor);
+    await vi.waitFor(() => expect(textWithMark(editor, "link")).toEqual(["project link"]));
+    expect(serializeEditorDoc(editor.state.doc).value).toBe(
+      "see [project link](http://localhost:3000) now",
+    );
+  });
+
+  it("shows Markdown completed around the caret as source until the caret leaves", async () => {
+    await using screen = await mountEditor("see [project link]( now");
+    const { editor } = screen;
+    await focusAt(editor, "end");
+    await act(async () => {
+      editor.commands.setTextSelection("see [project link](".length + 1);
+    });
+    await userEvent.keyboard("https://t3.codes){ArrowLeft}{ArrowLeft}");
+    expect(textWithMark(editor, "markdownSource")).toEqual(["[project link](https://t3.codes)"]);
+    await userEvent.keyboard("{End}");
+    await vi.waitFor(() => expect(textWithMark(editor, "link")).toEqual(["project link"]));
+  });
+
+  it("leaves a typed link turned back into text by Backspace as text", async () => {
+    await using screen = await mountEditor("");
+    const { editor } = screen;
+    await focusAt(editor, "end");
+    await userEvent.keyboard(`[[docs](${href})`);
+    await vi.waitFor(() => expect(textWithMark(editor, "link")).toEqual(["docs"]));
+    await userEvent.keyboard("{Backspace} more");
+    await vi.waitFor(() =>
+      expect(serializeEditorDoc(editor.state.doc).value).toBe(`[docs](${href}) more`),
+    );
+    expect(textWithMark(editor, "link")).toEqual([]);
   });
 
   it("does not open the URL field for a link's revealed address", async () => {

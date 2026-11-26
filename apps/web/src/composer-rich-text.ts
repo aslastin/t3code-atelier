@@ -97,7 +97,9 @@ type ParseFrame = { delimiter: string; mark: RichTextMark; start: number; pieces
 // Pieces keep source offsets, so callers can map parsed text back onto the
 // characters it came from; parsing only drops delimiters.
 
-function parseInlineMarkdownPieces(text: string): SourcePiece[] {
+type LinkRange = { start: number; end: number; href: string };
+
+function parseInlineMarkdownPieces(text: string, links?: LinkRange[]): SourcePiece[] {
   const literalRuns = literalUnderscoreRuns(text);
   const root: SourcePiece[] = [];
   const stack: ParseFrame[] = [];
@@ -127,6 +129,7 @@ function parseInlineMarkdownPieces(text: string): SourcePiece[] {
       stack.pop();
       // A label that parses to nothing, like `[****](url)`, would drop the whole link.
       if (link.frame.pieces.length === 0) push(link.frame.start, link.end);
+      else links?.push({ start: link.frame.start, end: link.end, href: link.href });
       for (const piece of link.frame.pieces) {
         push(piece.start, piece.end, ["link", ...piece.marks], link.href);
       }
@@ -265,4 +268,11 @@ export function inlineMarkdownUnits(text: string): {
     if (piece.href !== undefined) hrefs.fill(piece.href, piece.start, piece.end);
   }
   return { marks, hrefs };
+}
+
+/** Where `text` holds Markdown links, from each `[` to just after its `)`. */
+export function inlineMarkdownLinks(text: string): LinkRange[] {
+  const links: LinkRange[] = [];
+  if (text.includes("](")) parseInlineMarkdownPieces(text, links);
+  return links;
 }

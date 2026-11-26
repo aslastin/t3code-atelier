@@ -26,7 +26,7 @@ describe("KeybindingsSettings.logic", () => {
         .filter((row) => row.command === "composer.insertLink")
         .map(({ key, when, source }) => ({ key, when, source }));
     expect(insertLink("MacIntel")).toEqual([
-      { key: "meta+ctrl+k", when: "composerFocus && isMac", source: "Default" },
+      { key: "mod+ctrl+k", when: "composerFocus && isMac", source: "Default" },
     ]);
     expect(insertLink("Win32")).toEqual([]);
     expect(insertLink("Linux x86_64")).toEqual([]);

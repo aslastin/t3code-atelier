@@ -1,4 +1,11 @@
-import { type Editor, InputRule, Mark as TiptapMark } from "@tiptap/core";
+import {
+  combineTransactionSteps,
+  type Editor,
+  getChangedRanges,
+  InputRule,
+  Mark as TiptapMark,
+} from "@tiptap/core";
+import { isHistoryTransaction } from "@tiptap/pm/history";
 import type { Node as ProseMirrorNode, ResolvedPos } from "@tiptap/pm/model";
 import {
   AllSelection,
@@ -11,7 +18,7 @@ import {
   type Transaction,
 } from "@tiptap/pm/state";
 import { Transform } from "@tiptap/pm/transform";
-import { Decoration, DecorationSet } from "@tiptap/pm/view";
+import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import { ReactRenderer } from "@tiptap/react";
 import { isPrivateNetworkHost, normalizeHostname } from "@t3tools/shared/hostClassification";
 
@@ -23,7 +30,12 @@ import {
 } from "~/composer-markdown-source";
 import { buildTiptapContent, serializeEditorDoc } from "~/composer-rich-text-doc";
 import { caretLineDirection } from "~/composer-text-direction";
-import { isComposerLinkHref, MARKDOWN_SOURCE_MARK, TYPED_LINK } from "~/composer-rich-text";
+import {
+  inlineMarkdownLinks,
+  isComposerLinkHref,
+  MARKDOWN_SOURCE_MARK,
+  TYPED_LINK,
+} from "~/composer-rich-text";
 
 const URL_SCHEME = /^[a-z][a-z\d+.-]*:/i;
 // `localhost:3000` and `t3.codes:8080` are a host and port; `tel:911` and `mailto:1@a.b` are schemes.
@@ -281,7 +293,12 @@ export const ComposerLinkExtension = TiptapMark.create({
     return [typedLinkRule()];
   },
   addProseMirrorPlugins() {
-    return [faviconPlugin(this.editor), pendingLinkPlugin(), linkStartKeysPlugin()];
+    return [
+      faviconPlugin(this.editor),
+      pendingLinkPlugin(),
+      linkStartKeysPlugin(),
+      editedLinkPlugin(),
+    ];
   },
 });
 
@@ -447,6 +464,64 @@ function linkStartKeysPlugin(): Plugin {
         view.dispatch(tr.scrollIntoView());
         return true;
       },
+    },
+  });
+}
+
+/**
+ * An edit that completes a link in plain text, like adding brackets around existing
+ * words or fixing its address, shows the link as source. Like any shown source, it
+ * becomes a link once the caret is outside it. Undo and redo are left alone.
+ */
+function editedLinkPlugin(): Plugin {
+  let view: EditorView | null = null;
+  return new Plugin({
+    view(editorView) {
+      view = editorView;
+      return {
+        destroy() {
+          view = null;
+        },
+      };
+    },
+    appendTransaction(transactions, oldState, state) {
+      const source = state.schema.marks[MARKDOWN_SOURCE_MARK];
+      if (!source || view?.composing || !transactions.some((tr) => tr.docChanged)) return null;
+      if (
+        transactions.some((tr) => isHistoryTransaction(tr) || tr.getMeta("addToHistory") === false)
+      ) {
+        return null;
+      }
+      // Backspace right after an input rule restores its Markdown as text on purpose.
+      const inputRules = oldState.plugins.find((plugin) => plugin.spec.isInputRules);
+      if (inputRules?.getState(oldState)) return null;
+      const tr = state.tr;
+      const checked = new Set<number>();
+      const changes = getChangedRanges(combineTransactionSteps(oldState.doc, [...transactions]));
+      for (const { newRange } of changes) {
+        state.doc.nodesBetween(newRange.from, newRange.to, (block, pos) => {
+          if (!block.isTextblock) return true;
+          if (block.type.spec.code || checked.has(pos)) return false;
+          checked.add(pos);
+          const text = block.textBetween(0, block.content.size, undefined, "￼");
+          for (const link of inlineMarkdownLinks(text)) {
+            const from = pos + 1 + link.start;
+            const to = pos + 1 + link.end;
+            // Only an edit inside the link completes it; typing beside one leaves it alone.
+            if (newRange.to <= from || newRange.from >= to) continue;
+            // An open backtick before it is a code span still being typed.
+            if (unescapedBackticksBefore(state.doc.resolve(from)) % 2 === 1) continue;
+            let plain = true;
+            state.doc.nodesBetween(from, to, (node) => {
+              if (node.isInline && (!node.isText || node.marks.length > 0)) plain = false;
+              return plain;
+            });
+            if (plain) tr.addMark(from, to, source.create());
+          }
+          return false;
+        });
+      }
+      return tr.docChanged ? tr : null;
     },
   });
 }

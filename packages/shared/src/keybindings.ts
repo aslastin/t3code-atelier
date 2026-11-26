@@ -122,7 +122,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+g", command: "composer.branch", when: "!terminalFocus" },
   { key: "mod+shift+l", command: "composer.previousWorktree", when: "!terminalFocus" },
   // Ctrl+K opens the command palette elsewhere, so other platforms choose their own shortcut.
-  { key: "ctrl+meta+k", command: "composer.insertLink", when: "composerFocus && isMac" },
+  // Written with `mod`, as Settings records ⌘ on macOS, so it shows and compares as ⌃⌘K there.
+  { key: "mod+ctrl+k", command: "composer.insertLink", when: "composerFocus && isMac" },
   { key: "mod+shift+k", command: "pullRequest.copyNumber", when: "!terminalFocus" },
   { key: "mod+shift+arrowup", command: "modelPicker.previousProvider", when: "modelPickerOpen" },
   { key: "mod+shift+arrowdown", command: "modelPicker.nextProvider", when: "modelPickerOpen" },
