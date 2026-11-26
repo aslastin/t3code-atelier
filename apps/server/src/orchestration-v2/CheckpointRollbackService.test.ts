@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it, vi } from "@effect/vitest";
 import {
+  GitCommandError,
   CheckpointId,
   CheckpointRef,
   EventId,
@@ -267,7 +268,13 @@ it.effect.each([
                   path: worktreePath,
                 });
                 calls.push("create");
-                if (createFails) return yield* Effect.die("the branch is gone");
+                if (createFails)
+                  return yield* new GitCommandError({
+                    operation: "test.createWorktree",
+                    command: "git worktree add",
+                    cwd: workspaceRoot,
+                    detail: "the branch is gone",
+                  });
                 yield* fileSystem
                   .makeDirectory(path.join(worktreePath, ".git"), { recursive: true })
                   .pipe(Effect.orDie);
@@ -396,7 +403,9 @@ it.effect.each([
         return;
       }
       if (createFails) {
-        yield* Fiber.join(rollback).pipe(Effect.exit);
+        const error = yield* Fiber.join(rollback).pipe(Effect.flip);
+        assert.equal(error.reason, "worktree-recreate-failed");
+        assert.equal(CheckpointRollbackService.rollbackFailureClientMessage(error), error.message);
         assert.deepEqual(calls, ["cleanup", "prune", "create"]);
         assert.equal(
           yield* fileSystem.readFileString(path.join(worktreePath, "unsaved.txt")),

@@ -63,6 +63,7 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
       "unexpected-failure",
       "shared-workspace",
       "worktree-has-files",
+      "worktree-recreate-failed",
     ]),
     threadId: ThreadId,
     providerThreadId: ProviderThreadId,
@@ -82,6 +83,8 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
         return SHARED_WORKSPACE_RESTORE_MESSAGE;
       case "worktree-has-files":
         return "Move the remaining files out of the worktree before restoring this project folder.";
+      case "worktree-recreate-failed":
+        return "The thread's worktree is gone and could not be recreated on its branch, so nothing was rolled back. The server log has the reason.";
       case "unexpected-failure":
         return ROLLBACK_FAILED_MESSAGE;
     }
@@ -99,7 +102,8 @@ const isRuntimePolicyAboveCeilingError = Schema.is(RuntimePolicyAboveCeilingErro
  * output, so they fall back to the generic message.
  */
 export function rollbackFailureClientMessage(error: CheckpointRollbackExecutionError): string {
-  if (error.reason === "worktree-has-files") return error.message;
+  if (error.reason === "worktree-has-files" || error.reason === "worktree-recreate-failed")
+    return error.message;
   if (isRuntimePolicyAboveCeilingError(error.cause)) return error.cause.message;
   const restoreCause = isCheckpointRestoreError(error.cause) ? error.cause.cause : undefined;
   return isVcsProcessExitError(restoreCause) && restoreCause.detail === GIT_INDEX_LOCKED_DETAIL
@@ -287,6 +291,14 @@ export const layer: Layer.Layer<
           },
           replacedCheckoutRoot,
         );
+      const recreateFailed = (cause: unknown) =>
+        new CheckpointRollbackExecutionError({
+          reason: "worktree-recreate-failed",
+          threadId: input.threadId,
+          providerThreadId: input.providerThreadId,
+          checkpointId: input.checkpointId,
+          cause,
+        });
       const sharedWorkspace = () =>
         new CheckpointRollbackExecutionError({
           reason: "shared-workspace",
@@ -309,6 +321,7 @@ export const layer: Layer.Layer<
                   path: checkout.worktreePath,
                 }),
               ),
+              Effect.mapError(recreateFailed),
             ),
         });
       } else if (worktreePath != null && branch != null) {
@@ -332,6 +345,7 @@ export const layer: Layer.Layer<
                   path: worktreePath,
                 }),
               ),
+              Effect.mapError(recreateFailed),
             );
             const nested = folder !== null && path.relative(worktreePath, folder) !== "";
             if (leftover && !(yield* isolated(worktreePath))) return yield* sharedWorkspace();
