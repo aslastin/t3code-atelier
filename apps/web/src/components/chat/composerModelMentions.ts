@@ -96,6 +96,25 @@ export interface ComposerModelEffortStep {
       };
 }
 
+/** Whether a step still owns the menu: same draft, same caret, and its mention untouched. */
+export function isComposerModelEffortStepCurrent(
+  step: ComposerModelEffortStep,
+  composer: {
+    readonly draftKey: string;
+    readonly editorValue: string;
+    readonly cursor: number;
+    /** False for a literal answer, or one a submit has locked. */
+    readonly editable: boolean;
+  },
+): boolean {
+  const { target } = step;
+  if (!composer.editable || step.draftKey !== composer.draftKey) return false;
+  if (target.cursor !== composer.cursor) return false;
+  return target.kind === "insert"
+    ? composer.editorValue.slice(target.start) === target.source + target.tail
+    : target.isCurrent();
+}
+
 export function composerModelEffortItemId(value: string | null): string {
   return value === null ? "model-effort-default" : `model-effort:${value}`;
 }
