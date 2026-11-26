@@ -311,6 +311,9 @@ const runDriverAction = Effect.fn("GitWorkflowService.runDriverAction")(function
       (file) => selected === null || selected.has(file.path),
     );
     if (files.length === 0) return null;
+    // Checked before a branch is started: a plugin may list every file one per line.
+    if (includeBranch && files.some((file) => /[\r\n]/.test(file.path)))
+      return yield* unsupported(handle, "commit a file whose name has a line break");
     if (typed) return { commitMessage: typed };
     if (reporter)
       yield* reporter.publish({
@@ -739,21 +742,55 @@ export const make = Effect.gen(function* () {
         (ops) => {
           const created = ops.createWorktree?.(input);
           const onMissing = options?.onMissingProjectFolder;
-          const remove = ops.removeWorktree;
-          if (!created || !onMissing || !remove || input.newRefName === undefined) return created;
-          // As for Git: a checkout without the project's folder lets the launch ask what to do.
+          const { removeWorktree: remove, status } = ops;
+          if (!created || !onMissing || !remove || !status || input.newRefName === undefined)
+            return created;
+          // As for Git: a checkout without the project's folder lets the launch ask what to do,
+          // and it stays the one made here, without local work, until the answer.
           return created.pipe(
-            Effect.tap((result) =>
-              result.worktree.projectPath !== null
-                ? Effect.void
-                : onMissing({
-                    root: result.worktree.path,
-                    relativePath: path.relative(handle.repository.rootPath, input.cwd),
-                    verify: Effect.void,
-                    discard: () =>
-                      remove({ cwd: input.cwd, path: result.worktree.path, force: true }),
-                  }),
-            ),
+            Effect.tap((result) => {
+              if (result.worktree.projectPath !== null) return Effect.void;
+              const root = result.worktree.path;
+              return Effect.gen(function* () {
+                const initial = yield* status({ cwd: root });
+                const changed = new GitCommandError({
+                  operation: "GitWorkflowService.pendingWorktree",
+                  cwd: root,
+                  command: "worktree",
+                  detail:
+                    "The checkout contains local work or no longer matches the checkout created for this thread.",
+                });
+                const unchanged = status({ cwd: root }).pipe(
+                  Effect.filterOrFail(
+                    (now) =>
+                      now.refName === initial.refName && now.aheadCount === initial.aheadCount,
+                    () => changed,
+                  ),
+                );
+                const discard = Effect.fn("GitWorkflowService.discardPendingWorktree")(function* (
+                  ownedBranch: string,
+                ) {
+                  const now = yield* unchanged;
+                  if (now.workingTree.files.length > 0) return yield* changed;
+                  yield* remove({ cwd: input.cwd, path: root, force: true });
+                  // A plugin cannot delete a branch; one it keeps would be created again.
+                  const names = yield* driverRefNames(ops, input.cwd, true) ?? Effect.succeed([]);
+                  if (names.includes(ownedBranch))
+                    return yield* new GitCommandError({
+                      operation: "GitWorkflowService.discardPendingWorktree",
+                      cwd: input.cwd,
+                      command: "worktree",
+                      detail: `${handle.driver.capabilities?.kind ?? "The VCS plugin"} keeps the branch ${ownedBranch} after removing its checkout. Delete the branch, or launch again from a base that has the project's folder.`,
+                    });
+                });
+                yield* onMissing({
+                  root,
+                  relativePath: path.relative(handle.repository.rootPath, input.cwd),
+                  verify: Effect.asVoid(unchanged),
+                  discard,
+                });
+              });
+            }),
           );
         },
       );

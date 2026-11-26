@@ -1,4 +1,5 @@
 import {
+  GIT_VCS_KIND,
   type ProjectId,
   type ProjectTrackedFolder,
   TASK_FOLDER_DEFAULT_REPOSITORIES_MAX,
@@ -533,6 +534,22 @@ const make = Effect.gen(function* () {
    * Where a repository's branch starts: `baseBranch` when the repository has it, else its
    * default branch. The remote commit of either when starting from origin.
    */
+  // A VCS plugin's repository names its default branch in its refs; Git's comes from origin.
+  const defaultBranchOf = Effect.fnUntraced(function* (cwd: string) {
+    const kind =
+      plugins?.hasAny() === true
+        ? yield* git.localStatus({ cwd }).pipe(
+            Effect.map((status) => status.capabilities?.kind),
+            Effect.orElseSucceed(() => undefined),
+          )
+        : undefined;
+    if (kind === undefined || kind === GIT_VCS_KIND)
+      return yield* gitDriver.resolveDefaultBranchName(cwd, "origin");
+    return yield* git.listRefs({ cwd, refKind: "local" }).pipe(
+      Effect.map((result) => result.refs.find((ref) => ref.isDefault)?.name ?? null),
+      Effect.orElseSucceed(() => null),
+    );
+  });
   const repositoryStart = Effect.fn("TaskFolders.repositoryStart")(function* (
     cwd: string,
     startFromOrigin: boolean,
@@ -547,8 +564,7 @@ const make = Effect.gen(function* () {
       ((yield* git.hasCommit({ cwd, refName: `refs/heads/${wanted}` })) ||
         (yield* git.hasCommit({ cwd, refName: `refs/remotes/origin/${wanted}` })))
         ? wanted
-        : ((yield* gitDriver.resolveDefaultBranchName(cwd, "origin")) ??
-          (yield* git.currentBranch(cwd)));
+        : ((yield* defaultBranchOf(cwd)) ?? (yield* git.currentBranch(cwd)));
     let baseRef = "HEAD";
     if (defaultBranch !== null) {
       if (yield* git.hasCommit({ cwd, refName: `refs/heads/${defaultBranch}` }))

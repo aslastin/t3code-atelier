@@ -334,6 +334,42 @@ it.live("gives a VCS plugin's project folder a checkout, not links to the origin
   );
 });
 
+it.live("starts a VCS plugin's repository from the default branch its plugin names", () => {
+  const state: TaskFoldersTestState = {
+    workspaceRoot: "/unset",
+    trackedFolders: [],
+    thread: null,
+    pluginRefs: [{ name: "main", isDefault: true }, { name: "experiment" }],
+  };
+  return Effect.gen(function* () {
+    const { fileSystem, path, tmp } = yield* fixture;
+    const shop = path.join(tmp, "shop");
+    const web = path.join(shop, "web");
+    yield* fileSystem.makeDirectory(path.join(web, ".kite"), { recursive: true });
+    yield* fileSystem.writeFileString(path.join(web, ".kite", "HEAD"), "experiment\n");
+    state.workspaceRoot = shop;
+    state.trackedFolders = tracked(web);
+    // The base asked for is one the plugin's repository does not have.
+    yield* create("feature", undefined, "develop");
+    assert.deepEqual(
+      state.pluginCreated?.map((created) => created.refName),
+      ["main"],
+    );
+  }).pipe(
+    Effect.provide(
+      layerFor(state).pipe(
+        Layer.provide(
+          Layer.succeed(VcsPluginDrivers, {
+            hasAny: () => true,
+            installedMarkers: () => [".kite/HEAD"],
+          } as unknown as VcsPluginDrivers["Service"]),
+        ),
+      ),
+    ),
+    Effect.scoped,
+  );
+});
+
 it.live.each([{ projectIsRepository: true }, { projectIsRepository: false }])(
   "answers an existing thread's worktree request with a task folder, project is a repository=$projectIsRepository",
   ({ projectIsRepository }) =>

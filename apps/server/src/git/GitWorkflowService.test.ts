@@ -258,6 +258,18 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
         .pipe(Effect.flip);
       assert.include(lineBreak, { _tag: "VcsUnsupportedOperationError" });
       assert.deepEqual(branches, ["feature/change-a-txt-2"]);
+      // So is one among all the changes, when none are selected.
+      const statusFiles = status.workingTree.files;
+      (status.workingTree as { files: typeof statusFiles }).files = [
+        ...statusFiles,
+        { path: "c\nd.txt", insertions: 1, deletions: 0 },
+      ];
+      const allFiles = yield* workflow
+        .runStackedAction({ cwd, actionId: "all", action: "commit", featureBranch: true })
+        .pipe(Effect.flip);
+      assert.include(allFiles, { _tag: "VcsUnsupportedOperationError" });
+      assert.deepEqual(branches, ["feature/change-a-txt-2"]);
+      (status.workingTree as { files: typeof statusFiles }).files = statusFiles;
 
       // A remote-tracking base is checked against the driver's remote refs.
       assert.isTrue(yield* workflow.hasCommit({ cwd, refName: "refs/remotes/origin/trunk" }));
@@ -265,12 +277,19 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
 
       // A driver that commits every change refuses selected files before starting a branch.
       const removed: string[] = [];
+      let pendingFiles: VcsStatusResult["workingTree"]["files"] = [];
       const wholeOnly = {
         ...handle,
         driver: testVcsDriver({
           capabilities: { ...capabilities, supportsPartialCommit: false },
           workflow: {
             ...driver.workflow!,
+            status: (input) =>
+              Effect.sync(() =>
+                input.cwd === "/worktrees/topic"
+                  ? { ...status, workingTree: { ...status.workingTree, files: pendingFiles } }
+                  : status,
+              ),
             createWorktree: (input) =>
               Effect.succeed({
                 worktree: { path: "/worktrees/topic", projectPath: null, refName: input.refName },
@@ -322,8 +341,17 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
         },
       );
       assert.equal(missingFolder!.root, "/worktrees/topic");
+      yield* missingFolder!.verify;
+      // Work saved there while the launch waited is never discarded.
+      pendingFiles = [{ path: "draft.txt", insertions: 1, deletions: 0 }];
+      yield* missingFolder!.discard("topic").pipe(Effect.flip);
+      assert.deepEqual(removed, []);
+      pendingFiles = [];
       yield* missingFolder!.discard("topic");
       assert.deepEqual(removed, ["/worktrees/topic"]);
+      // A branch the plugin keeps would be created again on the retry.
+      const kept = yield* missingFolder!.discard("trunk").pipe(Effect.flip);
+      assert.include(kept.message, "keeps the branch trunk");
     }),
   );
 
