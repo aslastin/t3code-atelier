@@ -81,7 +81,12 @@ const patch = (fromDir, toDir) => {
     const lines = (value) => (value === null || value === "" ? [] : value.replace(/\n$/, "").split("\n"));
     const before = lines(a);
     const after = lines(b);
-    text += "diff --git a/" + file + " b/" + file + "\n";
+    // As Git does by default, a name with bytes outside ASCII is quoted with octal escapes.
+    const quote = (prefix) =>
+      /[^\x20-\x7e]/.test(file)
+        ? '"' + prefix + [...Buffer.from(file, "utf8")].map((b) => (b < 0x80 ? String.fromCharCode(b) : "\\" + b.toString(8))).join("") + '"'
+        : prefix + file;
+    text += "diff --git " + quote("a/") + " " + quote("b/") + "\n";
     text += "--- " + (a === null ? "/dev/null" : "a/" + file) + "\n";
     text += "+++ " + (b === null ? "/dev/null" : "b/" + file) + "\n";
     text += "@@ -1," + before.length + " +1," + after.length + " @@\n";
@@ -230,6 +235,7 @@ switch (command) {
     out({ revision: "base-1", files: changes() });
     break;
   case "show": {
+    if (fs.existsSync(path.join(kite, "broken-show"))) fail("the store is unavailable");
     const [revision, file] = args;
     const target = path.join(kite, "base", file);
     if (revision !== "base-1" || !fs.existsSync(target)) fail("no such file");

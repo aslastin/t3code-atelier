@@ -247,6 +247,13 @@ export interface CheckpointServiceV2Shape {
    * each folder is snapshotted first, so a restore that fails puts back the ones already
    * restored: a rewind changes all of them or none.
    */
+  /** Fails as `restore` would for a target it cannot read, before anything else changes. */
+  readonly ensureRestorable: (input: {
+    readonly targets: ReadonlyArray<{
+      readonly scope: Pick<OrchestrationV2CheckpointScope, "id" | "cwd">;
+      readonly checkpoint: Pick<OrchestrationV2Checkpoint, "ordinalWithinScope" | "ref" | "status">;
+    }>;
+  }) => Effect.Effect<void, CheckpointServiceV2Error>;
   readonly restore: (input: {
     readonly targets: ReadonlyArray<{
       readonly scope: Pick<OrchestrationV2CheckpointScope, "id" | "cwd">;
@@ -797,6 +804,34 @@ export const layer: Layer.Layer<
         Effect.provideService(Path.Path, path),
       );
 
+    const ensureRestorable: CheckpointServiceV2Shape["ensureRestorable"] = Effect.fn(
+      "CheckpointService.ensureRestorable",
+    )(function* (input) {
+      type Target = (typeof input.targets)[number];
+      const failed = (target: Target, cause: unknown) =>
+        isCheckpointRestoreError(cause)
+          ? Effect.succeed(cause)
+          : Effect.map(
+              checkpointIdForScopeOrdinal(idAllocator, {
+                scopeId: target.scope.id,
+                ordinalWithinScope: target.checkpoint.ordinalWithinScope,
+              }),
+              (checkpointId) =>
+                new CheckpointRestoreError({ scopeId: target.scope.id, checkpointId, cause }),
+            );
+      for (const target of input.targets) {
+        if (target.checkpoint.status !== "ready") {
+          return yield* Effect.flip(
+            failed(target, `Checkpoint status is ${target.checkpoint.status}.`),
+          );
+        }
+        const exists = yield* checkpointStore
+          .hasCheckpointRef({ cwd: target.scope.cwd, checkpointRef: target.checkpoint.ref })
+          .pipe(Effect.catch((cause) => Effect.flip(failed(target, cause))));
+        if (!exists) return yield* Effect.flip(failed(target, "Checkpoint ref is unavailable."));
+      }
+    });
+
     const restore: CheckpointServiceV2Shape["restore"] = Effect.fn("CheckpointService.restore")(
       function* (input) {
         type Target = (typeof input.targets)[number];
@@ -811,17 +846,7 @@ export const layer: Layer.Layer<
                 (checkpointId) =>
                   new CheckpointRestoreError({ scopeId: target.scope.id, checkpointId, cause }),
               );
-        for (const target of input.targets) {
-          if (target.checkpoint.status !== "ready") {
-            return yield* Effect.flip(
-              failed(target, `Checkpoint status is ${target.checkpoint.status}.`),
-            );
-          }
-          const exists = yield* checkpointStore
-            .hasCheckpointRef({ cwd: target.scope.cwd, checkpointRef: target.checkpoint.ref })
-            .pipe(Effect.catch((cause) => Effect.flip(failed(target, cause))));
-          if (!exists) return yield* Effect.flip(failed(target, "Checkpoint ref is unavailable."));
-        }
+        yield* ensureRestorable({ targets: input.targets });
         const nested = yield* resolveNestedScopePaths(input.scopes);
         const snapshots: Array<Omit<CheckpointStore.RestoreCheckpointInput, "fallbackToHead">> = [];
         // A snapshot that could not be put back is the only copy of the folder's pre-rewind state.
@@ -1157,6 +1182,7 @@ export const layer: Layer.Layer<
       materializeBaselineCheckpoint,
       capture,
       captureRepository,
+      ensureRestorable,
       restore,
       deleteStaleRefs,
       discardRepositorySnapshots,

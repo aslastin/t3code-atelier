@@ -57,7 +57,8 @@ const setup = Effect.fn("test.setup")(function* (options: FakeVcsPluginOptions =
     `;
     return rows.map((row) => row.strategy);
   });
-  return { plugins, imported, driver, repository, home, source, path, strategies };
+  const sql = Context.get(context, SqlClient.SqlClient);
+  return { plugins, imported, driver, repository, home, source, path, strategies, sql };
 });
 
 const layer = NodeServices.layer;
@@ -260,10 +261,28 @@ describe("ManifestVcsDriver", () => {
       });
       assert.strictEqual(numstat, "1\t1\ta.txt\0");
 
+      // Git quotes a name outside ASCII; the summary still lists it.
+      NodeFS.writeFileSync(`${repository}/café.txt`, "new\n");
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("2") });
+      const quoted = yield* checkpoints.diffCheckpoints({
+        cwd: repository,
+        fromCheckpointRef: ref("1"),
+        toCheckpointRef: ref("2"),
+        ignoreWhitespace: false,
+        format: "numstat",
+      });
+      assert.strictEqual(quoted, "1\t0\tcafé.txt\0");
+
       assert.isTrue(
         yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("0") }),
       );
       assert.strictEqual(NodeFS.readFileSync(`${repository}/a.txt`, "utf8"), "one\n");
+
+      // A snapshot the plugin can no longer read is not offered as a checkpoint.
+      NodeFS.rmSync(`${repository}/.kite/snapshots`, { recursive: true });
+      assert.isFalse(
+        yield* checkpoints.hasCheckpointRef({ cwd: repository, checkpointRef: ref("1") }),
+      );
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
@@ -409,6 +428,36 @@ describe("ManifestVcsDriver", () => {
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
+  it.live("changed-files restores without writing through links or guessing a deletion", () =>
+    Effect.gen(function* () {
+      const { driver, repository, sql } = yield* setup({ checkpoints: ["changed-files"] });
+      const checkpoints = driver!.checkpoints;
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
+
+      // a.txt became a link to another tracked file; restoring it must not rewrite that file.
+      NodeFS.rmSync(`${repository}/a.txt`);
+      NodeFS.symlinkSync(`${repository}/sub/b.txt`, `${repository}/a.txt`);
+      yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("0") });
+      assert.strictEqual(NodeFS.readFileSync(`${repository}/sub/b.txt`, "utf8"), "two\n");
+      assert.isFalse(NodeFS.lstatSync(`${repository}/a.txt`).isSymbolicLink());
+      assert.strictEqual(NodeFS.readFileSync(`${repository}/a.txt`, "utf8"), "one\n");
+
+      // A modified file existed at its base: a failed read stops the restore, nothing is deleted.
+      NodeFS.writeFileSync(`${repository}/a.txt`, "edited\n");
+      NodeFS.writeFileSync(`${repository}/.kite/broken-show`, "");
+      yield* checkpoints
+        .restoreCheckpoint({ cwd: repository, checkpointRef: ref("0") })
+        .pipe(Effect.flip);
+      assert.strictEqual(NodeFS.readFileSync(`${repository}/a.txt`, "utf8"), "edited\n");
+
+      // Another plugin's record for the same repository is not this plugin's checkpoint.
+      yield* sql`UPDATE atelier_vcs_plugin_checkpoints SET plugin_id = 'other'`;
+      assert.isFalse(
+        yield* checkpoints.hasCheckpointRef({ cwd: repository, checkpointRef: ref("0") }),
+      );
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   it.live("full stages the whole folder, but never the VCS's own metadata", () =>
     Effect.gen(function* () {
       const { driver, repository } = yield* setup({ checkpoints: ["full"] });
@@ -428,6 +477,15 @@ describe("ManifestVcsDriver", () => {
       yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("0") });
       assert.strictEqual(NodeFS.readFileSync(`${repository}/a.txt`, "utf8"), "one\n");
       assert.isFalse(NodeFS.existsSync(`${repository}/new.txt`));
+
+      // A folder that has its own checkpoints now keeps its files, though this snapshot has them.
+      NodeFS.writeFileSync(`${repository}/sub/b.txt`, "changed\n");
+      yield* checkpoints.restoreCheckpoint({
+        cwd: repository,
+        checkpointRef: ref("0"),
+        excludePaths: ["sub"],
+      });
+      assert.strictEqual(NodeFS.readFileSync(`${repository}/sub/b.txt`, "utf8"), "changed\n");
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 });

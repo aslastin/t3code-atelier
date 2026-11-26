@@ -103,6 +103,7 @@ it.effect.each(["initial", "waiting"])(
         Layer.mergeAll(
           ThreadCommandExecutor.layer,
           Layer.mock(CheckpointService.CheckpointServiceV2)({
+            ensureRestorable: () => Effect.void,
             restore,
             discardRepositorySnapshots: () => Effect.void,
           }),
@@ -282,6 +283,7 @@ it.effect.each([
               }),
           }),
           Layer.mock(CheckpointService.CheckpointServiceV2)({
+            ensureRestorable: () => Effect.void,
             discardRepositorySnapshots: () => Effect.void,
             restore: () =>
               Effect.gen(function* () {
@@ -502,6 +504,7 @@ it.effect.each([
               describe: () => undefined,
             }),
             Layer.mock(CheckpointService.CheckpointServiceV2)({
+              ensureRestorable: () => Effect.void,
               discardRepositorySnapshots: () => Effect.void,
               restore: () =>
                 Deferred.succeed(restoreEntered, undefined).pipe(
@@ -837,6 +840,7 @@ const seedRollbackHistory = Effect.gen(function* () {
         ThreadCommandExecutor.layer,
         IdAllocator.layer,
         Layer.mock(CheckpointService.CheckpointServiceV2)({
+          ensureRestorable: () => Effect.void,
           restore: ({ targets }) =>
             Effect.sync(() => {
               restored.push(

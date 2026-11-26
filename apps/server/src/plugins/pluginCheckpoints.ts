@@ -16,6 +16,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -152,6 +153,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       readonly stdin?: string;
       readonly literal?: boolean;
       readonly maxOutputBytes?: number;
+      readonly truncate?: boolean;
     },
   ) {
     const result = yield* vcsProcess.run({
@@ -182,6 +184,8 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}),
       timeoutMs: CHECKPOINT_TIMEOUT_MS,
       maxOutputBytes: options?.maxOutputBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+      // A cut listing would restore part of a checkout; only a displayed patch may be cut.
+      outputMode: options?.truncate ? "truncate" : "error",
     });
     return result.stdout;
   });
@@ -306,6 +310,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       SELECT strategy, revision, base_revision AS "baseRevision", files_json AS "filesJson"
       FROM atelier_vcs_plugin_checkpoints
       WHERE repository_root = ${location.root} AND checkpoint_ref = ${checkpointRef}
+        AND plugin_id = ${kind}
     `.pipe(Effect.mapError(storageError("pluginCheckpoints.readRecord", location.root)));
     if (rows.length === 0) return null;
     const corrupt = storageError("pluginCheckpoints.readRecord", location.root);
@@ -376,11 +381,12 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       // Deletions are recorded, never read; a listed file that is gone counts as one.
       const files: ChangedFile[] = [];
       for (const file of changes.files) {
+        const absolute = path.join(location.root, file.path);
+        // A symbolic link counts even when its target is gone.
         const present =
           file.status !== "deleted" &&
-          (yield* fs
-            .exists(path.join(location.root, file.path))
-            .pipe(Effect.orElseSucceed(() => false)));
+          ((yield* fs.exists(absolute).pipe(Effect.orElseSucceed(() => false))) ||
+            Option.isSome(yield* fs.readLink(absolute).pipe(Effect.option)));
         files.push(present || file.status === "deleted" ? file : { ...file, status: "deleted" });
       }
       yield* ensureShadow(location);
@@ -564,7 +570,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           ? ["--", ...input.filePaths.map((file) => `:(top,literal)${file}`)]
           : []),
       ],
-      { maxOutputBytes: input.maxOutputBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES },
+      { maxOutputBytes: input.maxOutputBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES, truncate: true },
     );
   });
 
@@ -619,6 +625,8 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       const write: string[] = [];
       for (let index = 0; index + 1 < parts.length; index += 2) {
         const file = parts[index + 1]!;
+        // A nested scope's files stay its own, even where the older snapshot still has them.
+        if (!inScope(file, location.scope, excludes)) continue;
         if (parts[index] === "D") yield* removePath(location, file);
         else write.push(file);
       }
@@ -631,10 +639,12 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         "restoreCheckpoint",
         `The ${runner.label} revision changed since this checkpoint, so its files cannot be restored.`,
       );
-    const overlay = yield* listTreeFiles(location, target.revision);
+    const kept = (file: string) => inScope(file, location.scope, excludes);
+    const overlay = (yield* listTreeFiles(location, target.revision)).filter(kept);
     const overlaySet = new Set(overlay);
-    const targetPaths = new Set((target.files ?? []).map((file) => file.path));
-    for (const file of target.files ?? []) {
+    const targetFiles = (target.files ?? []).filter((file) => kept(file.path));
+    const targetPaths = new Set(targetFiles.map((file) => file.path));
+    for (const file of targetFiles) {
       if (file.status === "deleted") yield* removePath(location, file.path);
     }
     for (const file of current.files) {
@@ -653,15 +663,27 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         continue;
       }
       const bytes = yield* readBaseFile(location, input.cwd, target.baseRevision!, file.path);
+      // A modified or deleted path existed at its base, so no answer is a failed read.
+      if (bytes === null)
+        return yield* unsupported(
+          "restoreCheckpoint",
+          `${runner.label} could not read ${file.path} at its base revision.`,
+        );
       const destination = path.join(location.root, file.path);
-      if (bytes === null) {
-        yield* removePath(location, file.path);
-        continue;
-      }
+      // Replaced, not written through: the path may now be a link to another file. A regular
+      // file keeps its mode, such as the executable bit.
+      const previous = yield* fs.stat(destination).pipe(Effect.option);
+      const isLink = Option.isSome(yield* fs.readLink(destination).pipe(Effect.option));
+      yield* removePath(location, file.path);
       yield* fs
         .makeDirectory(path.dirname(destination), { recursive: true })
         .pipe(
           Effect.andThen(fs.writeFile(destination, bytes)),
+          Effect.andThen(
+            Option.isSome(previous) && !isLink && previous.value.type === "File"
+              ? fs.chmod(destination, previous.value.mode)
+              : Effect.void,
+          ),
           Effect.mapError(storageError("pluginCheckpoints.restore", location.root)),
         );
     }
@@ -683,10 +705,12 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       .pipe(Effect.orElseSucceed((): string[] => []));
     const files: string[] = [];
     for (const entry of entries) {
-      const stat = yield* fs
-        .stat(path.join(absolute, entry))
-        .pipe(Effect.orElseSucceed(() => null));
-      if (stat?.type === "File") files.push(`${folder}/${entry.split(path.sep).join("/")}`);
+      const entryPath = path.join(absolute, entry);
+      // A link is removed itself; its target, maybe outside the checkout, is never visited.
+      const isLink = Option.isSome(yield* fs.readLink(entryPath).pipe(Effect.option));
+      const stat = isLink ? null : yield* fs.stat(entryPath).pipe(Effect.orElseSucceed(() => null));
+      if (isLink || stat?.type === "File")
+        files.push(`${folder}/${entry.split(path.sep).join("/")}`);
     }
     return files;
   });
@@ -695,7 +719,14 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     "pluginCheckpoints.hasCheckpointRef",
   )(function* (input) {
     const location = yield* locate(input.cwd);
-    return (yield* readRecord(location, input.checkpointRef)) !== null;
+    const record = yield* readRecord(location, input.checkpointRef);
+    if (record === null) return false;
+    if (record.strategy !== "native") return true;
+    // A plugin's snapshot can be gone with its worktree; only one it still reads counts.
+    return yield* nativeDiff(location, input.cwd, record.revision, record.revision).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    );
   });
 
   const deleteCheckpointRefs: VcsCheckpointOps["deleteCheckpointRefs"] = Effect.fn(
@@ -740,13 +771,48 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
   } satisfies VcsCheckpointOps;
 });
 
+/** Git's C-style quoting of a path with unusual bytes: `"a/caf\303\251.txt"`. */
+function unquoteGitPath(quoted: string): string {
+  const bytes: number[] = [];
+  const escapes: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13 };
+  for (let index = 0; index < quoted.length; index++) {
+    const char = quoted[index]!;
+    if (char !== "\\") {
+      bytes.push(...Buffer.from(char, "utf8"));
+      continue;
+    }
+    const next = quoted[index + 1] ?? "";
+    const octal = /^[0-7]{3}/.exec(quoted.slice(index + 1));
+    if (octal) {
+      bytes.push(Number.parseInt(octal[0], 8));
+      index += 3;
+    } else {
+      bytes.push(escapes[next] ?? next.charCodeAt(0));
+      index += 1;
+    }
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+const DIFF_HEADER =
+  /^diff --git (?:"a\/((?:[^"\\]|\\.)*)"|a\/(.+?)) (?:"b\/((?:[^"\\]|\\.)*)"|b\/(.+?))$/m;
+
+/** The old and new paths of a patch section, quoted or not. */
+function diffHeaderPaths(section: string): readonly [string, string] | null {
+  const header = DIFF_HEADER.exec(section);
+  if (header === null) return null;
+  const from = header[1] !== undefined ? unquoteGitPath(header[1]) : header[2]!;
+  const to = header[3] !== undefined ? unquoteGitPath(header[3]) : header[4]!;
+  return [from, to];
+}
+
 /** Keeps the sections of a Git patch whose old or new path is in `paths`. */
 function filterPatch(patch: string, paths: ReadonlySet<string>): string {
   const sections = patch.split(/(?=^diff --git )/m);
   return sections
     .filter((section) => {
-      const header = /^diff --git a\/(.+?) b\/(.+?)$/m.exec(section);
-      return header !== null && (paths.has(header[1]!) || paths.has(header[2]!));
+      const header = diffHeaderPaths(section);
+      return header !== null && (paths.has(header[0]) || paths.has(header[1]));
     })
     .join("");
 }
@@ -755,7 +821,7 @@ function filterPatch(patch: string, paths: ReadonlySet<string>): string {
 function patchToNumstat(patch: string): string {
   const records: string[] = [];
   for (const section of patch.split(/(?=^diff --git )/m)) {
-    const header = /^diff --git a\/(.+?) b\/(.+?)$/m.exec(section);
+    const header = diffHeaderPaths(section);
     if (header === null) continue;
     const binary = /^Binary files .* differ$/m.test(section) || /^GIT binary patch$/m.test(section);
     let added = 0;
@@ -766,7 +832,7 @@ function patchToNumstat(patch: string): string {
       else if (line.startsWith("-")) deleted++;
     }
     const counts = binary ? "-\t-" : `${added}\t${deleted}`;
-    const [from, to] = [header[1]!, header[2]!];
+    const [from, to] = header;
     records.push(from === to ? `${counts}\t${to}` : `${counts}\t\0${from}\0${to}`);
   }
   return records.length === 0 ? "" : `${records.join("\0")}\0`;

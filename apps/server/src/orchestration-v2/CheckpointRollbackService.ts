@@ -462,6 +462,8 @@ export const layer: Layer.Layer<
         ...repositoryTargets,
       ];
       if (restoreFiles && restoreTargets.length === 0) return yield* invalidTarget();
+      // The provider's conversation is rewound first; a snapshot gone since capture stops it here.
+      if (restoreFiles) yield* checkpoints.ensureRestorable({ targets: restoreTargets });
 
       const modelSelection = context.thread.modelSelection;
       const resolvedRuntimePolicy = yield* runtimePolicy.resolve({

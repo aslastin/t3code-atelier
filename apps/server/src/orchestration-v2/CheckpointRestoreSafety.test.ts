@@ -143,6 +143,7 @@ it.effect.each([
               }),
           }),
           Layer.mock(CheckpointServiceV2)({
+            ensureRestorable: () => Effect.void,
             discardRepositorySnapshots: () => Effect.void,
             restore: () =>
               Effect.gen(function* () {
