@@ -32,6 +32,11 @@ appears in the app version as `+atelier.<N>`.
 5. **Markdown links in the composer.** Typing `[label](https://…)` shows the label as a link with
    the site's icon, and its Markdown returns while the caret is inside it. Select text and use
    **Insert Link** (⌃⌘K on macOS, set in **Settings → Keybindings**) to link it.
+6. **Line comments in read-only files.** Read-only file previews, including large paged and
+   truncated ones, take line comments like the editor: select lines or drag the `+` over a range
+   to attach a comment and its source to the next message. Added comments on files, diffs, and
+   pending pull request reviews have **Edit** next to Delete, and saving keeps the comment's place
+   in the composer.
 
 ### Plan mode
 
@@ -209,6 +214,9 @@ Fork-only fixes, docs, and upstream syncs need no issue and no label.
 Problems that also happen in the official app are fixed here first and offered upstream later.
 Their issues live in this repository too and carry `upstream-candidate`. When upstream ships an
 equivalent change, the issue gets `upstream-merged`, and the next sync drops the fork's copy.
+An `upstream-candidate` that adds behavior users see is also a fork feature: it carries
+`atelier-feature` too and gets a number and an entry in "Differences from upstream". When it
+is `upstream-merged`, its entry leaves the list and its number stays used.
 
 `label:atelier-feature` lists every fork feature, and `label:upstream-candidate` lists what is
 waiting to go upstream.
