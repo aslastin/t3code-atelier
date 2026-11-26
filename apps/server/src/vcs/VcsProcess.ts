@@ -37,6 +37,8 @@ export interface VcsProcessInput {
   readonly env?: NodeJS.ProcessEnv;
   /** Runs with `env` alone: no inherited server environment and no Git defaults. */
   readonly cleanEnv?: boolean;
+  /** Refuse a command that would run through a shell, such as a Windows batch file. */
+  readonly forbidShell?: boolean;
   readonly allowNonZeroExit?: boolean;
   /** `Infinity` waits as long as the command runs. */
   readonly timeoutMs?: number;
@@ -256,6 +258,7 @@ export const make = Effect.gen(function* () {
               ...explicitBareRepositoryEnv({ ...process.env, ...input.env }, hostPlatform),
             },
         ...(input.cleanEnv ? { extendEnv: false } : {}),
+        ...(input.forbidShell ? { forbidShell: true } : {}),
         timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxOutputBytes: input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
         outputMode: input.outputMode ?? "truncate",

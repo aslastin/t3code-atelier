@@ -35,6 +35,8 @@ export interface ProcessRunInput {
   readonly truncatedMarker?: string | undefined;
   /** Timed-out results discard partial stdout/stderr. */
   readonly timeoutBehavior?: "error" | "timedOutResult" | undefined;
+  /** Refuse a command that would run through a shell, such as a Windows batch file. */
+  readonly forbidShell?: boolean | undefined;
 }
 
 export interface ProcessRunOutput {
@@ -293,6 +295,11 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
       shell: spawnCommand.shell,
       cause,
     });
+
+  if (input.forbidShell && spawnCommand.shell)
+    return yield* toSpawnError(
+      new Error("The command runs through a shell, which arguments must not depend on."),
+    );
 
   const spawn = spawner
     .spawn(

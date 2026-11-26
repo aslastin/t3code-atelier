@@ -60,7 +60,8 @@ one closer to the project folder wins.
 
 - `id` is lowercase letters, digits, and dashes, and must match the folder name once installed.
   `git`, `jj`, `unknown`, and `auto` are taken.
-- Commands are argument lists. No shell runs them. The first item is either `./` and a file in
+- Commands are argument lists. No shell runs them, so on Windows a `.cmd` or `.bat` file is
+  refused; use an executable or a script run by its interpreter. The first item is either `./` and a file in
   the plugin folder, or a bare name looked up on the server's `PATH`. Absolute paths are refused,
   and so is a `./` path that a symbolic link points outside the folder. The icon must also be an
   `.svg` file in the folder, at most 64 KB. It is shown as an image, so it does not take the

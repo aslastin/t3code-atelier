@@ -131,6 +131,8 @@ export const makePluginCommandRunner = Effect.fn("pluginCommandRunner.make")(fun
         args: rendered.argv.slice(1),
         cwd: options.cwd,
         cleanEnv: true,
+        // Arguments are an argv, never a command line a shell could reinterpret.
+        forbidShell: true,
         env: pluginEnvironment(directory, process.env),
         timeoutMs:
           options.timeoutMs === null
