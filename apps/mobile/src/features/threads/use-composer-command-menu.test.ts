@@ -27,6 +27,7 @@ import {
   buildComposerSlashCommandItems,
   resolveComposerCommandSelection,
   resolveComposerMenuSelection,
+  resolveComposerModelEffortSelection,
 } from "./use-composer-command-menu";
 
 describe("resolveComposerMenuSelection", () => {
@@ -165,7 +166,7 @@ describe("mobile model mentions", () => {
     ]);
   });
 
-  it("offers a model's effort levels after Default and writes the chosen one into the mention", () => {
+  it("offers a model's effort levels after Default, then rewrites or undoes the inserted mention", () => {
     const [model] = buildComposerModelItems(
       [
         option("traex:gpt-6.1", {
@@ -190,14 +191,33 @@ describe("mobile model mentions", () => {
     if (model?.type !== "model") throw new Error("expected a model item");
     const levels = buildComposerModelEffortItems(model, "Default");
     expect(levels.map((item) => item.label)).toEqual(["Default", "Low", "High"]);
-    const insert = (index: number) =>
-      resolveComposerCommandSelection({
-        draftMessage: "Ask @gpt",
-        trigger: { rangeStart: 4, rangeEnd: 8 },
-        item: levels[index]!,
-      }).text;
-    expect(insert(0)).toBe("Ask model:traex/gpt-6.1 ");
-    expect(insert(2)).toBe("Ask model:traex/gpt-6.1?reasoningEffort=high ");
+    const inserted = resolveComposerCommandSelection({
+      draftMessage: "Ask @gpt then",
+      trigger: { rangeStart: 4, rangeEnd: 8 },
+      item: model,
+    });
+    const step = {
+      model,
+      draftMessage: inserted.text,
+      start: 4,
+      source: "model:traex/gpt-6.1",
+      query: "@gpt",
+    };
+    const pick = (index: number) => {
+      const level = levels[index];
+      if (level?.type !== "model-effort") throw new Error("expected a level");
+      return resolveComposerModelEffortSelection(step, level);
+    };
+    expect(inserted.text).toBe("Ask model:traex/gpt-6.1  then");
+    expect(pick(0)).toEqual({ text: "Ask model:traex/gpt-6.1  then", cursor: 24 });
+    expect(pick(2)).toEqual({
+      text: "Ask model:traex/gpt-6.1?reasoningEffort=high  then",
+      cursor: 45,
+    });
+    expect(resolveComposerModelEffortSelection(step, null)).toEqual({
+      text: "Ask @gpt then",
+      cursor: 8,
+    });
   });
 
   it.each([

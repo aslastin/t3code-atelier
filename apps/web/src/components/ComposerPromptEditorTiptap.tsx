@@ -376,16 +376,38 @@ function ComposerModelNodeView({ node, editor, getPos }: NodeViewProps) {
           editModelEffort && editor.isEditable
             ? () => {
                 const pos = getPos();
-                const run = serializeEditorDoc(editor.state.doc).runs.find(
-                  (candidate) => candidate.kind === "token" && candidate.pmPos === pos,
-                );
-                if (!run) return;
+                if (pos === undefined) return;
+                const source = String(node.attrs.source);
+                // The caret after the chip and its space keeps Enter out of any code block it sat in.
+                const after = pos + node.nodeSize;
+                const { doc } = editor.state;
+                const spaced =
+                  after < doc.content.size && doc.textBetween(after, after + 1) === " "
+                    ? after + 1
+                    : after;
+                editor.chain().focus().setTextSelection(spaced).run();
                 editModelEffort({
                   instanceId,
                   model,
                   effort: effort ?? null,
-                  start: run.mdStart + run.openLen,
-                  end: run.mdStart + run.mdLen - run.closeLen,
+                  // Edits the chip in place, so a chip with no space after it stays a chip.
+                  apply: (nextSource, nextEffort) => {
+                    const current = editor.state.doc.nodeAt(pos);
+                    if (
+                      current?.type.name !== "composer-model" ||
+                      current.attrs.source !== source
+                    ) {
+                      return false;
+                    }
+                    editor.view.dispatch(
+                      editor.state.tr.setNodeMarkup(pos, undefined, {
+                        ...current.attrs,
+                        effort: nextEffort,
+                        source: nextSource,
+                      }),
+                    );
+                    return true;
+                  },
                 });
               }
             : undefined

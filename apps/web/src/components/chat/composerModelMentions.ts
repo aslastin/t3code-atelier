@@ -1,4 +1,5 @@
 import {
+  type ComposerModelMentionEffort,
   modelMentionEffortChoices,
   modelMentionEffortDescriptor,
   rankComposerModelMentions,
@@ -72,7 +73,10 @@ export interface ComposerModelEffortStep {
   readonly prompt: string;
   readonly target:
     | { readonly kind: "insert"; readonly modelSearchKey: string }
-    | { readonly kind: "edit"; readonly start: number; readonly end: number };
+    | {
+        readonly kind: "edit";
+        readonly apply: (source: string, effort: ComposerModelMentionEffort | null) => boolean;
+      };
 }
 
 export function composerModelEffortItemId(value: string | null): string {

@@ -839,12 +839,13 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
           </View>
         ) : null}
         {!isSubmissionLocked &&
-        composerMenu.trigger &&
-        (composerMenu.items.length > 0 || composerMenu.trigger.kind === "pull-request") ? (
+        (composerMenu.effortStep ||
+          (composerMenu.trigger &&
+            (composerMenu.items.length > 0 || composerMenu.trigger.kind === "pull-request"))) ? (
           <ComposerPopoverAnchor>
             <ComposerCommandPopover
               items={composerMenu.items}
-              triggerKind={composerMenu.trigger.kind}
+              triggerKind={composerMenu.trigger?.kind ?? null}
               isLoading={composerMenu.isLoading}
               error={composerMenu.error}
               effortStep={composerMenu.effortStep}

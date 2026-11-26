@@ -109,6 +109,19 @@ describe("collectComposerModelMentions", () => {
     ]);
   });
 
+  it.each(["vendor's", "extra!", "v1.", "agent:deep (max)"])(
+    "round-trips the effort value %s as one reference",
+    (value) => {
+      const source = formatComposerModelMention("acp", "agent", {
+        optionId: "agent:effort",
+        value,
+      });
+      expect(collectComposerModelMentions(`${source}. next`)).toEqual([
+        expect.objectContaining({ source, effort: { optionId: "agent:effort", value } }),
+      ]);
+    },
+  );
+
   it.each([
     ["model:codex/gpt-6.1?", "gpt-6.1"],
     ["model:codex/gpt-6.1?effort", "gpt-6.1?effort"],
@@ -167,6 +180,10 @@ describe("modelMentionEffortDescriptor", () => {
     ).toBe("thought_level");
     expect(modelMentionEffortDescriptor([select("speed"), select("reasoningEffort")])?.id).toBe(
       "reasoningEffort",
+    );
+    expect(modelMentionEffortDescriptor([select("thinking")])?.id).toBe("thinking");
+    expect(modelMentionEffortDescriptor([select("agent:effort", "reasoning")])?.id).toBe(
+      "agent:effort",
     );
   });
 

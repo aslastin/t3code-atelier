@@ -1054,6 +1054,7 @@ it("an @ model mention takes the reasoning effort picked in the menu and changes
     ],
   };
   using _environment = installFakeEnvironment([thread], {
+    acceptCommands: true,
     providers: [
       {
         ...CODEX_PROVIDER,
@@ -1108,6 +1109,13 @@ it("an @ model mention takes the reasoning effort picked in the menu and changes
   await expectHighlighted("GPT-5.5");
   expect(prompt()).toBe("Ask @gpt-5.5");
 
+  // Editing the search drops the levels for good, even once it reads the same again.
+  await userEvent.keyboard("{Enter}");
+  await expect.element(efforts).toBeVisible();
+  await insertText("z");
+  await userEvent.keyboard("{Backspace}");
+  await expectHighlighted("GPT-5.5");
+
   await userEvent.keyboard("{Enter}");
   await expect.element(efforts).toBeVisible();
   await userEvent.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}");
@@ -1140,6 +1148,41 @@ it("an @ model mention takes the reasoning effort picked in the menu and changes
   await vi.waitFor(() =>
     expect(prompt()).toBe(
       "Ask model:codex/gpt-5.5?reasoningEffort=xhigh and model:codex/gpt-5.5 or model:codex/gpt-5.4 ",
+    ),
+  );
+
+  // A last chip whose space was deleted stays a chip when its level changes.
+  await insertText("then @gpt-5.5");
+  await expectHighlighted("GPT-5.5");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(efforts).toBeVisible();
+  await userEvent.keyboard("{ArrowDown}");
+  await expectHighlighted("Low");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(effortButton("Low")).toBeVisible();
+  await userEvent.keyboard("{Backspace}");
+  await vi.waitFor(() =>
+    expect(prompt()).toMatch(/then model:codex\/gpt-5\.5\?reasoningEffort=low$/),
+  );
+  await userEvent.click(effortButton("Low"));
+  await userEvent.keyboard("{ArrowDown}");
+  await expectHighlighted("Medium");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(effortButton("Medium")).toBeVisible();
+  expect(prompt()).toMatch(/then model:codex\/gpt-5\.5\?reasoningEffort=medium$/);
+
+  // Sending while the levels show sends the picked model, not the `@` search.
+  await insertText(" last @gpt-5.5");
+  await expectHighlighted("GPT-5.5");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(efforts).toBeVisible();
+  await userEvent.click(page.getByRole("button", { name: "Submit message" }));
+  await vi.waitFor(() =>
+    expect(dispatchedCommands()).toContainEqual(
+      expect.objectContaining({
+        type: "message.dispatch",
+        text: expect.stringMatching(/reasoningEffort=medium last model:codex\/gpt-5\.5 ?$/),
+      }),
     ),
   );
 });

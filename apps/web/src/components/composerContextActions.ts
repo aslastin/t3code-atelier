@@ -2,13 +2,12 @@ import type { ComposerModelMentionEffort } from "@t3tools/client-runtime/compose
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { createContext, type MouseEvent } from "react";
 
-/** A model mention chip in the prompt, by its source range, whose effort the user wants to change. */
+/** A model mention chip whose effort the user wants to change; `apply` rewrites that chip. */
 export interface ComposerModelEffortEditRequest {
   readonly instanceId: string;
   readonly model: string;
   readonly effort: ComposerModelMentionEffort | null;
-  readonly start: number;
-  readonly end: number;
+  readonly apply: (source: string, effort: ComposerModelMentionEffort | null) => boolean;
 }
 
 export interface ComposerContextActions {

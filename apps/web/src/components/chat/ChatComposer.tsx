@@ -1228,6 +1228,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       modelEffortStep.target.modelSearchKey === triggerMenuSearchKey)
       ? modelEffortStep
       : null;
+  // A step left behind stays dropped, so typing back to its text does not reopen it.
+  if (modelEffortStep !== null && activeModelEffortStep === null) {
+    setModelEffortStep(null);
+  }
   const modelEffortSearchKey = (model: ComposerModelItem) =>
     `${composerSuggestionListId}:model-effort:${model.id}`;
   const composerMenuItems = activeModelEffortStep
@@ -2048,16 +2052,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       if (insertModelMention(source)) setModelEffortStep(null);
       return;
     }
-    // The caret stays where it was, shifted by the chip's new length.
-    const { expandedCursor } = readComposerSnapshot();
-    const applied = applyPromptReplacement(target.start, target.end, source, {
-      expectedText: step.prompt.slice(target.start, target.end),
-      expandedCursorAfterReplace:
-        expandedCursor <= target.start
-          ? expandedCursor
-          : Math.max(expandedCursor, target.end) + source.length - (target.end - target.start),
-    });
-    if (applied) setModelEffortStep(null);
+    if (target.apply(source, effort)) setModelEffortStep(null);
   };
 
   const { onUsageLimitsCommand } = props;
@@ -2301,12 +2296,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setModelEffortStep({
       model,
       prompt: promptRef.current,
-      target: { kind: "edit", start: request.start, end: request.end },
+      target: { kind: "edit", apply: request.apply },
     });
     setComposerHighlightedItemId(composerModelEffortItemId(current));
     setComposerHighlightedSearchKey(modelEffortSearchKey(model));
-    // The editor's keys drive the menu.
-    composerEditorRef.current?.focus();
   };
 
   const onComposerMenuItemHighlighted = (itemId: string | null) => {
@@ -2368,6 +2361,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (submissionBlocked || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) {
       event?.preventDefault();
       return false;
+    }
+    // Sending while a picked model's levels show sends that model, not the `@` search.
+    if (activeModelEffortStep?.target.kind === "insert") {
+      applyModelEffort(activeModelEffortStep, null);
     }
     const modeCommand = promptRef.current.trim();
     if (

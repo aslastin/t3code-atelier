@@ -64,8 +64,18 @@ export function formatComposerModelMention(
   effort?: ComposerModelMentionEffort | null,
 ): string {
   const mention = `model:${instanceId}/${model}`;
-  return effort ? `${mention}?${effort.optionId}=${encodeURIComponent(effort.value)}` : mention;
+  return effort ? `${mention}?${effort.optionId}=${encodeEffortValue(effort.value)}` : mention;
 }
+
+// Also escapes what the mention parser treats as a reference's end or as prose punctuation.
+const encodeEffortValue = (value: string) =>
+  encodeURIComponent(value).replace(
+    /[!'().*~]/gu,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+
+// Pi names its reasoning select `thinking`; Claude's `thinking` is a boolean and never matches.
+const EFFORT_SELECT_IDS = [...REASONING_EFFORT_OPTION_IDS, "thinking"];
 
 /** The model's reasoning effort select, which a mention may set, or null when it has none. */
 export function modelMentionEffortDescriptor(
@@ -76,7 +86,7 @@ export function modelMentionEffortDescriptor(
   );
   const descriptor =
     selects.find((candidate) => candidate.role === "reasoning") ??
-    REASONING_EFFORT_OPTION_IDS.map((id) => selects.find((candidate) => candidate.id === id)).find(
+    EFFORT_SELECT_IDS.map((id) => selects.find((candidate) => candidate.id === id)).find(
       (candidate) => candidate !== undefined,
     );
   return descriptor && EFFORT_OPTION_ID.test(descriptor.id) ? descriptor : null;
@@ -100,8 +110,9 @@ export interface ComposerModelMentionOccurrence {
   readonly end: number;
 }
 
-const EFFORT_OPTION_ID = /^[A-Za-z_][\w.-]*$/u;
-const EFFORT_SUFFIX = /\?([A-Za-z_][\w.-]*)=([^\s?&=]+)$/u;
+// ACP agents may namespace their option ids, as in `agent:effort`.
+const EFFORT_OPTION_ID = /^[A-Za-z_][\w.:-]*$/u;
+const EFFORT_SUFFIX = /\?([A-Za-z_][\w.:-]*)=([^\s?&=]+)$/u;
 
 function splitEffort(slug: string): {
   readonly model: string;

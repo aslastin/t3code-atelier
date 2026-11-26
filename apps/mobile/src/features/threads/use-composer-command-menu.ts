@@ -293,10 +293,38 @@ export function resolveComposerCommandSelection(input: {
     replacement = `/${item.command.name} `;
   } else if (item.type === "model") {
     replacement = `${formatComposerModelMention(item.option.selection.instanceId, item.option.selection.model)} `;
-  } else if (item.type === "model-effort") {
-    replacement = `${formatComposerModelMention(item.selection.instanceId, item.selection.model, item.effort)} `;
   }
   return replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, replacement);
+}
+
+/** The mention a picked model just inserted, whose level the menu now lists. */
+export interface ComposerModelEffortStep {
+  readonly model: Extract<ComposerCommandItem, { type: "model" }>;
+  /** The draft right after the insertion; any edit ends the step. */
+  readonly draftMessage: string;
+  readonly start: number;
+  readonly source: string;
+  /** The `@` search the model replaced, which Back restores. */
+  readonly query: string;
+}
+
+/** Rewrites the step's mention with a level, or puts the `@` search back when `item` is null. */
+export function resolveComposerModelEffortSelection(
+  step: ComposerModelEffortStep,
+  item: Extract<ComposerCommandItem, { type: "model-effort" }> | null,
+): { readonly text: string; readonly cursor: number } {
+  const end = step.start + step.source.length;
+  if (item === null) {
+    const spaced = step.draftMessage[end] === " " ? end + 1 : end;
+    return replaceTextRange(step.draftMessage, step.start, spaced, step.query);
+  }
+  const source = formatComposerModelMention(
+    item.selection.instanceId,
+    item.selection.model,
+    item.effort,
+  );
+  const result = replaceTextRange(step.draftMessage, step.start, end, source);
+  return step.draftMessage[end] === " " ? { ...result, cursor: result.cursor + 1 } : result;
 }
 
 export function useComposerCommandMenu({
@@ -424,28 +452,22 @@ export function useComposerCommandMenu({
     query: trigger?.kind === "pull-request" ? trigger.query : null,
   });
 
-  const [modelEffortStep, setModelEffortStep] = useState<{
-    readonly model: Extract<ComposerCommandItem, { type: "model" }>;
-    readonly draftMessage: string;
-    readonly rangeStart: number;
-  } | null>(null);
-  // Any edit, or moving off the `@` mention the model came from, ends the effort step.
+  const [modelEffortStep, setModelEffortStep] = useState<ComposerModelEffortStep | null>(null);
   const activeModelEffortStep =
-    modelEffortStep &&
-    modelEffortStep.draftMessage === draftMessage &&
-    trigger?.kind === "path" &&
-    trigger.rangeStart === modelEffortStep.rangeStart
-      ? modelEffortStep
-      : null;
+    enabled && modelEffortStep?.draftMessage === draftMessage ? modelEffortStep : null;
+  // A step left behind stays dropped, so typing back to its text does not reopen it.
+  if (modelEffortStep !== null && activeModelEffortStep === null) {
+    setModelEffortStep(null);
+  }
 
   const items = ((): ComposerCommandItem[] => {
-    if (!trigger) return [];
     if (activeModelEffortStep) {
       return buildComposerModelEffortItems(
         activeModelEffortStep.model,
         gt("Default", { $context: "reasoning effort level that sets none" }),
       );
     }
+    if (!trigger) return [];
 
     if (trigger.kind === "pull-request") {
       return pullRequestSearch.entries.map((entry) => ({
@@ -636,7 +658,21 @@ export function useComposerCommandMenu({
     return [];
   })();
 
+  const applyModelEffortSelection = (
+    item: Extract<ComposerCommandItem, { type: "model-effort" }> | null,
+  ) => {
+    if (!activeModelEffortStep) return;
+    const result = resolveComposerModelEffortSelection(activeModelEffortStep, item);
+    setModelEffortStep(null);
+    setSelection({ start: result.cursor, end: result.cursor });
+    onChangeDraftMessage(result.text);
+  };
+
   const onSelect = (item: ComposerCommandItem) => {
+    if (item.type === "model-effort") {
+      applyModelEffortSelection(item);
+      return;
+    }
     if (!trigger) return;
     if (item.type === "environment") {
       if (!ownerKey || trigger.kind !== "path") return;
@@ -768,15 +804,22 @@ export function useComposerCommandMenu({
       return;
     }
 
-    if (item.type === "model" && item.effort && trigger.kind === "path") {
-      setModelEffortStep({ model: item, draftMessage, rangeStart: trigger.rangeStart });
-      return;
-    }
-
     const result = resolveComposerCommandSelection({ draftMessage, trigger, item });
     setSelection({ start: result.cursor, end: result.cursor });
     onChangeDraftMessage(result.text);
-    setModelEffortStep(null);
+    // The plain mention goes in first, so sending now still names the model.
+    if (item.type === "model" && item.effort && trigger.kind === "path") {
+      setModelEffortStep({
+        model: item,
+        draftMessage: result.text,
+        start: trigger.rangeStart,
+        source: formatComposerModelMention(
+          item.option.selection.instanceId,
+          item.option.selection.model,
+        ),
+        query: draftMessage.slice(trigger.rangeStart, trigger.rangeEnd),
+      });
+    }
   };
 
   return {
@@ -795,7 +838,7 @@ export function useComposerCommandMenu({
         : null,
     onSelect,
     effortStep: activeModelEffortStep
-      ? { model: activeModelEffortStep.model, onBack: () => setModelEffortStep(null) }
+      ? { model: activeModelEffortStep.model, onBack: () => applyModelEffortSelection(null) }
       : null,
   };
 }
