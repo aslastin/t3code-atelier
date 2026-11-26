@@ -57,7 +57,8 @@ export const VcsPluginManifest = Schema.Struct({
   icon: Schema.optionalKey(TrimmedNonEmptyString),
   check: PluginArgv,
   detect: Schema.Struct({
-    markers: Schema.Array(TrimmedNonEmptyString).check(
+    // Not trimmed: a marker is matched as written, so the manifest's own check sees what it says.
+    markers: Schema.Array(Schema.String.check(Schema.isMinLength(1))).check(
       Schema.isMinLength(1),
       Schema.isMaxLength(8),
     ),

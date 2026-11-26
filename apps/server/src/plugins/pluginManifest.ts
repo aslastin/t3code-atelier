@@ -59,7 +59,8 @@ export const checkpointStrategies = (manifest: VcsPluginManifest) =>
 export const supportsWorktrees = (manifest: VcsPluginManifest) =>
   manifest.capabilities?.worktrees === true &&
   manifest.commands.worktreeCreate !== undefined &&
-  manifest.commands.worktreeRemove !== undefined;
+  manifest.commands.worktreeRemove !== undefined &&
+  manifest.commands.worktreeList !== undefined;
 
 export type ExecutableKind =
   | { readonly kind: "plugin"; readonly relativePath: string }
@@ -85,6 +86,7 @@ export function classifyExecutable(executable: string): ExecutableKind {
 }
 
 const isSafeRelativePath = (value: string) =>
+  value.trim() === value &&
   !/^[A-Za-z]:|^[/\\]/.test(value) &&
   value.split(/[/\\]/).every((part) => part !== ".." && part !== "");
 
@@ -111,7 +113,9 @@ export function validateManifest(manifest: VcsPluginManifest): ReadonlyArray<str
   }
   for (const marker of manifest.detect.markers) {
     if (!isSafeRelativePath(marker))
-      errors.push(`detect.markers: "${marker}" must be a path inside the repository folder.`);
+      errors.push(
+        `detect.markers: "${marker}" must be a path inside the repository folder, with no spaces around it.`,
+      );
   }
   if (manifest.icon !== undefined) {
     const icon = manifest.icon.replace(/^\.\//, "");
@@ -130,10 +134,11 @@ export function validateManifest(manifest: VcsPluginManifest): ReadonlyArray<str
   if (
     manifest.capabilities?.worktrees === true &&
     (manifest.commands.worktreeCreate === undefined ||
-      manifest.commands.worktreeRemove === undefined)
+      manifest.commands.worktreeRemove === undefined ||
+      manifest.commands.worktreeList === undefined)
   )
     errors.push(
-      "capabilities.worktrees: needs commands.worktreeCreate and commands.worktreeRemove.",
+      "capabilities.worktrees: needs commands.worktreeCreate, commands.worktreeRemove and commands.worktreeList.",
     );
   return errors;
 }

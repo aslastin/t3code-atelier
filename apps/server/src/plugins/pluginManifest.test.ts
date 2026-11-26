@@ -48,13 +48,14 @@ describe("pluginManifest", () => {
         checkpoints: ["native", "native", "full"],
         extraManifest: {
           check: ["/usr/bin/kite", "{path}"],
-          detect: { markers: ["../.kite/HEAD"] },
+          detect: { markers: ["../.kite/HEAD", " .kite/HEAD"] },
           icon: "../icon.svg",
           capabilities: { worktrees: true },
         },
       });
       const manifest = JSON.parse(NodeFS.readFileSync(`${directory}/plugin.json`, "utf8"));
       delete manifest.commands.worktreeRemove;
+      delete manifest.commands.worktreeList;
       NodeFS.writeFileSync(`${directory}/plugin.json`, JSON.stringify(manifest));
       const { manifest: decoded, errors } = yield* readManifest(fs, path, directory);
       assert.isNull(decoded);
@@ -62,10 +63,11 @@ describe("pluginManifest", () => {
         'id: "git" is reserved.',
         "check: the command is an absolute path; use ./ or a name from PATH.",
         "check: {path} is not available here.",
-        'detect.markers: "../.kite/HEAD" must be a path inside the repository folder.',
+        'detect.markers: "../.kite/HEAD" must be a path inside the repository folder, with no spaces around it.',
+        'detect.markers: " .kite/HEAD" must be a path inside the repository folder, with no spaces around it.',
         "icon: must be an .svg file inside the plugin folder.",
         "checkpoints: each strategy can be listed once.",
-        "capabilities.worktrees: needs commands.worktreeCreate and commands.worktreeRemove.",
+        "capabilities.worktrees: needs commands.worktreeCreate, commands.worktreeRemove and commands.worktreeList.",
       ]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );

@@ -107,8 +107,8 @@ Every command except `readFile` prints one JSON object on stdout. Optional field
 | `changedFiles`      |                                   | `{ "revision", "files": [{ "path", "status": "modified" \| "added" \| "deleted", "executable"? }] }`. Mark a file `executable` at `revision`, so a restored copy keeps the bit.         |
 | `readFile`          | `{revision}`, `{path}`            | The file's bytes. Exit with a non-zero code when the file does not exist at that revision.                                                                                              |
 
-Paths are relative to the repository root and use `/`. With `capabilities.worktrees`, both
-`worktreeCreate` and `worktreeRemove` are required, and **New worktree** is offered for the
+Paths are relative to the repository root and use `/`. With `capabilities.worktrees`,
+`worktreeCreate`, `worktreeRemove` and `worktreeList` are required, and **New worktree** is offered for the
 plugin's repositories. Commit and push are offered only when their commands exist. Without a
 typed message, T3 Code writes one as it does for Git, from the files `status` lists and, when the
 plugin has it, the patch `diff` prints. With `log`, the message follows your repository's recent

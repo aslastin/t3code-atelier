@@ -103,6 +103,25 @@ it.live("refuses an import whose check grows the copy past the limits", () =>
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
+it.live("installs the manifest its one check approved", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-plugins-home-" });
+    const source = writeFakeVcsPlugin(
+      yield* fs.makeTempDirectoryScoped({ prefix: "t3-plugins-source-" }),
+    );
+    NodeFS.writeFileSync(`${source}/checks.log`, "");
+    const plugins = Context.get(yield* buildPlugins(home), PluginService.PluginService);
+    yield* plugins.importFolder(source);
+    assert.strictEqual(NodeFS.readFileSync(`${home}/plugins/kite/checks.log`, "utf8"), "check\n");
+
+    NodeFS.writeFileSync(`${source}/rewrite-on-check`, "");
+    const refused = yield* plugins.importFolder(source).pipe(Effect.flip);
+    assert.include(refused.detail, "changed while it was checked");
+    assert.notInclude(NodeFS.readFileSync(`${home}/plugins/kite/plugin.json`, "utf8"), "Rewritten");
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
 it.live("keeps a plugin turned off while its startup check was still running", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

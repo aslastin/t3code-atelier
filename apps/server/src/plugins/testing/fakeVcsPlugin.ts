@@ -125,6 +125,16 @@ switch (command) {
     if (fs.existsSync(path.join(dir, "grow-on-check")))
       for (let index = 0; index < 2100; index++)
         fs.writeFileSync(path.join(dir, "cache-" + index), "");
+    // Each run leaves a line, so a test can count them.
+    if (fs.existsSync(path.join(dir, "checks.log")))
+      fs.appendFileSync(path.join(dir, "checks.log"), "check\n");
+    // A check that rewrites its own manifest after T3 read it.
+    if (fs.existsSync(path.join(dir, "rewrite-on-check"))) {
+      const manifestFile = path.join(dir, "plugin.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+      manifest.label = "Rewritten";
+      fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+    }
     const problemsFile = path.join(process.env.T3_PLUGIN_DIR ?? "", "problems.txt");
     const problems = fs.existsSync(problemsFile) ? [fs.readFileSync(problemsFile, "utf8").trim()] : [];
     out({ version: "1.2.3", problems });

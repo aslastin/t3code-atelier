@@ -255,6 +255,16 @@ const make = Effect.gen(function* () {
         checkedAt,
         driver: null,
       } satisfies PluginEntry;
+    return yield* withDriver(entry, manifest, version, checkedAt);
+  }, Effect.provideContext(services));
+
+  /** An entry whose check passed, with its driver. */
+  const withDriver = Effect.fn("PluginService.withDriver")(function* (
+    entry: PluginEntry,
+    manifest: VcsPluginManifest,
+    version: string,
+    checkedAt: string,
+  ) {
     const driver = yield* makeManifestVcsDriver({
       directory: entry.directory,
       manifest,
@@ -418,6 +428,18 @@ const make = Effect.gen(function* () {
         const checked = yield* check(staged);
         // The check runs in the copy and can write there, so the limits are checked once more.
         yield* walkSource(staging).pipe(Effect.tapError(() => cleanupStaging));
+        const sameManifest = (entry: PluginEntry) =>
+          entry.manifest !== null &&
+          JSON.stringify(entry.manifest) === JSON.stringify(staged.manifest);
+        // What installs is what the check approved, not a manifest it rewrote.
+        if (!sameManifest(yield* load(id, staged.enabled, staging))) {
+          yield* cleanupStaging;
+          return yield* failure(
+            operation,
+            "The plugin's manifest changed while it was checked.",
+            id,
+          );
+        }
         const target = path.join(directory, id);
         const previous = path.join(directory, `.previous-${NodeCrypto.randomUUID()}`);
         const hadPrevious = yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false));
@@ -437,12 +459,20 @@ const make = Effect.gen(function* () {
         );
         if (hadPrevious)
           yield* fs.remove(previous, { recursive: true, force: true }).pipe(Effect.ignore);
-        // Rebuild the driver on the installed folder, keeping what the check found.
+        // Rebuild the driver on the installed folder, keeping what the check found: running the
+        // check again could find something else than what was approved.
         const installed = yield* load(id, checked.enabled);
         entries.set(
           id,
           checked.status === "available"
-            ? yield* check(installed)
+            ? sameManifest(installed)
+              ? yield* withDriver(
+                  installed,
+                  installed.manifest!,
+                  checked.version!,
+                  checked.checkedAt!,
+                )
+              : yield* check(installed)
             : {
                 ...installed,
                 status: checked.status,
