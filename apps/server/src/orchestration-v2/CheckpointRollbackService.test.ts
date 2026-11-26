@@ -32,6 +32,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import { withSharedWorkspaceReservation, withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import { resolveCodexRollbackTurnCount } from "./Adapters/CodexAdapterV2.ts";
@@ -423,9 +424,14 @@ it.effect.each([
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect.each([{ restoreFiles: true }, { restoreFiles: false }])(
-  "holds turn starts inside the worktree during rollback with restoreFiles $restoreFiles",
-  ({ restoreFiles }) =>
+it.effect.each([
+  { restoreFiles: true, checkout: ".git" },
+  { restoreFiles: false, checkout: ".git" },
+  // A plugin's checkout has no `.git`; it must not read as a folder left without its checkout.
+  { restoreFiles: true, checkout: ".kite/HEAD" },
+])(
+  "holds turn starts inside the worktree during rollback with restoreFiles $restoreFiles in a $checkout checkout",
+  ({ restoreFiles, checkout }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -434,7 +440,7 @@ it.effect.each([{ restoreFiles: true }, { restoreFiles: false }])(
       );
       const worktreesDir = path.join(workspaceRoot, "worktrees");
       const worktreePath = path.join(worktreesDir, "repo", "feature");
-      yield* fileSystem.makeDirectory(path.join(worktreePath, ".git"), { recursive: true });
+      yield* fileSystem.makeDirectory(path.join(worktreePath, checkout), { recursive: true });
       const threadId = ThreadId.make("rollback-reservation");
       const providerThreadId = ProviderThreadId.make("rollback-reservation-provider-thread");
       const providerInstanceId = ProviderInstanceId.make("rollback-reservation-provider");
@@ -481,6 +487,7 @@ it.effect.each([{ restoreFiles: true }, { restoreFiles: false }])(
             }),
             layerNoTaskFolders,
             Layer.mock(GitWorkflow.GitWorkflowService)({}),
+            Layer.mock(VcsPluginDrivers)({ hasAny: () => true, markers: () => [".kite/HEAD"] }),
             Layer.mock(CheckpointService.CheckpointServiceV2)({
               discardRepositorySnapshots: () => Effect.void,
               restore: () =>

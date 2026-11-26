@@ -22,6 +22,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import type * as ServerConfig from "../config.ts";
 import type * as ServerSettings from "../serverSettings.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
@@ -156,6 +157,15 @@ export const layer: Layer.Layer<
     const taskFolders = yield* TaskFolders.TaskFolders;
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
+    const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
+    const rootMarkers = () => plugins?.markers() ?? [];
+    // A VCS plugin's checkout carries its marker where a Git checkout carries `.git`.
+    const hasCheckout = Effect.fnUntraced(function* (folder: string) {
+      for (const marker of [".git", ...rootMarkers()]) {
+        if (yield* fileSystem.exists(path.join(folder, marker))) return true;
+      }
+      return false;
+    });
 
     const checkoutRoot = (thread: { projectId: ProjectId }, folder: string) =>
       worktreeRootForProject(
@@ -167,6 +177,7 @@ export const layer: Layer.Layer<
           Effect.orElseSucceed(() => undefined),
         ),
         isManagedWorktreePath,
+        rootMarkers(),
       );
     const execute = Effect.fn("orchestrationV2.checkpointRollback.execute")(function* (input: {
       readonly threadId: ThreadId;
@@ -306,7 +317,7 @@ export const layer: Layer.Layer<
         const leftover =
           restoreFiles &&
           (yield* fileSystem.exists(worktreePath)) &&
-          !(yield* fileSystem.exists(path.join(worktreePath, ".git")));
+          !(yield* hasCheckout(worktreePath));
         if (
           (leftover || !(yield* fileSystem.exists(worktreePath))) &&
           (yield* isManagedWorktreePath(worktreePath))
@@ -379,7 +390,7 @@ export const layer: Layer.Layer<
         folder !== null &&
         worktreePath !== null &&
         worktreePath !== folder &&
-        (yield* fileSystem.exists(path.join(worktreePath, ".git")))
+        (yield* hasCheckout(worktreePath))
       ) {
         yield* restoreWorktreeProjectFolder(fileSystem, path, worktreePath, folder);
       }
