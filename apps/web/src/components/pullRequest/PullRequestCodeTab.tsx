@@ -112,6 +112,7 @@ import { ChatMarkdownAssetImage } from "../chat/ChatMarkdownMedia";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { useDiffWorkerPool, useDiffWorkerPoolReady } from "../DiffWorkerPoolProvider";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
+import { useCommentEdits } from "../diffs/useCommentEdits";
 import { DiffFileTree } from "../diffs/DiffFileTree";
 import { FileExplorerPane } from "../files/FileExplorerPane";
 import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
@@ -593,6 +594,7 @@ function PullRequestCodeTab({
   const pendingComments = usePendingReviewComments(reference);
   const addComment = usePullRequestReviewStore((store) => store.addComment);
   const removeComment = usePullRequestReviewStore((store) => store.removeComment);
+  const pendingEdits = useCommentEdits();
   const replyToThread = useAtomCommand(pullRequestEnvironment.replyToThread, {
     reportFailure: false,
   });
@@ -1351,7 +1353,16 @@ function PullRequestCodeTab({
         <PendingReviewCommentCard
           key={comment.id}
           comment={comment}
+          environmentId={environmentId}
+          projectId={reference.projectId}
+          completionScope={completionScope}
           onRemove={() => removeComment(reviewKey, comment.id)}
+          {...(canCommentOnLines
+            ? {
+                onEdit: (body: string) => addComment(reviewKey, { ...comment, body }),
+                ...pendingEdits.for(comment.id),
+              }
+            : {})}
         />
       ))}
       {annotation.metadata.draft && draft && canSelectLines ? (

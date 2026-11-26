@@ -21,6 +21,7 @@ import {
 import { nextFileCommentId } from "../files/fileCommentAnnotations";
 import { DiffCommentAnnotation } from "./DiffCommentAnnotation";
 import { StyledDiffCodeView, type StyledDiffCodeViewOptions } from "./StyledDiffCodeView";
+import { useCommentEdits } from "./useCommentEdits";
 
 interface DiffCommentAnnotationEntry {
   id: string;
@@ -142,6 +143,7 @@ export function AnnotatableCodeView({
     annotation: DiffCommentLineAnnotation;
   } | null>(null);
   const [draftText, setDraftText] = useState("");
+  const edits = useCommentEdits();
 
   const filesByKey = new Map(files.map((file) => [file.fileKey, file]));
   if (
@@ -225,6 +227,14 @@ export function AnnotatableCodeView({
     setSelectedLines(null);
     setDraft(null);
     setDraftText("");
+  };
+
+  const editEntry = (entryId: string, text: string) => {
+    const comment = useComposerDraftStore
+      .getState()
+      .getComposerDraft(composerDraftTarget)
+      ?.reviewComments.find((candidate) => candidate.id === entryId);
+    if (comment) addReviewComment(composerDraftTarget, { ...comment, text });
   };
 
   const beginComment = (range: SelectedLineRange | null, context: DiffSelectionContext) => {
@@ -315,6 +325,8 @@ export function AnnotatableCodeView({
                 onCancel={() => removeEntry(entry.id)}
                 onComment={(text) => submitEntry(entry.id, text)}
                 onDelete={() => removeEntry(entry.id)}
+                onEdit={(text) => editEntry(entry.id, text)}
+                {...edits.for(entry.id)}
               />
             ))}
           </div>

@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   primaryScopes: new Set<string>(),
   branch: "main",
   worktrees: [] as string[],
+  missingProjectFolder: false,
   thread: {
     id: "thread",
     environmentId: "environment",
@@ -105,7 +106,11 @@ vi.mock("./vcs", () => ({
       state.worktrees.push("/repo-worktree");
       state.afterGitAction?.();
       return AsyncResult.success({
-        worktree: { path: "/repo-worktree", refName: input.newRefName },
+        worktree: {
+          path: "/repo-worktree",
+          refName: input.newRefName,
+          ...(state.missingProjectFolder ? { projectPath: null } : {}),
+        },
       });
     },
     pull: async () => AsyncResult.success({ status: "pulled", refName: state.branch }),
@@ -138,6 +143,7 @@ describe("thread Git mutation permissions", () => {
     state.primaryScopes = new Set([AuthSourceControlWriteScope, AuthOrchestrationOperateScope]);
     state.branch = "main";
     state.worktrees = [];
+    state.missingProjectFolder = false;
     state.thread.branch = "main";
     state.thread.worktreePath = null;
     state.commits = 0;
@@ -153,6 +159,7 @@ describe("thread Git mutation permissions", () => {
   it.each([false, true])(
     "requires task permission before creating and attaching a worktree: %s",
     async (canOperate) => {
+      state.missingProjectFolder = true;
       if (canOperate) state.scopes.add(AuthOrchestrationOperateScope);
       const actions = useSelectedThreadGitActions();
       const result = await actions.onCreateSelectedThreadWorktree({
@@ -160,8 +167,15 @@ describe("thread Git mutation permissions", () => {
         newBranch: "feature/task",
       });
       expect(result).toEqual(
-        canOperate ? { worktree: { path: "/repo-worktree", refName: "feature/task" } } : null,
+        canOperate
+          ? { worktree: { path: "/repo-worktree", refName: "feature/task", projectPath: null } }
+          : null,
       );
+      expect(
+        state.results.some(
+          (result) => result.type === "success" && result.description === "/repo-worktree",
+        ),
+      ).toBe(canOperate);
       expect(state.worktrees).toEqual(canOperate ? ["/repo-worktree"] : []);
       expect(state.thread.worktreePath).toBe(canOperate ? "/repo-worktree" : null);
       expect(state.thread.branch).toBe(canOperate ? "feature/task" : "main");

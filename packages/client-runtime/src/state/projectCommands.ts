@@ -154,6 +154,10 @@ export function createProjectEnvironmentAtoms<R, E>(
           (result, isCurrent) => fileMetadata.rememberEntries(input.cwd, result.entries, isCurrent),
         ),
     }),
+    removalPreview: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:projects:removal-preview",
+      tag: WS_METHODS.projectsRemovalPreview,
+    }),
     listEntries: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:projects:list-entries",
       tag: WS_METHODS.projectsListEntries,

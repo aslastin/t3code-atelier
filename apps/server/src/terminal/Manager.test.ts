@@ -500,6 +500,8 @@ it.layer(
     { method: "open", location: "managed" },
     { method: "attach", location: "managed" },
     { method: "open", location: "subdirectory" },
+    { method: "open", location: "subfolder-project" },
+    { method: "open", location: "missing-project-folder" },
     { method: "open", location: "unmanaged" },
     { method: "open", location: "no-worktree" },
   ] as const)(
@@ -514,14 +516,29 @@ it.layer(
           location === "unmanaged"
             ? path.join(baseDir, "missing")
             : path.join(worktreesDir, "project", "feature");
-        const cwd = location === "subdirectory" ? path.join(worktreePath, "src") : worktreePath;
+        const insideCheckout = location === "missing-project-folder";
+        const subfolder = location === "subfolder-project" || insideCheckout;
+        const workspaceRoot = subfolder ? path.join(baseDir, "my-project") : baseDir;
+        const threadFolder = subfolder ? path.join(worktreePath, "my-project") : worktreePath;
+        if (subfolder) {
+          yield* fs.makeDirectory(path.join(baseDir, ".git"));
+          if (insideCheckout)
+            yield* fs.makeDirectory(path.join(worktreePath, ".git"), { recursive: true });
+          else yield* fs.makeDirectory(workspaceRoot);
+        }
+        const cwd = location === "subdirectory" ? path.join(worktreePath, "src") : threadFolder;
         const cleanupQueued = yield* Deferred.make<Fiber.Fiber<void>>();
         let creations = 0;
         const prepareLaunch = yield* makePrepareTerminalLaunch(() =>
           Effect.succeed({
             id: ThreadId.make("thread-1"),
             projectId: ProjectId.make("project-1"),
-            worktreePath: location === "no-worktree" ? null : worktreePath,
+            worktreePath:
+              location === "no-worktree"
+                ? null
+                : subfolder
+                  ? threadFolder + path.sep
+                  : threadFolder,
             branch: "feature",
           }),
         ).pipe(
@@ -532,16 +549,19 @@ it.layer(
               } as ServerConfig.ServerConfig["Service"]),
               ServerSettings.layerTest(),
               Layer.mock(ProjectService.ProjectService)({
-                getById: () => Effect.succeedSome({ workspaceRoot: baseDir } as never),
+                getById: () => Effect.succeedSome({ workspaceRoot } as never),
               }),
               layerNoTaskFolders,
               Layer.mock(GitWorkflowService.GitWorkflowService)({
                 pruneWorktrees: () => Effect.void,
                 listLocalBranchNames: () => Effect.succeed(["feature"]),
-                createWorktree: () =>
+                createWorktree: (input) =>
                   Effect.gen(function* () {
+                    assert.equal(input.path, worktreePath);
                     creations++;
-                    yield* fs.makeDirectory(cwd, { recursive: true }).pipe(Effect.orDie);
+                    yield* fs
+                      .makeDirectory(subfolder ? worktreePath : cwd, { recursive: true })
+                      .pipe(Effect.orDie);
                     const cleanup = yield* withWorkspaceLease(
                       worktreePath,
                       Effect.sync(() => {
@@ -557,7 +577,8 @@ it.layer(
         );
         const input = openInput({
           cwd,
-          worktreePath: location === "subdirectory" ? null : worktreePath,
+          worktreePath: location === "subdirectory" ? null : threadFolder,
+          env: { T3CODE_PROJECT_ROOT: workspaceRoot, T3CODE_WORKTREE_PATH: threadFolder },
         });
         const launch = prepareLaunch(input).pipe(
           Effect.flatMap(({ input, recover }) =>
@@ -575,9 +596,12 @@ it.layer(
           return;
         }
         yield* launch;
-        yield* Fiber.join(yield* Deferred.await(cleanupQueued));
-        assert.equal(creations, 1);
+        if (!insideCheckout) yield* Fiber.join(yield* Deferred.await(cleanupQueued));
+        assert.equal(creations, insideCheckout ? 0 : 1);
         assert.equal(ptyAdapter.spawnInputs.length, 1);
+        assert.equal(ptyAdapter.spawnInputs[0]?.cwd, cwd);
+        assert.equal(ptyAdapter.spawnInputs[0]?.env.T3CODE_WORKTREE_PATH, threadFolder);
+        assert.equal(ptyAdapter.spawnInputs[0]?.env.T3CODE_WORKTREE_ROOT, worktreePath);
         assert.isTrue(yield* fs.exists(cwd));
       }),
   );

@@ -1191,6 +1191,12 @@ export function createThreadOutboxDelivery(): {
           ),
         );
       }
+      if (checkout.value.projectFolderMissing) {
+        Dialog.alert(
+          m(msg("Project folder is missing in this checkout. Using the worktree root.")),
+          checkout.value.worktreePath,
+        );
+      }
       workspace = {
         ...creation,
         workspaceMode: "local",

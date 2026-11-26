@@ -5,6 +5,7 @@ import {
   type OrchestrationProjectShell,
   StoredProjectIcon,
   ProjectId,
+  type ProjectRemovalPreviewEntry,
   ProjectScript,
   ProjectTrackedFolders,
   ThreadEnvMode,
@@ -101,6 +102,10 @@ export class ProjectStoreV2 extends Context.Service<
     readonly getShell: (
       projectId: ProjectId,
     ) => Effect.Effect<Option.Option<OrchestrationProjectShell>, ProjectStoreV2Error>;
+    readonly listRemovalRows: () => Effect.Effect<
+      ReadonlyArray<Omit<ProjectRemovalPreviewEntry, "resolvedWorkspaceRoot">>,
+      ProjectStoreV2Error
+    >;
     readonly listShells: (options?: {
       readonly projectIds?: ReadonlyArray<ProjectId>;
     }) => Effect.Effect<ReadonlyArray<OrchestrationProjectShell>, ProjectStoreV2Error>;
@@ -307,6 +312,23 @@ export const make = Effect.gen(function* () {
     getShell: Effect.fn("ProjectStoreV2.getShell")(function (projectId) {
       return get(projectId).pipe(Effect.map(Option.map(toShell)));
     }),
+    listRemovalRows: Effect.fn("ProjectStoreV2.listRemovalRows")(
+      function* () {
+        return yield* sql<{ projectId: ProjectId; workspaceRoot: string; threadCount: number }>`
+        SELECT p.project_id AS "projectId", p.workspace_root AS "workspaceRoot",
+          COUNT(t.thread_id) AS "threadCount"
+        FROM projection_projects p
+        LEFT JOIN orchestration_v2_projection_threads t ON t.project_id = p.project_id
+          AND t.deleted_at IS NULL
+          AND json_extract(t.payload_json, '$.lineage.relationshipToParent') IS NOT 'subagent'
+          AND json_extract(t.payload_json, '$.lineage.sideChat') IS NOT 1
+        WHERE p.deleted_at IS NULL GROUP BY p.project_id
+      `;
+      },
+      Effect.mapError(
+        (cause) => new ProjectStoreV2Error({ operation: "list-removal-rows", cause }),
+      ),
+    ),
     listShells: Effect.fn("ProjectStoreV2.listShells")(function (options) {
       return list(
         options?.projectIds === undefined ? undefined : { projectIds: options.projectIds },

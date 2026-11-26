@@ -1,6 +1,13 @@
 import type { LineAnnotation, SelectedLineRange } from "@pierre/diffs";
+import { COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS } from "@t3tools/contracts";
 import { msg } from "gt-react";
 import { m, type MessageResolver } from "~/i18n/messages";
+import {
+  buildFileReviewComment,
+  type FileReviewExcerpt,
+  type ReviewCommentContext,
+} from "~/reviewCommentContext";
+import { PREVIEW_PAGE_ROWS } from "./largeTextProtocol";
 
 export interface FileCommentAnnotationEntry {
   id: string;
@@ -33,6 +40,23 @@ export function normalizeFileCommentRange(range: SelectedLineRange): {
   };
 }
 
+export function readPagedSourceExcerpt(
+  range: SelectedLineRange,
+  getRows: (page: number) => readonly (readonly string[])[] | undefined,
+): FileReviewExcerpt | undefined {
+  const { startLine, endLine } = normalizeFileCommentRange(range);
+  const lines: string[] = [];
+  let length = 0;
+  for (let index = startLine - 1; index < endLine; index++) {
+    const row = getRows(Math.floor(index / PREVIEW_PAGE_ROWS))?.[index % PREVIEW_PAGE_ROWS];
+    if (row?.[0] === undefined) return undefined;
+    length += row[0].length + (lines.length ? 1 : 0);
+    if (length > COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS) return undefined;
+    lines.push(row[0]);
+  }
+  return { firstLine: startLine, lastLine: endLine, text: lines.join("\n") };
+}
+
 export function formatFileCommentRange(
   startLine: number,
   endLine: number,
@@ -62,6 +86,34 @@ export function remapFileCommentAnnotations(
 }
 
 /** Drafts and the comments still in the prompt; sent or removed ones are not shown or re-added. */
+/**
+ * Rebuilds prompt comments at their remapped lines. The text comes from the prompt record: an
+ * editor's undo can hand back annotations that still carry text from before an edit.
+ */
+export function remappedPromptComments(
+  annotations: ReadonlyArray<FileCommentLineAnnotation>,
+  promptComments: ReadonlyArray<ReviewCommentContext>,
+  file: { filePath: string; contents: string },
+): ReviewCommentContext[] {
+  const promptById = new Map(promptComments.map((comment) => [comment.id, comment]));
+  return annotations.flatMap((annotation) =>
+    annotation.metadata.entries.flatMap((entry) => {
+      const comment = promptById.get(entry.id);
+      if (entry.kind !== "comment" || !comment) return [];
+      return [
+        buildFileReviewComment({
+          id: entry.id,
+          filePath: file.filePath,
+          startLine: entry.startLine,
+          endLine: entry.endLine,
+          text: comment.text,
+          contents: file.contents,
+        }),
+      ];
+    }),
+  );
+}
+
 export function promptFileCommentEntries(
   entries: ReadonlyArray<FileCommentAnnotationEntry>,
   promptCommentIds: ReadonlySet<string>,

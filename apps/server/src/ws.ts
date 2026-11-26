@@ -1967,10 +1967,7 @@ export const layerWsRpc = (
 
       // Rows the shell can omit, read with the same snapshot sequence the shell uses.
       const readOmittableShellRows = Effect.fn("ws.orchestrationV2.readOmittableShellRows")(
-        function* (
-          options: { readonly familyOf: ThreadId } | { readonly worktreePath: string },
-          message: string,
-        ) {
+        function* (options: { readonly familyOf: ThreadId }, message: string) {
           const { threads, snapshotSequence } = yield* loadShellSnapshotParts({
             sql,
             readThreads: threadManagement.readShellSnapshot({ location: "active", ...options }),
@@ -2164,10 +2161,15 @@ export const layerWsRpc = (
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.getWorktreeThreadIds]: (input) =>
-          readOmittableShellRows(
-            { worktreePath: input.worktreePath },
-            "Failed to load the worktree's threads",
-          ).pipe(Effect.map(({ threads }) => ({ threadIds: threads.map((thread) => thread.id) }))),
+          storageCleanup.worktreeThreadIds(input.worktreePath, input.projectCwd).pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2GetShellSnapshotError({
+                  message: "Failed to load the worktree's threads",
+                  cause,
+                }),
+            ),
+          ),
         [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(
@@ -3076,12 +3078,25 @@ export const layerWsRpc = (
                 }),
             ),
           ),
+        [WS_METHODS.projectsRemovalPreview]: () =>
+          projectService.removalPreview().pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2GetShellSnapshotError({
+                  message: "Failed to review project removal.",
+                  cause,
+                }),
+            ),
+          ),
         [WS_METHODS.projectsMutate]: (mutation) =>
           startup.enqueueCommand(mutateProject(mutation)).pipe(
             Effect.mapError(
               (cause) =>
                 new ProjectMutationError({
                   commandId: mutation.commandId,
+                  ...(cause._tag === "ProjectInvalidError" && cause.reason
+                    ? { reason: cause.reason }
+                    : {}),
                   message:
                     cause._tag === "ProjectNotEmptyError" || cause._tag === "ProjectInvalidError"
                       ? cause.message
@@ -3202,6 +3217,7 @@ export const layerWsRpc = (
           vcsStatusBroadcaster.refreshBranchStatus(input).pipe(Effect.asVoid),
         [WS_METHODS.subscribeVcsStatus]: (input) => vcsStatusBroadcaster.streamStatus(input),
         [WS_METHODS.subscribeWorktreeSetup]: (input) => worktreeSetupTracker.stream(input.threadId),
+        [WS_METHODS.worktreeSetupChooseFolder]: (input) => worktreeSetupTracker.chooseFolder(input),
         [WS_METHODS.worktreeSetupCancel]: (input) =>
           worktreeSetupTracker
             .cancel(input.threadId)
@@ -3288,20 +3304,7 @@ export const layerWsRpc = (
             Effect.tap(() => refreshGitStatus(input.cwd)),
           ),
         [WS_METHODS.vcsRemoveWorktree]: (input) =>
-          // A thread's worktree may be a task folder: its repositories' worktrees go with it.
-          taskFolders.removeIfTaskFolder({ path: input.path, force: input.force === true }).pipe(
-            Effect.mapError(
-              (cause) =>
-                new GitCommandError({
-                  operation: "TaskFolders.remove",
-                  command: "git worktree remove",
-                  cwd: input.cwd,
-                  detail: cause.detail,
-                }),
-            ),
-            Effect.flatMap((removed) =>
-              removed ? Effect.void : gitWorkflow.removeWorktree(input),
-            ),
+          storageCleanup.removeWorktree(input).pipe(
             Effect.tap(() => refreshGitStatus(input.cwd)),
             // Subscribers of the removed checkout learn it is no longer a repository.
             Effect.tap(() =>

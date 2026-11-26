@@ -65,7 +65,10 @@ export function useWorktreeSetup(input: {
   const snapshotQuery = useEnvironmentQuery(
     started ||
       (activeThread?.id === routeThreadRef.threadId &&
-        (localPreparing || runPreparing || activeThread.worktreePath !== null))
+        (localPreparing ||
+          runPreparing ||
+          activeThread.worktreePath !== null ||
+          serverProjection?.runs.length === 0))
       ? vcsEnvironment.worktreeSetup({
           environmentId: target.environmentId,
           input: { threadId: target.threadId },

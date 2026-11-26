@@ -32,7 +32,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
-import { withTurnStartReservation, withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import { withSharedWorkspaceReservation, withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import { resolveCodexRollbackTurnCount } from "./Adapters/CodexAdapterV2.ts";
 import * as CheckpointService from "./CheckpointService.ts";
@@ -178,6 +178,8 @@ it.effect.each(["initial", "waiting"])(
 it.effect.each([
   { order: "cleanup-first", restoreFiles: true },
   { order: "rollback-first", restoreFiles: true },
+  { order: "cleanup-first", restoreFiles: true, subfolderOnly: true },
+  { order: "cleanup-first", restoreFiles: true, subfolderOnly: true, leavesFolder: true },
   { order: "cleanup-first", restoreFiles: false, unmanaged: true },
   { order: "cleanup-first", restoreFiles: true, leavesFolder: true },
   { order: "cleanup-first", restoreFiles: false, leavesFolder: true },
@@ -196,6 +198,13 @@ it.effect.each([
       ? path.join(workspaceRoot, "elsewhere", "feature")
       : path.join(worktreesDir, "repo", "feature");
     yield* fileSystem.makeDirectory(path.join(worktreePath, ".git"), { recursive: true });
+    const projectCwd = row.subfolderOnly ? path.join(workspaceRoot, "my-project") : workspaceRoot;
+    const threadCwd = row.subfolderOnly ? path.join(worktreePath, "my-project") : worktreePath;
+    if (row.subfolderOnly) {
+      yield* fileSystem.makeDirectory(path.join(workspaceRoot, ".git"));
+      yield* fileSystem.makeDirectory(projectCwd);
+      yield* fileSystem.makeDirectory(threadCwd);
+    }
     const threadId = ThreadId.make("rollback-worktree");
     const projectId = ProjectId.make("rollback-worktree-project");
     const providerThreadId = ProviderThreadId.make("rollback-worktree-provider-thread");
@@ -213,7 +222,7 @@ it.effect.each([
       thread: {
         id: threadId,
         projectId,
-        worktreePath,
+        worktreePath: threadCwd,
         branch,
         activeProviderThreadId: providerThreadId,
         modelSelection: { instanceId: providerInstanceId, model: "test-model" },
@@ -221,7 +230,7 @@ it.effect.each([
       providerThread,
       providerSession: undefined,
       checkpoint: { id: checkpointId, scopeId, status: "ready", appRunOrdinal: 0 },
-      scope: { id: scopeId, cwd: worktreePath },
+      scope: { id: scopeId, cwd: threadCwd },
       runsToRollback: [],
       targetAttempt: undefined,
       rolledBackAttemptIds: [],
@@ -240,7 +249,7 @@ it.effect.each([
           Layer.mock(ProjectStore.ProjectStoreV2)({
             get: (id) => {
               assert.equal(id, projectId);
-              return Effect.succeedSome({ workspaceRoot } as never);
+              return Effect.succeedSome({ workspaceRoot: projectCwd } as never);
             },
           }),
           Layer.mock(GitWorkflow.GitWorkflowService)({
@@ -308,8 +317,8 @@ it.effect.each([
           Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
             open: (input) =>
               Effect.gen(function* () {
-                assert.equal(input.runtimePolicy.cwd, worktreePath);
-                if (!(yield* fileSystem.exists(worktreePath).pipe(Effect.orDie))) {
+                assert.equal(input.runtimePolicy.cwd, threadCwd);
+                if (!(yield* fileSystem.exists(threadCwd).pipe(Effect.orDie))) {
                   return yield* new ProviderWorkspaceMissingError({
                     threadId,
                     cwd: worktreePath,
@@ -323,7 +332,7 @@ it.effect.each([
           }),
           Layer.mock(RuntimePolicy.RuntimePolicyV2)({
             resolve: ({ thread }) => {
-              assert.equal(thread.worktreePath, worktreePath);
+              assert.equal(thread.worktreePath, threadCwd);
               return Effect.succeed({ cwd: thread.worktreePath } as never);
             },
           }),
@@ -337,7 +346,10 @@ it.effect.each([
         Effect.gen(function* () {
           cleanupEntered = true;
           if (order === "cleanup-first") yield* Deferred.await(release);
-          yield* fileSystem.remove(worktreePath, { recursive: true, force: true });
+          yield* fileSystem.remove(leavesFolder ? worktreePath : threadCwd, {
+            recursive: true,
+            force: true,
+          });
           // A failed `git worktree remove` can leave the folder without its checkout.
           if (leavesFolder) {
             yield* fileSystem.makeDirectory(worktreePath);
@@ -362,6 +374,16 @@ it.effect.each([
       if (order === "rollback-first") assert.isFalse(cleanupEntered);
       yield* Deferred.succeed(release, undefined);
       if (cleanup !== undefined) yield* Fiber.join(cleanup);
+      if (row.subfolderOnly && leavesFolder) {
+        const error = yield* Fiber.join(rollback).pipe(Effect.flip);
+        assert.equal(error.reason, "worktree-has-files");
+        assert.equal(
+          yield* fileSystem.readFileString(path.join(worktreePath, "unsaved.txt")),
+          "keep",
+        );
+        assert.deepEqual(calls, ["cleanup"]);
+        return;
+      }
       if (unmanaged || shared) {
         const error = yield* Fiber.join(rollback).pipe(Effect.flip);
         assert.equal(error._tag, "CheckpointRollbackExecutionError");
@@ -387,14 +409,14 @@ it.effect.each([
       const rollbackCalls = restoreFiles
         ? ["session", "files", "projection"]
         : ["session", "projection"];
-      const recreates = !leavesFolder || restoreFiles;
+      const recreates = !row.subfolderOnly && (!leavesFolder || restoreFiles);
       assert.deepEqual(
         calls,
         order === "cleanup-first"
           ? ["cleanup", ...(recreates ? ["prune", "create"] : []), ...rollbackCalls]
           : [...rollbackCalls, "cleanup"],
       );
-      if (!recreates) {
+      if (leavesFolder && !recreates) {
         assert.isTrue(yield* fileSystem.exists(path.join(worktreePath, "unsaved.txt")));
       }
     }).pipe(Effect.provide(testLayer));
@@ -501,7 +523,7 @@ it.effect.each([{ restoreFiles: true }, { restoreFiles: false }])(
         yield* Deferred.await(openEntered);
         // A synchronous realPath lets the forked start reach the reservation
         // before the next assertion, so "not entered" means "waiting".
-        const startTurn = withTurnStartReservation(
+        const startTurn = withSharedWorkspaceReservation(
           FileSystem.makeNoop({ realPath: (target) => Effect.succeed(target) }),
           path,
           path.join(worktreePath, "packages", "app"),

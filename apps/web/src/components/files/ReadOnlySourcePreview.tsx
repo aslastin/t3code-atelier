@@ -1,4 +1,4 @@
-import { File, type FileOptions, Virtualizer } from "@pierre/diffs/react";
+import { File, type FileOptions, type FileProps, Virtualizer } from "@pierre/diffs/react";
 import { type ClipboardEvent, useEffect, useRef, useState } from "react";
 
 import { DiffWorkerPoolProvider } from "~/components/DiffWorkerPoolProvider";
@@ -10,11 +10,15 @@ import { PREFERRED_HIGHLIGHTER } from "~/lib/syntaxHighlighting";
 import { FILE_LINK_REVEAL_UNSAFE_CSS } from "./fileSurfaceChrome";
 import { SourceSelection } from "./sourceSelection";
 
-export default function ReadOnlySourcePreview(props: {
+export default function ReadOnlySourcePreview<Annotation = unknown>(props: {
+  readonly annotations?: Pick<
+    FileProps<Annotation, undefined>,
+    "lineAnnotations" | "selectedLines" | "renderAnnotation" | "options"
+  >;
   readonly name: string;
   readonly text: string;
   readonly cacheKey?: string;
-  readonly onPostRender?: FileOptions<unknown, undefined>["onPostRender"];
+  readonly onPostRender?: FileOptions<Annotation, undefined>["onPostRender"];
   /** A preview's own wrap toggle; omitted follows the word wrap setting. */
   readonly wordWrap?: boolean;
 }) {
@@ -74,13 +78,15 @@ export default function ReadOnlySourcePreview(props: {
           className="file-preview-virtualizer min-h-0 flex-1 overflow-auto"
           config={{ overscrollSize: 600, intersectionObserverMargin: 1200 }}
         >
-          <File
+          <File<Annotation>
+            {...props.annotations}
             file={{
               name: props.name,
               contents: props.text,
               ...(props.cacheKey ? { cacheKey: props.cacheKey } : {}),
             }}
             options={{
+              ...props.annotations?.options,
               disableFileHeader: true,
               overflow: wordWrap ? "wrap" : "scroll",
               theme: resolveDiffThemeName(resolvedTheme),

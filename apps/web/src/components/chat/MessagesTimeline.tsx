@@ -1184,6 +1184,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     isCompacting: compactionAwaitingRow,
     isRevertingCheckpoint,
     backgroundWorktreeSetup,
+    awaitingWorktreeFolder: worktreeSetup?.folderChoice !== undefined,
     awaitingUser: awaitingUser !== null,
     isPreparingWorktree,
     providerStartingLabel,
@@ -1726,6 +1727,7 @@ function WorktreeSetupTimelineRow({
   return (
     <WorktreeSetupCard
       snapshot={row.snapshot}
+      environmentId={ctx.activeThreadEnvironmentId}
       embedded={row.embedded}
       onCancel={row.embedded ? null : ctx.onCancelWorktreeSetup}
       onWorkLocally={

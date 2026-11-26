@@ -141,6 +141,7 @@ import {
 } from "./checkpointDiff.ts";
 import {
   WorktreeSetupCancelInput,
+  WorktreeSetupChooseFolderInput,
   WorktreeSetupCancelResult,
   WorktreeSetupStreamEvent,
   WorktreeSetupSubscribeInput,
@@ -470,7 +471,12 @@ import {
   SourceControlSignInResult,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
-import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
+import {
+  Project,
+  ProjectMutation,
+  ProjectMutationError,
+  ProjectRemovalPreviewEntry,
+} from "./project.ts";
 
 export const WS_METHODS = {
   projectsListEntries: "projects.listEntries",
@@ -479,6 +485,7 @@ export const WS_METHODS = {
   projectsSearchContents: "projects.searchContents",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
+  projectsRemovalPreview: "projects.removalPreview",
   projectsMutate: "projects.mutate",
   projectsEnsureScratch: "projects.ensureScratch",
   projectsCreateNew: "projects.createNew",
@@ -711,6 +718,7 @@ export const WS_METHODS = {
   vcsRefreshBranch: "vcs.refreshBranch",
   subscribeWorktreeSetup: "subscribeWorktreeSetup",
   worktreeSetupCancel: "worktreeSetup.cancel",
+  worktreeSetupChooseFolder: "worktreeSetup.chooseFolder",
   subscribeTerminalMetadata: "subscribeTerminalMetadata",
   subscribePreviewEvents: "subscribePreviewEvents",
   subscribeDiscoveredLocalServers: "subscribeDiscoveredLocalServers",
@@ -1652,6 +1660,12 @@ const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   error: Schema.Union([ProjectWriteFileError, EnvironmentAuthorizationError]),
 });
 
+const WsProjectsRemovalPreviewRpc = Rpc.make(WS_METHODS.projectsRemovalPreview, {
+  payload: Schema.Struct({}),
+  success: Schema.Array(ProjectRemovalPreviewEntry),
+  error: Schema.Union([OrchestrationV2GetShellSnapshotError, EnvironmentAuthorizationError]),
+});
+
 const WsProjectsMutateRpc = Rpc.make(WS_METHODS.projectsMutate, {
   payload: ProjectMutation,
   success: Project,
@@ -1841,6 +1855,12 @@ const WsSubscribeWorktreeSetupRpc = Rpc.make(WS_METHODS.subscribeWorktreeSetup, 
   success: WorktreeSetupStreamEvent,
   error: EnvironmentAuthorizationError,
   stream: true,
+});
+
+const WsWorktreeSetupChooseFolderRpc = Rpc.make(WS_METHODS.worktreeSetupChooseFolder, {
+  payload: WorktreeSetupChooseFolderInput,
+  success: Schema.Boolean,
+  error: EnvironmentAuthorizationError,
 });
 
 const WsWorktreeSetupCancelRpc = Rpc.make(WS_METHODS.worktreeSetupCancel, {
@@ -2546,6 +2566,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsCreateNewRpc,
   WsProjectsCreateFromThreadRpc,
   WsProjectsWriteFileRpc,
+  WsProjectsRemovalPreviewRpc,
   WsProjectsMutateRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
@@ -2572,6 +2593,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsRefreshBranchRpc,
   WsSubscribeWorktreeSetupRpc,
   WsWorktreeSetupCancelRpc,
+  WsWorktreeSetupChooseFolderRpc,
   WsVcsPullRpc,
   WsVcsRefreshStatusRpc,
   WsGitRunStackedActionRpc,

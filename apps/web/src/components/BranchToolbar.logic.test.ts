@@ -245,11 +245,12 @@ describe("resolveBranchSelectionTarget", () => {
         refName: {
           isDefault: false,
           worktreePath: "/repo/.t3/worktrees/feature-b",
+          projectPath: "/repo/.t3/worktrees/feature-b/packages/app",
         },
       }),
     ).toEqual({
       checkoutCwd: "/repo/.t3/worktrees/feature-b",
-      nextWorktreePath: "/repo/.t3/worktrees/feature-b",
+      nextWorktreePath: "/repo/.t3/worktrees/feature-b/packages/app",
       reuseExistingWorktree: true,
       staysInActiveCheckout: false,
     });
@@ -283,6 +284,18 @@ describe("resolveBranchSelectionTarget", () => {
         staysInActiveCheckout: activeWorktreePath === null,
       });
     }
+  });
+
+  it("keeps the project folder when picking the current worktree branch", () => {
+    expect(
+      resolveBranchSelectionTarget({
+        activeProjectCwd: "/repo/my-project",
+        activeProjectCheckoutRoot: "/repo",
+        activeCheckoutRoot: "/worktree",
+        activeWorktreePath: "/worktree/my-project",
+        refName: { isDefault: false, worktreePath: "/worktree" },
+      }),
+    ).toMatchObject({ nextWorktreePath: "/worktree/my-project", staysInActiveCheckout: true });
   });
 
   it("keeps checkout in the current worktree for non-default refs", () => {
@@ -439,6 +452,13 @@ describe("resolveConfirmedSelectedRef", () => {
     isDefault: false,
     worktreePath: "/worktree-b",
   };
+
+  it("keeps the project folder confirmed in the selected checkout", () => {
+    const ref = resolveConfirmedSelectedRef(listed, {
+      refs: [{ ...listed, current: true, projectPath: "/worktree-b/project" }],
+    });
+    expect(ref.projectPath).toBe("/worktree-b/project");
+  });
 
   it.each([
     [

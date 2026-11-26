@@ -4,9 +4,18 @@ import { m as resolveMessage } from "../../i18n/messages";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { useEnvironmentsWithScope } from "../../state/session";
-import { mapAtomCommandResult, settlePromise } from "@t3tools/client-runtime/state/runtime";
+import { mapAtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { planProjectRemoval } from "@t3tools/client-runtime/state/projects";
+import {
+  planProjectRemoval,
+  readProjectRemovalPreview,
+  reviewedFoldersMatch,
+  removalServerUpdateNotice,
+  removalEnvironmentLabel,
+  removalFoldersMatch,
+  changedProjectFolderNotice,
+  ambiguousProjectFoldersNotice,
+} from "@t3tools/client-runtime/state/projects";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import {
   checkProjectAccess,
@@ -14,7 +23,7 @@ import {
   useProjectGroupUpdate,
   type ProjectGroupUpdate,
 } from "../../hooks/useProjectGroupUpdate";
-import { Navigate, useLocation, useNavigate } from "@tanstack/react-router";
+import { Navigate, useLocation, useNavigate, useRouter } from "@tanstack/react-router";
 import { InfoIcon, Trash2Icon } from "lucide-react";
 import { lazy, Suspense, useRef, useState, type ReactNode } from "react";
 import { T, useGT, useMessages } from "gt-react";
@@ -22,7 +31,7 @@ import { T, useGT, useMessages } from "gt-react";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { releaseProjectDraftUploads } from "../../lib/composerDraftUploads";
 import { persistClientSettingsUpdate, useClientSettings } from "../../hooks/useSettings";
-import { readLocalApi } from "../../localApi";
+import { ProjectRemovalDialog, type RemovalPlan } from "./ProjectRemovalDialog";
 import { derivePhysicalProjectKey } from "@t3tools/client-runtime/state/project-grouping";
 import {
   PROJECT_GROUPING_MODE_LABELS,
@@ -31,7 +40,7 @@ import {
   type SidebarProjectSnapshot,
 } from "../../sidebarProjectGrouping";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
-import { useThreadShells, waitForProjectRemoval } from "../../state/entities";
+import { readProjects, readThreadShells, waitForProjectRemoval } from "../../state/entities";
 import { refreshProjectFaviconUrl } from "../../state/assets";
 import { projectEnvironment } from "../../state/projects";
 import { ProjectFavicon } from "../ProjectFavicon";
@@ -63,7 +72,6 @@ import {
   scopeProjectSettingsGroup,
 } from "./ProjectSettingsPanel.logic";
 import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
-import { readUnloadedThreadCount } from "../../state/olderSettledShelf";
 import { settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 
 const ProjectIconPickerDialog = lazy(() =>
@@ -253,6 +261,7 @@ export function ProjectSettingsPanel({
     <ProjectDetail
       key={`${selected.projectKey}:${environmentId ?? "all"}:${checkoutKey ?? "all"}`}
       group={scopedGroup}
+      allGroups={groups}
       allMembers={selected.memberProjects}
       hasOtherMembers={members.length < selected.memberProjects.length}
     />
@@ -262,9 +271,11 @@ export function ProjectSettingsPanel({
 function ProjectDetail({
   group,
   allMembers,
+  allGroups,
   hasOtherMembers,
 }: {
   group: SidebarProjectSnapshot;
+  allGroups: readonly SidebarProjectSnapshot[];
   /** Pin and archive belong to the whole project, even when one machine is picked. */
   allMembers: ReadonlyArray<SidebarProjectGroupMember>;
   hasOtherMembers: boolean;
@@ -284,7 +295,10 @@ function ProjectDetail({
     group.memberProjects.find(
       (member) => environmentById.get(member.environmentId)?.serverConfig != null,
     ) ?? group.memberProjects[0]!;
-  const threads = useThreadShells();
+  const router = useRouter();
+  const readPreview = useOrchestrationCommand(projectEnvironment.removalPreview, {
+    reportFailure: false,
+  });
   const deleteProject = useOrchestrationCommand(projectEnvironment.delete, {
     reportFailure: false,
   });
@@ -354,46 +368,85 @@ function ProjectDetail({
     group.memberProjects.every((member) => member.isScratch) &&
     group.memberProjects.some((member) => member.title !== SCRATCH_PROJECT_TITLE);
 
-  const removeMembers = async (members: ReadonlyArray<SidebarProjectGroupMember>) => {
-    if (checkProjectAccess(members, gt("Failed to remove project"))) return;
-    const api = readLocalApi();
-    if (!api) return;
-
-    const { projectThreads, isWholeGroup, confirmationMessage } = planProjectRemoval(
-      {
-        members,
-        groupMemberCount: group.memberProjects.length,
-        hasOtherMembers,
-        displayName: group.displayName,
-        threads,
-        unloadedThreadCount: readUnloadedThreadCount(members, threads),
-      },
-      resolveMessage,
-    );
-    const confirmed = await settlePromise(() =>
-      api.dialogs.confirm(confirmationMessage, { variant: "destructive" }),
-    );
-    if (confirmed._tag === "Failure" || !confirmed.value) return;
-    if (checkProjectAccess(members, gt("Failed to remove project"))) return;
-
+  const [removal, setRemoval] = useState<RemovalPlan | null>(null);
+  const [isRemoving, setIsRemoving] = useState(false);
+  const foldersStillMatch = (members: readonly SidebarProjectGroupMember[]) => {
+    if (removalFoldersMatch(members, readProjects())) return true;
+    toastManager.add({ type: "warning", title: resolveMessage(changedProjectFolderNotice) });
+    return false;
+  };
+  const loadPreview = async (members: readonly SidebarProjectGroupMember[]) => {
+    const result = await readProjectRemovalPreview(members, readPreview);
+    if (result._tag === "Failure") {
+      reportProjectFailure(gt("Failed to remove project"), result);
+      return null;
+    }
+    return result.value;
+  };
+  const reviewRemoval = async (members: readonly SidebarProjectGroupMember[]) => {
+    if (isRemoving || checkProjectAccess(members, gt("Failed to remove project"))) return;
+    if (
+      members.some(
+        (member) =>
+          !environments.find((env) => env.environmentId === member.environmentId)?.serverConfig
+            ?.environment.capabilities.reviewedProjectRemoval,
+      )
+    ) {
+      toastManager.add({ type: "warning", title: resolveMessage(removalServerUpdateNotice) });
+      return;
+    }
+    setIsRemoving(true);
+    const preview = await loadPreview(members);
+    setIsRemoving(false);
+    if (!preview) return;
+    if (!foldersStillMatch(members)) return;
+    const plan = planProjectRemoval({
+      members,
+      groupMembers: allMembers,
+      projects: readProjects().map((project) => ({
+        ...project,
+        physicalProjectKey: derivePhysicalProjectKey(project),
+        environmentLabel: removalEnvironmentLabel(project.environmentId, environments),
+      })),
+      threads: readThreadShells(),
+      preview,
+    });
+    if (plan.foldersChanged) {
+      toastManager.add({ type: "warning", title: resolveMessage(changedProjectFolderNotice) });
+      return;
+    }
+    if (plan.ambiguousFolders) {
+      toastManager.add({ type: "warning", title: resolveMessage(ambiguousProjectFoldersNotice) });
+      return;
+    }
+    setRemoval(plan);
+  };
+  const removeEntries = async (entries: RemovalPlan["entries"]) => {
+    setRemoval(null);
+    const initialLocation = router.state.location.href;
+    const members = entries.map((entry) => entry.member);
+    if (checkProjectAccess(members, gt("Failed to remove project")) || !foldersStillMatch(members))
+      return;
+    const preview = await loadPreview(members);
+    if (!preview) return;
+    if (!reviewedFoldersMatch(entries, preview)) {
+      toastManager.add({ type: "warning", title: resolveMessage(changedProjectFolderNotice) });
+      return;
+    }
     const draftStore = useComposerDraftStore.getState();
-    const remainingMember = allMembers.find(
-      (candidate) =>
-        !members.some(
-          (member) =>
-            member.environmentId === candidate.environmentId && member.id === candidate.id,
-        ),
-    );
-    for (const member of members) {
-      if (checkProjectAccess([member], gt("Failed to remove project"))) return;
-      const memberThreads = projectThreads.filter(
-        (thread) => thread.environmentId === member.environmentId && thread.projectId === member.id,
-      );
+    const removedKeys = new Set(members.map((member) => member.physicalProjectKey));
+    for (const { member, expectedFolder, threads: memberThreads } of entries) {
+      if (
+        checkProjectAccess([member], gt("Failed to remove project")) ||
+        !foldersStillMatch([member])
+      )
+        return;
       const result = mapAtomCommandResult(
         await deleteProject({
           environmentId: member.environmentId,
           input: {
             projectId: member.id,
+            expectedFolder,
             force: true,
           },
         }),
@@ -410,19 +463,32 @@ function ProjectDetail({
         memberThreads.map((thread) => scopeThreadRef(thread.environmentId, thread.id)),
       );
       const projectDraftThread = draftStore.getDraftThreadByProjectRef(projectRef);
-      if (projectDraftThread && remainingMember) {
-        draftStore.setDraftThreadContext(projectDraftThread.draftId, {
-          projectRef: scopeProjectRef(remainingMember.environmentId, remainingMember.id),
-          environmentSelection: "manual",
-          loadBalancedEnvironmentId: null,
-        });
-      } else if (projectDraftThread) {
-        draftStore.clearDraftThread(projectDraftThread.draftId);
+      if (projectDraftThread) {
+        const ownGroup = allGroups.find((entry) =>
+          entry.memberProjects.some(
+            (candidate) => candidate.physicalProjectKey === member.physicalProjectKey,
+          ),
+        );
+        const remainingMember = ownGroup?.memberProjects.find(
+          (candidate) => !removedKeys.has(candidate.physicalProjectKey),
+        );
+        if (remainingMember) {
+          draftStore.setDraftThreadContext(projectDraftThread.draftId, {
+            projectRef: scopeProjectRef(remainingMember.environmentId, remainingMember.id),
+            environmentSelection: "manual",
+            loadBalancedEnvironmentId: null,
+          });
+        } else {
+          draftStore.clearDraftThread(projectDraftThread.draftId);
+        }
       }
       draftStore.clearProjectDraftThreadId(projectRef);
     }
 
-    if (isWholeGroup && !hasOtherMembers) {
+    if (
+      router.state.location.href === initialLocation &&
+      allMembers.every((member) => removedKeys.has(member.physicalProjectKey))
+    ) {
       void navigate({
         to: "/settings/projects",
         search: ({ machine }) => ({ project: undefined, machine, checkout: undefined }),
@@ -448,8 +514,8 @@ function ProjectDetail({
         <Button
           size="sm"
           variant="outline"
-          disabled={!editableIds.has(member.environmentId)}
-          onClick={() => void removeMembers([member])}
+          disabled={isRemoving || !editableIds.has(member.environmentId)}
+          onClick={() => reviewRemoval([member])}
           aria-label={gt("Remove checkout {path}", { path: member.workspaceRoot })}
         >
           {gt("Remove", { $context: "verb, removes a checkout" })}
@@ -698,36 +764,25 @@ function ProjectDetail({
         <SettingsSection title={gt("Danger")}>
           <SettingsRow
             title={
-              hasOtherMembers
-                ? gt("Remove checkout")
-                : group.memberProjects.length > 1
-                  ? gt("Remove this project everywhere")
+              hasMultipleCheckouts
+                ? gt("Remove project entries")
+                : hasOtherMembers
+                  ? gt("Remove checkout")
                   : gt("Remove project")
             }
-            description={
-              hasOtherMembers
-                ? gt(
-                    "Deletes the selected machine's checkout entries and their threads. Other machines and files on disk are not touched.",
-                  )
-                : group.memberProjects.length > 1
-                  ? gt(
-                      "{count, plural, other {Deletes all {count} checkout entries and their threads on every machine. Files on disk are not touched.}}",
-                      { count: group.memberProjects.length },
-                    )
-                  : gt("Deletes the project entry and its threads. Files on disk are not touched.")
-            }
+            description={gt("Review the folders and threads to remove.")}
             control={
               <Button
                 size="sm"
                 variant="destructive-outline"
-                disabled={!canEditGroup}
-                onClick={() => void removeMembers(group.memberProjects)}
+                disabled={isRemoving || !canEditGroup}
+                onClick={() => reviewRemoval(group.memberProjects)}
               >
                 <Trash2Icon />
-                {hasOtherMembers
-                  ? gt("Remove checkout")
-                  : group.memberProjects.length > 1
-                    ? gt("Remove all entries")
+                {hasMultipleCheckouts
+                  ? gt("Review entries")
+                  : hasOtherMembers
+                    ? gt("Remove checkout")
                     : gt("Remove project")}
               </Button>
             }
@@ -735,6 +790,16 @@ function ProjectDetail({
         </SettingsSection>
       </SettingsPageContainer>
 
+      {removal && (
+        <ProjectRemovalDialog
+          plan={removal}
+          onCancel={() => setRemoval(null)}
+          onConfirm={(entries) => {
+            setIsRemoving(true);
+            void removeEntries(entries).finally(() => setIsRemoving(false));
+          }}
+        />
+      )}
       <ProjectFaviconPickerDialog
         key={`${filePickerProject.environmentId}:${filePickerProject.workspaceRoot}:${faviconPickerOpen}`}
         cwd={filePickerProject.workspaceRoot}

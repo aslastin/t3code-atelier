@@ -1,4 +1,6 @@
 import { hydratePartialDiff } from "@pierre/diffs";
+import { readPagedSourceExcerpt } from "./components/files/fileCommentAnnotations";
+import { PREVIEW_PAGE_ROWS } from "./components/files/largeTextProtocol";
 import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -31,6 +33,54 @@ describe("review comment context parsing", () => {
       `\`\`\`\`ts\n${contents}\n\`\`\`\``,
     );
   });
+  it("keeps the absolute path and bounds a file comment to the loaded lines", () => {
+    const filePath = "/tmp/plans/retry.ts";
+    const comment = buildFileReviewComment({
+      id: "host-comment",
+      filePath,
+      contents: "setup\r\nretry()\r\npart",
+      startLine: 8,
+      endLine: 2,
+      text: "Check this retry.",
+    });
+    expect(comment).toMatchObject({
+      filePath,
+      sectionId: `file:${filePath}`,
+      rangeLabel: "L2 to L3",
+      startIndex: 1,
+      endIndex: 2,
+      diff: "retry()\npart",
+      fenceLanguage: "ts",
+    });
+  });
+
+  it("uses original line numbers for a selected page excerpt with an empty line", () => {
+    const page = Array.from({ length: PREVIEW_PAGE_ROWS }, () => ["request started"]);
+    page[PREVIEW_PAGE_ROWS - 1] = [""];
+    const range = { start: PREVIEW_PAGE_ROWS + 1, end: PREVIEW_PAGE_ROWS - 1 };
+    expect(
+      readPagedSourceExcerpt(range, (index) => (index === 0 ? page : undefined)),
+    ).toBeUndefined();
+    const pages = [page, [["retry scheduled"]]];
+    const excerpt = readPagedSourceExcerpt(range, (index) => pages[index]);
+    expect(excerpt).toBeDefined();
+    const comment = buildFileReviewComment({
+      id: "log-comment",
+      filePath: "service.log",
+      startLine: range.start,
+      endLine: range.end,
+      contents: excerpt!,
+      text: "Explain the retry.",
+    });
+    expect(comment).toMatchObject({
+      sectionId: "file:service.log",
+      startIndex: 30,
+      endIndex: 32,
+      rangeLabel: "L31 to L33",
+      diff: "request started\n\nretry scheduled",
+    });
+  });
+
   it("formats mixed diff-side selections with the mobile review-comment contract", () => {
     const [fileDiff] = parsePatchFiles(
       [

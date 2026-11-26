@@ -15,6 +15,8 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
 
+import { worktreeRootForProject } from "./worktreeProjectPath.ts";
+
 export class UnknownWorkspaceError extends Schema.TaggedError<UnknownWorkspaceError>()(
   "UnknownWorkspaceError",
   {
@@ -124,7 +126,12 @@ export const make = Effect.gen(function* () {
           projectWorktrees.set(projectId, listed);
         }
         const real = yield* resolveRoot(worktreePath);
-        return real !== null && listed.includes(real);
+        return (
+          real !== null &&
+          listed.includes(
+            yield* worktreeRootForProject(fileSystem, path, real, project.workspaceRoot),
+          )
+        );
       });
       for (const { worktreePath, projectId } of threads) {
         // Relative paths use server cwd; managed paths still need resolution to reject symlinks elsewhere.

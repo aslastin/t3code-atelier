@@ -1,5 +1,7 @@
 import type {
   ThreadId,
+  WorktreeFolderChoice,
+  WorktreeSetupChooseFolderInput,
   WorktreeSetupSnapshot,
   WorktreeSetupStage,
   WorktreeSetupStageId,
@@ -12,6 +14,7 @@ import {
   WORKTREE_SETUP_TAIL_LINE_MAX_LENGTH,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -56,6 +59,12 @@ export class WorktreeSetupTracker extends Context.Service<
       phase: "done" | "failed" | "cancelled",
       error?: string | null,
     ) => Effect.Effect<WorktreeSetupSnapshot | null>;
+    readonly waitForFolder: (
+      threadId: ThreadId,
+      requestId: string,
+      relativePath: string,
+    ) => Effect.Effect<WorktreeFolderChoice>;
+    readonly chooseFolder: (input: WorktreeSetupChooseFolderInput) => Effect.Effect<boolean>;
     /** Call just before dispatch so late cancellation cannot roll back a started agent's thread. */
     readonly markUncancellable: (threadId: ThreadId) => Effect.Effect<void>;
     readonly cancel: (threadId: ThreadId) => Effect.Effect<boolean>;
@@ -99,6 +108,10 @@ export const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly snapshot: WorktreeSetupSnapshot | null;
   }>();
+  const pendingChoices = new Map<
+    ThreadId,
+    { requestId: string; answer: Deferred.Deferred<WorktreeFolderChoice> }
+  >();
   const retentionFibers = new Map<ThreadId, Fiber.Fiber<void, never>>();
   // Keep sequences increasing across setups so existing subscribers accept the next setup's first snapshot.
   const lastSequenceByThread = new Map<ThreadId, number>();
@@ -271,6 +284,36 @@ export const make = Effect.gen(function* () {
     return snapshot;
   });
 
+  const waitForFolder = Effect.fn("WorktreeSetupTracker.waitForFolder")(function* (
+    threadId: ThreadId,
+    requestId: string,
+    relativePath: string,
+  ) {
+    const answer = yield* Deferred.make<WorktreeFolderChoice>();
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => pendingChoices.set(threadId, { requestId, answer })),
+      () =>
+        update(threadId, (snapshot) => ({
+          ...snapshot,
+          folderChoice: { requestId, relativePath },
+        })).pipe(Effect.andThen(Deferred.await(answer))),
+      () =>
+        Effect.gen(function* () {
+          if (pendingChoices.get(threadId)?.answer !== answer) return;
+          pendingChoices.delete(threadId);
+          yield* update(threadId, ({ folderChoice: _, ...snapshot }) => snapshot);
+        }),
+    );
+  });
+
+  const chooseFolder = Effect.fn("WorktreeSetupTracker.chooseFolder")(function* (
+    input: WorktreeSetupChooseFolderInput,
+  ) {
+    const pending = pendingChoices.get(input.threadId);
+    if (pending?.requestId !== input.requestId) return false;
+    return yield* Deferred.succeed(pending.answer, input.choice);
+  });
+
   const markUncancellable: WorktreeSetupTracker["Service"]["markUncancellable"] = (threadId) =>
     Ref.update(setups, (current) => {
       const existing = current.get(threadId);
@@ -327,6 +370,8 @@ export const make = Effect.gen(function* () {
     stageStatus,
     appendTail,
     finish,
+    waitForFolder,
+    chooseFolder,
     markUncancellable,
     cancel,
     get,

@@ -5,7 +5,11 @@ import { ProjectReadFileError } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { promptFileCommentEntries, remapFileCommentAnnotations } from "./fileCommentAnnotations";
+import {
+  promptFileCommentEntries,
+  remapFileCommentAnnotations,
+  remappedPromptComments,
+} from "./fileCommentAnnotations";
 import {
   filePreviewReadErrorMessage,
   isMarkdownPreviewFile,
@@ -62,6 +66,39 @@ describe("file comment annotations", () => {
         },
       },
     ]);
+  });
+
+  it("moves prompt comments to remapped lines with their saved text, not the annotation's", () => {
+    const prompt = {
+      id: "kept",
+      sectionId: "file:a.ts",
+      sectionTitle: "File comment",
+      filePath: "a.ts",
+      startIndex: 2,
+      endIndex: 2,
+      rangeLabel: "L3",
+      text: "Edited",
+      diff: "three",
+    };
+    const entry = (id: string, text: string) => ({
+      id,
+      kind: "comment" as const,
+      startLine: 2,
+      endLine: 2,
+      text,
+    });
+    expect(
+      remappedPromptComments(
+        [
+          {
+            lineNumber: 2,
+            metadata: { entries: [entry("kept", "Before edit"), entry("sent", "")] },
+          },
+        ],
+        [prompt],
+        { filePath: "a.ts", contents: "one\nthree" },
+      ),
+    ).toEqual([{ ...prompt, startIndex: 1, endIndex: 1, rangeLabel: "L2", fenceLanguage: "ts" }]);
   });
 
   it("shows only drafts and comments still in the prompt", () => {

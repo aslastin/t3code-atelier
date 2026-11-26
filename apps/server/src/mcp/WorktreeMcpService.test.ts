@@ -99,6 +99,7 @@ interface HarnessOptions {
   readonly notARepo?: boolean;
   readonly newWorktreesStartFromOrigin?: boolean;
   readonly projectNewWorktreesStartFromOrigin?: boolean;
+  readonly projectPath?: string | null;
   readonly setupScript?: "started" | "no-script" | "fails" | "dies";
   readonly dispatchFails?: boolean;
   readonly dispatchDies?: boolean;
@@ -215,6 +216,9 @@ const makeHarness = (options: HarnessOptions = {}) => {
                 worktree: {
                   path: input.path ?? `/worktrees/project/${input.newRefName}`,
                   refName: input.newRefName ?? "detached",
+                  ...(options.projectPath === undefined
+                    ? {}
+                    : { projectPath: options.projectPath }),
                 },
               }),
             ),
@@ -386,12 +390,13 @@ const decodeHandoffInput = Schema.decodeUnknownEffect(WorktreeMcpHandoffInput);
 describe("t3_worktree_handoff", () => {
   // regression: #22971 a separate send let the detach settle the run before its follow-up existed
   it.effect("commits the continuation with the thread binding", () => {
-    const harness = makeHarness();
+    const harness = makeHarness({ projectPath: null });
     return Effect.gen(function* () {
       const result = yield* runHandoff(harness, {
         branch: "feature/continue",
         continuationPrompt: "Keep going.",
       });
+      expect(result.note).toContain("Using the worktree root");
       expect(result.continuation).toEqual({ status: "scheduled", delivery: "queued" });
       expect(harness.dispatch).toHaveBeenCalledTimes(1);
       expect(harness.dispatch).toHaveBeenCalledWith(

@@ -56,6 +56,14 @@ export const projectMutationOperation = Effect.fn("projectMutationOperation")(fu
         ...(mutation.archived === undefined ? {} : { archived: mutation.archived }),
       });
 
+    case "project.removeReviewed":
+      return yield* projects.delete({
+        commandId: mutation.commandId,
+        projectId: mutation.projectId,
+        expectedFolder: mutation.expectedFolder,
+        force: true,
+      });
+
     case "project.delete":
       return yield* projects.delete({
         commandId: mutation.commandId,
@@ -68,12 +76,16 @@ export const projectMutationOperation = Effect.fn("projectMutationOperation")(fu
 // A disconnect after deletion commits must not leave the in-memory clone record behind.
 export const mutateProjectWithClone = Effect.fn("mutateProjectWithClone")(function* (
   projects: ProjectMutations,
-  clones: Pick<ProjectCloneTracker["Service"], "discard">,
+  clones: Pick<ProjectCloneTracker["Service"], "discard" | "withReviewedRemoval">,
   mutation: ProjectMutation,
 ) {
-  if (mutation.type !== "project.delete")
-    return yield* projectMutationOperation(projects, mutation);
-  return yield* projectMutationOperation(projects, mutation).pipe(
+  const operation = projectMutationOperation(projects, mutation);
+  if (mutation.type === "project.removeReviewed")
+    return yield* clones
+      .withReviewedRemoval(mutation.projectId, operation)
+      .pipe(Effect.uninterruptible);
+  if (mutation.type !== "project.delete") return yield* operation;
+  return yield* operation.pipe(
     Effect.tap(() => clones.discard(mutation.projectId)),
     Effect.uninterruptible,
   );

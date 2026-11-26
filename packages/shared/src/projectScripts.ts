@@ -25,6 +25,7 @@ interface ProjectScriptRuntimeEnvInput {
     cwd: string;
   };
   worktreePath?: string | null;
+  worktreeRoot?: string;
   extraEnv?: Record<string, string>;
 }
 
@@ -45,6 +46,7 @@ export function projectScriptRuntimeEnv(
   };
   if (input.worktreePath) {
     env.T3CODE_WORKTREE_PATH = input.worktreePath;
+    if (input.worktreeRoot) env.T3CODE_WORKTREE_ROOT = input.worktreeRoot;
   }
   if (input.extraEnv) {
     return { ...env, ...input.extraEnv };

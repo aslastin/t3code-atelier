@@ -296,7 +296,16 @@ export const make = Effect.gen(function* () {
           () => Effect.succeed(null),
         ),
       );
-      return { relativePath: requestedPath, realTargetPath };
+      // Asset readers normalize ".." lexically, which can change the file after a POSIX symlink.
+      const openedPath =
+        realTargetPath && absolutePath.split(path.sep).includes("..")
+          ? realTargetPath
+          : absolutePath;
+      return {
+        relativePath: requestedPath,
+        realTargetPath,
+        ...(openedPath !== requestedPath ? { absolutePath: openedPath } : {}),
+      };
     }
 
     const target = yield* workspacePaths.resolveRelativePathWithinRoot({
@@ -482,7 +491,13 @@ export const make = Effect.gen(function* () {
               new TextDecoder("utf-8", { fatal: true }).decode(fileBytes, { stream: truncated }),
             catch: binaryFileError,
           });
-          return { relativePath: target.relativePath, contents, byteLength: stat.size, truncated };
+          return {
+            relativePath: target.relativePath,
+            ...("absolutePath" in target ? { absolutePath: target.absolutePath } : {}),
+            contents,
+            byteLength: stat.size,
+            truncated,
+          };
         }),
       (handle) =>
         handle === null

@@ -293,12 +293,12 @@ describe("composerContextRecords", () => {
   });
 
   it("clamps oversized review and terminal selections so the records still encode", () => {
-    const build = (diffLength: number) =>
+    const build = (diffLength: number, filePath = "a/b.ts") =>
       reviewCommentContextRecord({
         id: "rc-big",
-        sectionId: "file:a/b.ts",
+        sectionId: `file:${filePath}`,
         sectionTitle: "File comment",
-        filePath: "a/b.ts",
+        filePath,
         startIndex: 0,
         endIndex: 1,
         rangeLabel: "L1",
@@ -313,6 +313,24 @@ describe("composerContextRecords", () => {
     expect(overLimit.diff.endsWith("… truncated …")).toBe(true);
     expect(() => decodeMessageContext({ version: 1, records: [atLimit] })).not.toThrow();
     expect(() => decodeMessageContext({ version: 1, records: [overLimit] })).not.toThrow();
+
+    const directory = "/src".repeat(62);
+    const paths = [directory + "/one.ts", directory + "/two.ts"];
+    const records = paths.map((path, index) => ({
+      ...build(2, path),
+      contextId: atLimit.contextId + index,
+    }));
+    expect(decodeMessageContext({ version: 1, records }).records).toMatchObject(
+      paths.map((filePath) => ({ filePath, text: "Why?", diff: "dd" })),
+    );
+    expect(records[0]!.sectionId).not.toBe(records[1]!.sectionId);
+    const longExtension = reviewCommentContextRecord({
+      ...atLimit,
+      id: "long-extension",
+      filePath: "/tmp/log." + "x".repeat(65),
+      fenceLanguage: "x".repeat(65),
+    });
+    expect(decodeMessageContext({ version: 1, records: [longExtension] }).records).toHaveLength(1);
 
     const terminal = terminalContextRecord({
       id: "term-big",

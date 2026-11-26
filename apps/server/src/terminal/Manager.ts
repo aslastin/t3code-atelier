@@ -1,6 +1,8 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto digest is effectful; a sync hash keeps historyPath a plain function.
 import * as NodeCrypto from "node:crypto";
 
+import { projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
+import { worktreeRootForProject } from "../workspace/worktreeProjectPath.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import {
   DEFAULT_TERMINAL_ID,
@@ -3414,11 +3416,35 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     return snapshot(liveSession);
   });
 
-  const openLocked = (input: TerminalOpenInput) =>
-    withWorkspaceLease(
-      path.resolve(input.worktreePath ?? input.cwd),
-      openWithWorkspaceLease(input),
+  const openLocked = Effect.fn("terminal.openWithCheckoutLease")(function* (
+    input: TerminalOpenInput & { readonly worktreeRoot?: string },
+  ) {
+    const folder = path.resolve(input.worktreePath ?? input.cwd);
+    const projectCwd = input.env?.T3CODE_PROJECT_ROOT;
+    const root =
+      input.worktreeRoot ??
+      (input.worktreePath && projectCwd
+        ? yield* worktreeRootForProject(fileSystem, path, folder, projectCwd)
+        : folder);
+    return yield* withWorkspaceLease(
+      root,
+      openWithWorkspaceLease(
+        projectCwd && input.env?.T3CODE_WORKTREE_PATH
+          ? {
+              ...input,
+              env: {
+                ...input.env,
+                ...projectScriptRuntimeEnv({
+                  project: { cwd: projectCwd },
+                  worktreePath: input.env.T3CODE_WORKTREE_PATH,
+                  worktreeRoot: root,
+                }),
+              },
+            }
+          : input,
+      ),
     );
+  });
 
   const open: TerminalManager["Service"]["open"] = (input) =>
     withThreadLock(

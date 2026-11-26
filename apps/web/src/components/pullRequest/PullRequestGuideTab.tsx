@@ -80,6 +80,7 @@ export function PullRequestGuideTab({
               body,
             }),
           onRemove: (commentId) => removeComment(reviewKey, commentId),
+          onEdit: (comment) => addComment(reviewKey, comment),
           onAskAgent: onAskAboutLines,
         };
   const guide = data?.guide ?? null;

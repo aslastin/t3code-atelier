@@ -89,11 +89,14 @@ export const VcsRef = Schema.Struct({
   current: Schema.Boolean,
   isDefault: Schema.Boolean,
   worktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  projectPath: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyStringSchema)),
 });
 export type VcsRef = typeof VcsRef.Type;
 
 const VcsWorktree = Schema.Struct({
   path: TrimmedNonEmptyStringSchema,
+  /** Working directory for a subfolder project, or null if the checkout omits it. */
+  projectPath: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   refName: TrimmedNonEmptyStringSchema,
 });
 const GitResolvedPullRequest = Schema.Struct({
@@ -143,6 +146,7 @@ export const GitRunStackedActionInput = Schema.Struct({
 export type GitRunStackedActionInput = typeof GitRunStackedActionInput.Type;
 
 export const VcsListRefsInput = Schema.Struct({
+  projectCwd: Schema.optional(TrimmedNonEmptyStringSchema),
   cwd: TrimmedNonEmptyStringSchema,
   query: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(256))),
   cursor: Schema.optional(NonNegativeInt),
@@ -181,6 +185,7 @@ export type GitPreparePullRequestThreadInput = typeof GitPreparePullRequestThrea
 export const VcsRemoveWorktreeInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   path: TrimmedNonEmptyStringSchema,
+  onlyIfUnused: Schema.optional(Schema.Boolean),
   force: Schema.optional(Schema.Boolean),
 });
 export type VcsRemoveWorktreeInput = typeof VcsRemoveWorktreeInput.Type;
@@ -309,6 +314,7 @@ export const GitPreparePullRequestThreadResult = Schema.Struct({
   pullRequest: GitResolvedPullRequest,
   branch: TrimmedNonEmptyStringSchema,
   worktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  projectFolderMissing: Schema.optionalKey(Schema.Boolean),
   /** False when local commits or edits prevented a reused worktree from reaching the PR head. */
   isOnPullRequestHead: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(true))),
 });

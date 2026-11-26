@@ -56,7 +56,7 @@ import { clearThreadPreviewState } from "../previewStateStore";
 import { useRightPanelStore } from "../rightPanelStore";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
-import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
+import { getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { useClientSettings } from "./useSettings";
 import * as ThreadUndo from "@t3tools/client-runtime/state/thread-undo";
@@ -546,10 +546,13 @@ export function useThreadActions() {
     );
     // A shell that leaves idle subagent children out cannot prove nobody else uses the worktree,
     // so the server's list decides. A failed read keeps the worktree.
-    if (orphanedWorktreePath !== null && environmentConfig?.shellThreadFamilies === true) {
+    if (
+      orphanedWorktreePath !== null &&
+      (!environmentConfig || environmentConfig.shellThreadFamilies === true)
+    ) {
       const occupants = await loadWorktreeThreadIds({
         environmentId: threadRef.environmentId,
-        input: { worktreePath: orphanedWorktreePath },
+        input: { worktreePath: orphanedWorktreePath, projectCwd: threadProject?.workspaceRoot },
       });
       if (
         occupants._tag !== "Success" ||
@@ -558,11 +561,10 @@ export function useThreadActions() {
         )
       ) {
         orphanedWorktreePath = null;
+      } else {
+        orphanedWorktreePath = occupants.value.worktreeRoot ?? orphanedWorktreePath;
       }
     }
-    const displayWorktreePath = orphanedWorktreePath
-      ? formatWorktreePathForDisplay(orphanedWorktreePath)
-      : null;
     const localApi = readLocalApi();
     let canDeleteWorktree = false;
     if (
@@ -588,7 +590,7 @@ export function useThreadActions() {
         localApi.dialogs.confirm(
           [
             m(msg("This thread is the only one linked to this worktree:")),
-            displayWorktreePath ?? orphanedWorktreePath,
+            orphanedWorktreePath,
             "",
             m(msg("Delete the worktree too?")),
           ].join("\n"),
@@ -681,6 +683,7 @@ export function useThreadActions() {
           input: {
             cwd: threadProject.workspaceRoot,
             path: orphanedWorktreePath,
+            onlyIfUnused: true,
             force: true,
           },
         })
@@ -724,7 +727,7 @@ export function useThreadActions() {
           description: removalFailed
             ? m(
                 msg("Could not remove {path}. {message}", {
-                  path: displayWorktreePath ?? orphanedWorktreePath,
+                  path: orphanedWorktreePath,
                   message,
                 }),
               )
