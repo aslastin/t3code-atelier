@@ -1,10 +1,11 @@
-// Client-supplied worktrees count only under managed folders or when Git lists them for the project.
+// Client-supplied worktrees count only under managed folders or when the project's VCS lists them.
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -12,7 +13,10 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { makeListWorktrees } from "../git/GitWorkflowService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
 
 import { worktreeRootForProject } from "./worktreeProjectPath.ts";
@@ -56,7 +60,11 @@ export const make = Effect.gen(function* () {
   const settings = yield* ServerSettings.ServerSettingsService;
   const projectStore = yield* ProjectStore.ProjectStoreV2;
   const sql = yield* SqlClient.SqlClient;
-  const git = yield* GitVcsDriver.GitVcsDriver;
+  const listWorktrees = makeListWorktrees(
+    yield* VcsDriverRegistry.VcsDriverRegistry,
+    yield* GitVcsDriver.GitVcsDriver,
+  );
+  const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
 
   // Missing roots keep lexical paths; other resolution failures and filesystem roots grant nothing.
   const resolveRoot = (value: string) => {
@@ -118,7 +126,7 @@ export const make = Effect.gen(function* () {
         if (project === undefined) return false;
         let listed = projectWorktrees.get(projectId);
         if (listed === undefined) {
-          listed = yield* git.listWorktreePaths(project.workspaceRoot).pipe(
+          listed = yield* listWorktrees(project.workspaceRoot).pipe(
             Effect.flatMap((paths) => Effect.forEach(paths, resolveRoot)),
             Effect.map((paths) => paths.filter((listedPath) => listedPath !== null)),
             Effect.orElseSucceed((): ReadonlyArray<string> => []),
@@ -129,7 +137,14 @@ export const make = Effect.gen(function* () {
         return (
           real !== null &&
           listed.includes(
-            yield* worktreeRootForProject(fileSystem, path, real, project.workspaceRoot),
+            yield* worktreeRootForProject(
+              fileSystem,
+              path,
+              real,
+              project.workspaceRoot,
+              undefined,
+              plugins?.markers(),
+            ),
           )
         );
       });

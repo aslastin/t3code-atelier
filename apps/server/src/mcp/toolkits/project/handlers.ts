@@ -34,6 +34,8 @@ import {
   worktreeRootForProject,
 } from "../../../workspace/worktreeProjectPath.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
+import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
+import { VcsPluginDrivers } from "../../../plugins/VcsPluginDrivers.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import * as DateTime from "effect/DateTime";
@@ -100,15 +102,25 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
   worktreePath: string,
 ) {
   const git = yield* GitVcsDriver.GitVcsDriver;
+  // The workflow also asks a VCS plugin; without one in context, Git's own list is the answer.
+  const workflow = Option.getOrUndefined(
+    yield* Effect.serviceOption(GitWorkflowService.GitWorkflowService),
+  );
+  const markers = Option.match(yield* Effect.serviceOption(VcsPluginDrivers), {
+    onNone: () => [],
+    onSome: (plugins) => plugins.markers(),
+  });
   const fileSystem = yield* FileSystem.FileSystem;
   const real = (path: string) => fileSystem.realPath(path).pipe(Effect.orElseSucceed(() => path));
-  const worktrees = yield* git.listWorktreePaths(workspaceRoot).pipe(
+  const worktrees = yield* (workflow?.listWorktrees ?? git.listWorktreePaths)(workspaceRoot).pipe(
     Effect.flatMap((paths) => Effect.forEach(paths, real)),
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
   const path = yield* Path.Path;
   const folder = yield* real(worktreePath);
-  const root = yield* worktreeRootForProject(fileSystem, path, folder, workspaceRoot);
+  const rootOf = (target: string) =>
+    worktreeRootForProject(fileSystem, path, target, workspaceRoot, undefined, markers);
+  const root = yield* rootOf(folder);
   if (
     !worktrees.includes(root) ||
     (root !== folder &&
@@ -119,15 +131,14 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
   )
     return yield* new OrchestratorMcpFailure({
       code: "invalid_request",
-      message:
-        "worktreePath must be one of the project's git worktrees. t3_worktree_list shows them.",
+      message: "worktreePath must be one of the project's worktrees. t3_worktree_list shows them.",
     });
   const requested = path.resolve(worktreePath);
   const binding =
     requested === worktreePath || (yield* real(requested)) === folder ? requested : folder;
   if (folder !== root) {
     if (binding === folder) return folder;
-    const boundRoot = yield* worktreeRootForProject(fileSystem, path, binding, workspaceRoot);
+    const boundRoot = yield* rootOf(binding);
     return (yield* real(boundRoot)) === root ? binding : folder;
   }
   const realProject = yield* real(workspaceRoot);

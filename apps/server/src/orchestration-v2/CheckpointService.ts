@@ -343,6 +343,7 @@ function makeCheckpoint(input: {
   readonly status: OrchestrationV2Checkpoint["status"];
   readonly files: OrchestrationV2Checkpoint["files"];
   readonly capturedAt: DateTime.Utc;
+  readonly unavailableReason?: string;
 }): OrchestrationV2Checkpoint {
   return {
     id: input.id,
@@ -357,6 +358,9 @@ function makeCheckpoint(input: {
     status: input.status,
     files: input.files,
     capturedAt: input.capturedAt,
+    ...(input.unavailableReason === undefined
+      ? {}
+      : { unavailableReason: input.unavailableReason }),
   };
 }
 
@@ -634,6 +638,7 @@ export const layer: Layer.Layer<
             };
           }
 
+          let unavailableReason: string | undefined;
           const captureStatus = yield* (
             input.cleanHead === undefined
               ? captureWorkspaceCheckpoint({
@@ -650,7 +655,11 @@ export const layer: Layer.Layer<
           ).pipe(
             Effect.as("ready" as const),
             Effect.catchTags({
-              VcsUnsupportedOperationError: () => Effect.succeed("missing" as const),
+              // A VCS plugin with no working strategy: the turn has no snapshot, and says why.
+              VcsUnsupportedOperationError: (error) => {
+                unavailableReason = error.detail;
+                return Effect.succeed("missing" as const);
+              },
             }),
             Effect.catch((cause) =>
               Effect.logWarning("orchestration V2 checkpoint capture failed", {
@@ -675,6 +684,7 @@ export const layer: Layer.Layer<
                 status: captureStatus,
                 files: [],
                 capturedAt: input.capturedAt,
+                ...(unavailableReason === undefined ? {} : { unavailableReason }),
               }),
               summaryFailed: false,
             };

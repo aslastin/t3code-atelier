@@ -61,6 +61,7 @@ import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirectory.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
+import { VcsPluginDrivers } from "./plugins/VcsPluginDrivers.ts";
 import { isNonRepositoryGitStderr } from "./vcs/GitVcsDriverCore.ts";
 import { worktreeRemovalChecks } from "./vcs/worktreeRemovalChecks.ts";
 import { isLinkedWorktree, removeLinkedWorktree } from "./vcs/worktreeRemoval.ts";
@@ -344,6 +345,8 @@ const make = Effect.gen(function* () {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
+  const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
+  const gitWorkflowHasPlugins = () => plugins?.hasAny() === true;
   const reconcileBranch = yield* WorktreeBranchSync.makeReconcile;
   const terminals = yield* TerminalManager.TerminalManager;
   const fs = yield* FileSystem.FileSystem;
@@ -751,7 +754,9 @@ const make = Effect.gen(function* () {
         const modified = Option.getOrNull((yield* fs.stat(worktreePath)).mtime);
         if (modified !== null && modified.getTime() > now - ORPHAN_WORKTREE_GRACE_MS) return;
         const gitPath = path.join(worktreePath, ".git");
-        const linked = (yield* fs.exists(gitPath)) && (yield* isLinkedWorktree(worktreePath));
+        const linked =
+          ((yield* fs.exists(gitPath)) && (yield* isLinkedWorktree(worktreePath))) ||
+          (yield* isPluginWorktree(worktreePath));
         reported.set(key, {
           path: worktreePath,
           reason: linked
@@ -764,13 +769,22 @@ const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => undefined),
     );
     // Linked worktrees can sit deeper inside a plain folder, like <repository>/replay/<n>. Ask
-    // the projects' Git for them rather than walking folders that may hold large non-git trees.
+    // the projects' VCS for them rather than walking folders that may hold large non-git trees.
     let registered: ReadonlyArray<string> | undefined;
+    const listRegistered = Effect.fnUntraced(function* () {
+      registered ??= (yield* Effect.forEach(new Set(projectRoots), (root) =>
+        gitWorkflow.listWorktrees(root).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => [])),
+      )).flat();
+      return registered;
+    });
+    // A VCS plugin's worktree has no gitfile; its plugin listing it is what makes it one.
+    const isPluginWorktree = Effect.fnUntraced(function* (worktree: string) {
+      if (!gitWorkflowHasPlugins()) return false;
+      return (yield* listRegistered()).some((entry) => pathKey(entry) === pathKey(worktree));
+    });
     const nestedWorktrees = Effect.fnUntraced(function* (folder: string, managedRoot: string) {
       if (yield* fs.exists(path.join(folder, ".git"))) return [];
-      registered ??= (yield* Effect.forEach(new Set(projectRoots), (root) =>
-        git.listWorktreePaths(root).pipe(Effect.orElseSucceed((): string[] => [])),
-      )).flat();
+      registered = yield* listRegistered();
       // Locked registrations outlive their directory, whose path may since hold something else.
       return yield* Effect.filter(
         registered.filter(
@@ -779,7 +793,7 @@ const make = Effect.gen(function* () {
         (worktree) =>
           Effect.gen(function* () {
             if (pathKey(yield* fs.realPath(worktree)) !== pathKey(worktree)) return false;
-            return yield* isLinkedWorktree(worktree);
+            return (yield* isLinkedWorktree(worktree)) || (yield* isPluginWorktree(worktree));
           }).pipe(Effect.orElseSucceed(() => false)),
       );
     });

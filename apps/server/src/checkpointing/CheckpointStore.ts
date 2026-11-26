@@ -117,9 +117,14 @@ export const make = Effect.gen(function* () {
   });
 
   // The registry reads an unreadable repository as none; ask Git again so that fails here.
+  // A VCS plugin's repository counts too: its driver decides how, or whether, it checkpoints.
   const isGitRepository: CheckpointStore["Service"]["isGitRepository"] = Effect.fn(
     "CheckpointStore.isGitRepository",
   )(function* (cwd) {
+    if (vcsRegistry.hasAdditionalDrivers) {
+      const handle = yield* vcsRegistry.detect({ cwd });
+      if (handle !== null && handle.kind !== GIT_VCS_KIND) return true;
+    }
     if ((yield* vcsRegistry.detect({ cwd, requestedKind: GIT_VCS_KIND })) !== null) return true;
     const git = yield* vcsRegistry.get(GIT_VCS_KIND);
     return (yield* git.detectRepository(cwd)) !== null;

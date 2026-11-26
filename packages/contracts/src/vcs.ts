@@ -283,6 +283,20 @@ export class VcsCheckpointStorageError extends Schema.TaggedError<VcsCheckpointS
   }
 }
 
+/** Atelier fork: a VCS plugin printed output that breaks the `t3-plugin/1` contract. */
+export class VcsPluginOutputError extends Schema.TaggedError<VcsPluginOutputError>()(
+  "VcsPluginOutputError",
+  {
+    operation: Schema.String,
+    kind: VcsDriverKind,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `The ${this.kind} plugin's ${this.operation} output is not valid: ${this.detail}`;
+  }
+}
+
 export const VcsError = Schema.Union([
   VcsCheckpointStorageError,
   VcsProcessSpawnError,
@@ -294,5 +308,6 @@ export const VcsError = Schema.Union([
   VcsProcessMissingExitCodeError,
   VcsRepositoryDetectionError,
   VcsUnsupportedOperationError,
+  VcsPluginOutputError,
 ]);
 export type VcsError = typeof VcsError.Type;

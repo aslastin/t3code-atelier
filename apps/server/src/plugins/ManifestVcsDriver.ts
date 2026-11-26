@@ -1,0 +1,399 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Synchronous digests and random temp file names.
+import * as NodeCrypto from "node:crypto";
+import * as NodeOS from "node:os";
+
+import {
+  GitCommandError,
+  VcsPluginCommitOutput,
+  VcsPluginPullOutput,
+  VcsPluginPushOutput,
+  VcsPluginRefsOutput,
+  VcsPluginRemotesOutput,
+  VcsPluginStatusOutput,
+  VcsPluginWorktreeCreateOutput,
+  VcsPluginWorktreeListOutput,
+  VcsUnsupportedOperationError,
+  type VcsError,
+  type VcsPluginManifest,
+  type VcsRef,
+  type VcsStatusResult,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+
+import * as VcsDriver from "../vcs/VcsDriver.ts";
+import { worktreeProjectFolder } from "../workspace/worktreeProjectPath.ts";
+import { makePluginCheckpoints } from "./pluginCheckpoints.ts";
+import { makePluginCommandRunner, type PluginCommandRunner } from "./pluginCommandRunner.ts";
+import { checkpointStrategies, supportsWorktrees, usesPlaceholder } from "./pluginManifest.ts";
+
+export interface ManifestVcsDriverInput {
+  readonly directory: string;
+  readonly manifest: VcsPluginManifest;
+  readonly reportError: (operation: string, message: string) => Effect.Effect<void>;
+  /** The folder new worktrees go in, as Settings → Worktrees picks it for Git. */
+  readonly worktreesDirectory: Effect.Effect<string | null>;
+}
+
+/** Marker probes only: detection never starts a process. */
+const detectMarkerRoot = Effect.fn("ManifestVcsDriver.detectMarkerRoot")(function* (
+  fs: FileSystem.FileSystem,
+  path: Path.Path,
+  markers: ReadonlyArray<string>,
+  cwd: string,
+) {
+  let folder = path.resolve(cwd);
+  while (true) {
+    for (const marker of markers) {
+      if (yield* fs.exists(path.join(folder, marker)).pipe(Effect.orElseSucceed(() => false)))
+        return { root: folder, marker };
+    }
+    const parent = path.dirname(folder);
+    if (parent === folder) return null;
+    folder = parent;
+  }
+});
+
+export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(function* (
+  input: ManifestVcsDriverInput,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const { manifest } = input;
+  const kind = manifest.id;
+  const runner = yield* makePluginCommandRunner(input);
+
+  const unsupported = (operation: string, detail: string) =>
+    new VcsUnsupportedOperationError({ operation, kind, detail });
+  const toCommandError =
+    (operation: string, cwd: string) =>
+    (error: VcsError): GitCommandError =>
+      new GitCommandError({
+        vcs: kind,
+        operation: `${kind}.${operation}`,
+        command: operation,
+        cwd,
+        detail: error._tag === "VcsUnsupportedOperationError" ? error.detail : error.message,
+        cause: error,
+      });
+
+  const detect = (cwd: string) => detectMarkerRoot(fs, path, manifest.detect.markers, cwd);
+
+  const repositoryRoot = Effect.fn("ManifestVcsDriver.repositoryRoot")(function* (cwd: string) {
+    const found = yield* detect(cwd);
+    if (found === null)
+      return yield* unsupported("repositoryRoot", `No ${manifest.label} repository at ${cwd}.`);
+    return found.root;
+  });
+
+  const json = <S extends Parameters<PluginCommandRunner["runJson"]>[1]>(
+    command: Parameters<PluginCommandRunner["runJson"]>[0],
+    schema: S,
+    cwd: string,
+    values: Readonly<Record<string, string | undefined>> = {},
+    timeoutMs?: number | null,
+  ) =>
+    repositoryRoot(cwd).pipe(
+      Effect.flatMap((root) =>
+        runner.runJson(command, schema, {
+          cwd,
+          values: { repositoryRoot: root, ...values },
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        }),
+      ),
+      Effect.mapError(toCommandError(command, cwd)),
+    );
+
+  // Long text reaches the command as a file, never as an argument.
+  const withTextFile = <A, E, R>(
+    text: string | undefined,
+    use: (file: string | undefined) => Effect.Effect<A, E, R>,
+  ) =>
+    text === undefined
+      ? use(undefined)
+      : Effect.acquireUseRelease(
+          Effect.gen(function* () {
+            const file = path.join(NodeOS.tmpdir(), `t3-plugin-${NodeCrypto.randomUUID()}.txt`);
+            yield* fs.writeFileString(file, text).pipe(Effect.orDie);
+            return file;
+          }),
+          use,
+          (file) => fs.remove(file, { force: true }).pipe(Effect.ignore),
+        );
+
+  const status = Effect.fn("ManifestVcsDriver.status")(function* (cwd: string) {
+    const out = yield* json("status", VcsPluginStatusOutput, cwd);
+    const root = yield* repositoryRoot(cwd).pipe(Effect.orElseSucceed(() => undefined));
+    const files = (out.files ?? []).map((file) => ({
+      path: file.path,
+      insertions: file.insertions ?? 0,
+      deletions: file.deletions ?? 0,
+    }));
+    return {
+      isRepo: true,
+      hasPrimaryRemote: out.hasPrimaryRemote ?? false,
+      isDefaultRef: out.isDefaultRef ?? false,
+      refName: out.refName,
+      hasWorkingTreeChanges: files.length > 0,
+      workingTree: {
+        ...(root ? { rootPath: root } : {}),
+        files,
+        insertions: files.reduce((sum, file) => sum + file.insertions, 0),
+        deletions: files.reduce((sum, file) => sum + file.deletions, 0),
+      },
+      hasUpstream: out.hasUpstream ?? false,
+      aheadCount: out.aheadCount ?? 0,
+      behindCount: out.behindCount ?? 0,
+      pr: null,
+    } satisfies VcsStatusResult;
+  });
+
+  const listRefNames = Effect.fn("ManifestVcsDriver.listRefNames")(function* (cwd: string) {
+    if (!runner.has("listRefs")) {
+      const current = yield* status(cwd);
+      return current.refName === null
+        ? []
+        : [{ name: current.refName, current: true, isDefault: current.isDefaultRef }];
+    }
+    return (yield* json("listRefs", VcsPluginRefsOutput, cwd)).refs;
+  });
+
+  const managedWorktreePath = Effect.fn("ManifestVcsDriver.managedWorktreePath")(function* (
+    root: string,
+    branch: string,
+    cwd: string,
+  ) {
+    const parent = yield* input.worktreesDirectory;
+    if (parent === null)
+      return yield* new GitCommandError({
+        vcs: kind,
+        operation: `${kind}.worktreeCreate`,
+        command: "worktreeCreate",
+        cwd,
+        detail:
+          "The worktree location must be an absolute folder. Change it in Settings → Worktrees.",
+      });
+    const hash = NodeCrypto.createHash("sha256").update(`${root}\0${branch}`).digest("hex");
+    let prefix = "";
+    for (const character of branch.replace(/\//g, "-")) {
+      if (Buffer.byteLength(prefix + character) > 23) break;
+      prefix += character;
+    }
+    const base = path.join(parent, path.basename(root), `${prefix}-${hash.slice(0, 16)}`);
+    let candidate = base;
+    for (
+      let suffix = 2;
+      yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false));
+      suffix++
+    )
+      candidate = `${base}-${suffix}`;
+    return candidate;
+  });
+
+  const commands = manifest.commands;
+  const workflow: VcsDriver.VcsWorkflowOps = {
+    status: (request) => status(request.cwd),
+    listRefs: Effect.fn("ManifestVcsDriver.listRefs")(function* (request) {
+      const query = request.query?.toLowerCase();
+      const refs: VcsRef[] = (yield* listRefNames(request.cwd))
+        .filter((ref) => {
+          if (request.refKind === "local" && ref.isRemote) return false;
+          if (request.refKind === "remote" && !ref.isRemote) return false;
+          return query === undefined || ref.name.toLowerCase().includes(query);
+        })
+        .map((ref) => ({
+          name: ref.name,
+          current: ref.current ?? false,
+          isDefault: ref.isDefault ?? false,
+          worktreePath: null,
+          ...(ref.isRemote !== undefined ? { isRemote: ref.isRemote } : {}),
+          ...(ref.remoteName !== undefined ? { remoteName: ref.remoteName } : {}),
+        }));
+      const start = request.cursor ?? 0;
+      const end = request.limit === undefined ? refs.length : start + request.limit;
+      return {
+        refs: refs.slice(start, end),
+        isRepo: true,
+        hasPrimaryRemote: false,
+        nextCursor: end < refs.length ? end : null,
+        totalCount: refs.length,
+      };
+    }),
+    ...(commands.commit && {
+      commit: Effect.fn("ManifestVcsDriver.commit")(function* (request) {
+        if (request.commitMessage === undefined)
+          return yield* new GitCommandError({
+            vcs: kind,
+            operation: `${kind}.commit`,
+            command: "commit",
+            cwd: request.cwd,
+            detail: `Write a commit message: ${manifest.label} commits need one.`,
+          });
+        if (request.filePaths && !usesPlaceholder(commands.commit, "pathsFile"))
+          return yield* new GitCommandError({
+            vcs: kind,
+            operation: `${kind}.commit`,
+            command: "commit",
+            cwd: request.cwd,
+            detail: `${manifest.label} commits every change; it cannot commit only the selected files.`,
+          });
+        const out = yield* withTextFile(request.commitMessage, (messageFile) =>
+          withTextFile(request.filePaths?.join("\n"), (pathsFile) =>
+            json("commit", VcsPluginCommitOutput, request.cwd, { messageFile, pathsFile }),
+          ),
+        );
+        return {
+          status: "created" as const,
+          ...(out.commitSha !== undefined ? { commitSha: out.commitSha } : {}),
+          ...(out.subject !== undefined ? { subject: out.subject } : {}),
+        };
+      }),
+    }),
+    ...(commands.push && {
+      push: Effect.fn("ManifestVcsDriver.push")(function* (request) {
+        const out = yield* json("push", VcsPluginPushOutput, request.cwd);
+        return {
+          status: "pushed" as const,
+          ...(out.branch !== undefined ? { branch: out.branch } : {}),
+          ...(out.upstreamBranch !== undefined ? { upstreamBranch: out.upstreamBranch } : {}),
+        };
+      }),
+    }),
+    ...(commands.pull && {
+      pull: Effect.fn("ManifestVcsDriver.pull")(function* (request) {
+        const out = yield* json("pull", VcsPluginPullOutput, request.cwd);
+        return { status: out.status, refName: out.refName, upstreamRef: out.upstreamRef ?? null };
+      }),
+    }),
+    ...(supportsWorktrees(manifest) && {
+      createWorktree: Effect.fn("ManifestVcsDriver.createWorktree")(function* (request) {
+        const root = yield* repositoryRoot(request.cwd).pipe(
+          Effect.mapError(toCommandError("worktreeCreate", request.cwd)),
+        );
+        const newRef = request.newRefName ?? request.refName;
+        const worktreePath = path.resolve(
+          request.cwd,
+          request.path ?? (yield* managedWorktreePath(root, newRef, request.cwd)),
+        );
+        yield* fs
+          .makeDirectory(path.dirname(worktreePath), { recursive: true })
+          .pipe(Effect.ignore);
+        const out = yield* json(
+          "worktreeCreate",
+          VcsPluginWorktreeCreateOutput,
+          request.cwd,
+          { path: worktreePath, newRef, baseRef: request.baseRefName ?? request.refName },
+          // Large checkouts can run for many minutes, as `git worktree add` does.
+          null,
+        );
+        // A project in a subfolder works in the same subfolder of the new checkout (#12).
+        const relative = path.relative(root, path.resolve(request.cwd));
+        const projectPath = yield* worktreeProjectFolder(fs, path, relative, worktreePath);
+        return { worktree: { path: worktreePath, projectPath, refName: out.refName } };
+      }),
+      removeWorktree: Effect.fn("ManifestVcsDriver.removeWorktree")(function* (request) {
+        const root = yield* repositoryRoot(request.cwd).pipe(
+          Effect.mapError(toCommandError("worktreeRemove", request.cwd)),
+        );
+        yield* runner
+          .run("worktreeRemove", {
+            cwd: request.cwd,
+            values: { repositoryRoot: root, path: path.resolve(request.cwd, request.path) },
+          })
+          .pipe(Effect.mapError(toCommandError("worktreeRemove", request.cwd)));
+      }),
+    }),
+    listWorktrees: Effect.fn("ManifestVcsDriver.listWorktrees")(function* (request) {
+      if (!runner.has("worktreeList")) return [];
+      const out = yield* json("worktreeList", VcsPluginWorktreeListOutput, request.cwd);
+      return out.worktrees
+        .map((worktree) => worktree.path)
+        .filter((entry) => path.isAbsolute(entry));
+    }),
+  };
+
+  const checkpoints = yield* makePluginCheckpoints({
+    runner,
+    strategies: checkpointStrategies(manifest),
+    metadataFolders: [
+      ...new Set(manifest.detect.markers.map((marker) => marker.split(/[/\\]/)[0]!)),
+    ],
+    repositoryRoot,
+  });
+
+  const detectRepository: VcsDriver.VcsDriver["Service"]["detectRepository"] = Effect.fn(
+    "ManifestVcsDriver.detectRepository",
+  )(function* (cwd) {
+    const found = yield* detect(cwd);
+    if (found === null) return null;
+    return {
+      kind,
+      rootPath: found.root,
+      metadataPath: path.join(found.root, found.marker),
+      freshness: {
+        source: "live-local",
+        observedAt: yield* DateTime.now,
+        expiresAt: Option.none(),
+      },
+    } as const;
+  });
+
+  return VcsDriver.VcsDriver.of({
+    workflow,
+    capabilities: {
+      kind,
+      supportsWorktrees: supportsWorktrees(manifest),
+      supportsCommit: commands.commit !== undefined,
+      supportsPush: commands.push !== undefined,
+      supportsReviewDiff: false,
+      supportsSparseCheckout: false,
+      supportsBookmarks: false,
+      supportsAtomicSnapshot: false,
+      supportsPushDefaultRemote: false,
+      ignoreClassifier: "git-compatible-fallback",
+    },
+    execute: Effect.fn("ManifestVcsDriver.execute")(function* () {
+      return yield* unsupported("execute", "Plugins run only their own commands.");
+    }),
+    checkpoints,
+    detectRepository,
+    isInsideWorkTree: Effect.fn("ManifestVcsDriver.isInsideWorkTree")(function* (cwd) {
+      return (yield* detect(cwd)) !== null;
+    }),
+    listWorkspaceFiles: Effect.fn("ManifestVcsDriver.listWorkspaceFiles")(function* () {
+      return yield* unsupported("listWorkspaceFiles", "Plugins do not list workspace files.");
+    }),
+    listRemotes: Effect.fn("ManifestVcsDriver.listRemotes")(function* (cwd) {
+      const freshness = {
+        source: "live-local" as const,
+        observedAt: yield* DateTime.now,
+        expiresAt: Option.none(),
+      };
+      if (!runner.has("listRemotes")) return { remotes: [], freshness };
+      const root = yield* repositoryRoot(cwd);
+      const out = yield* runner.runJson("listRemotes", VcsPluginRemotesOutput, {
+        cwd,
+        values: { repositoryRoot: root },
+      });
+      return {
+        remotes: out.remotes.map((remote, index) => ({
+          name: remote.name,
+          url: remote.url,
+          pushUrl: Option.fromNullishOr(remote.pushUrl),
+          isPrimary: remote.isPrimary ?? index === 0,
+        })),
+        freshness,
+      };
+    }),
+    // Nothing counts as ignored: the plugin reports its own changes.
+    filterIgnoredPaths: Effect.fn("ManifestVcsDriver.filterIgnoredPaths")(function* () {
+      return yield* Effect.succeed([]);
+    }),
+    initRepository: Effect.fn("ManifestVcsDriver.initRepository")(function* () {
+      return yield* unsupported("initRepository", "Plugins cannot create repositories.");
+    }),
+  });
+});

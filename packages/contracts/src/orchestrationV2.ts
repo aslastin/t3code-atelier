@@ -1627,6 +1627,8 @@ export const OrchestrationV2Checkpoint = Schema.Struct({
   files: Schema.Array(OrchestrationV2CheckpointFileSummary),
   filesTotal: Schema.optionalKey(OrchestrationV2CheckpointFileTotals),
   capturedAt: Schema.DateTimeUtc,
+  /** Atelier fork: why a VCS plugin's repository has no snapshot for this turn. */
+  unavailableReason: Schema.optionalKey(Schema.String),
 });
 export type OrchestrationV2Checkpoint = typeof OrchestrationV2Checkpoint.Type;
 

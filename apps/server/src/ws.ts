@@ -234,6 +234,8 @@ import * as ScratchThreadPromotion from "./project/ScratchThreadPromotion.ts";
 import { mutateProjectWithClone } from "./project/ProjectMutation.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as TopicService from "./topics/TopicService.ts";
+import * as PluginService from "./plugins/PluginService.ts";
+import { VcsPluginDrivers } from "./plugins/VcsPluginDrivers.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -1527,6 +1529,7 @@ export const layerWsRpc = (
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
       const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
       const topics = yield* TopicService.TopicService;
+      const plugins = yield* PluginService.PluginService;
       const repositoryIdentityResolver =
         yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
       const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
@@ -2998,6 +3001,11 @@ export const layerWsRpc = (
         [WS_METHODS.subscribeProjectClones]: () => projectCloneTracker.stream,
         [WS_METHODS.threadTopicsMutate]: (mutation) => topics.mutate(mutation),
         [WS_METHODS.subscribeThreadTopics]: () => topics.stream,
+        [WS_METHODS.pluginsList]: () => plugins.list,
+        [WS_METHODS.pluginsImport]: (input) => plugins.importFolder(input.path),
+        [WS_METHODS.pluginsRemove]: (input) => plugins.remove(input.id),
+        [WS_METHODS.pluginsSetEnabled]: (input) => plugins.setEnabled(input.id, input.enabled),
+        [WS_METHODS.pluginsRecheck]: (input) => plugins.recheck(input.id),
         [WS_METHODS.sourceControlPublishRepository]: (input) =>
           sourceControlRepositories.publishRepository(input).pipe(
             // A failed push still leaves the new remote added.
@@ -3703,6 +3711,7 @@ export const layer = Layer.unwrap(
     const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
     const peerThreadRelay = yield* PeerThreadRelay.PeerThreadRelay;
     const peerClientPairing = yield* PeerClientPairing.PeerClientPairing;
+    const pluginDrivers = yield* VcsPluginDrivers;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3812,7 +3821,10 @@ export const layer = Layer.unwrap(
                       Layer.provide(SourceControlBuiltInDrivers.layer),
                       Layer.provideMerge(GitVcsDriver.layer),
                       Layer.provide(
-                        VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
+                        VcsDriverRegistry.layer.pipe(
+                          Layer.provide(VcsProjectConfig.layer),
+                          Layer.provide(Layer.succeed(VcsPluginDrivers, pluginDrivers)),
+                        ),
                       ),
                     ),
                   ),

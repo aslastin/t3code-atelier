@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import {
@@ -14,6 +15,7 @@ import {
   type VcsError,
   type VcsRepositoryIdentity,
 } from "@t3tools/contracts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import * as VcsProjectConfig from "./VcsProjectConfig.ts";
 import * as VcsDriver from "./VcsDriver.ts";
@@ -45,26 +47,40 @@ export class VcsDriverRegistry extends Context.Service<
   }
 >()("t3/vcs/VcsDriverRegistry") {}
 
+type DriverMap = ReadonlyMap<VcsDriverKind, VcsDriver.VcsDriver["Service"]>;
+
 export const makeWithDrivers = Effect.fn("VcsDriverRegistry.makeWithDrivers")(function* (
-  additionalDrivers: ReadonlyMap<VcsDriverKind, VcsDriver.VcsDriver["Service"]>,
+  staticDrivers: DriverMap,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const projectConfig = yield* VcsProjectConfig.VcsProjectConfig;
   const git = yield* GitVcsDriver.makeVcsDriver;
-  const get: VcsDriverRegistry["Service"]["get"] = (kind) => {
-    const driver = kind === GIT_VCS_KIND ? git : additionalDrivers.get(kind);
-    if (!driver) {
-      return Effect.fail(
-        new VcsUnsupportedOperationError({
+  // Plugins come and go while the server runs, so read their drivers on every lookup.
+  const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
+  const currentDrivers: Effect.Effect<DriverMap> =
+    plugins === undefined
+      ? Effect.succeed(staticDrivers)
+      : plugins.current.pipe(
+          Effect.map((pluginDrivers) =>
+            staticDrivers.size === 0
+              ? pluginDrivers
+              : new Map([...staticDrivers, ...pluginDrivers]),
+          ),
+        );
+  const get: VcsDriverRegistry["Service"]["get"] = Effect.fn("VcsDriverRegistry.get")(
+    function* (kind) {
+      const driver = kind === GIT_VCS_KIND ? git : (yield* currentDrivers).get(kind);
+      if (!driver) {
+        return yield* new VcsUnsupportedOperationError({
           operation: "VcsDriverRegistry.get",
           kind,
           detail: `No ${kind} VCS driver is registered.`,
-        }),
-      );
-    }
-    return Effect.succeed(driver);
-  };
+        });
+      }
+      return driver;
+    },
+  );
 
   const detectWithDriver = Effect.fn("VcsDriverRegistry.detectWithDriver")(function* (
     kind: VcsDriverKind,
@@ -161,6 +177,7 @@ export const makeWithDrivers = Effect.fn("VcsDriverRegistry.makeWithDrivers")(fu
         return yield* detectWithDriver(kind, yield* get(kind), input.cwd);
       }
 
+      const additionalDrivers = yield* currentDrivers;
       if (additionalDrivers.size === 0) return yield* detectGit(input.cwd);
       const roots = new Map<string, VcsDriverHandle>();
       for (const [kind, driver] of additionalDrivers) {
@@ -217,7 +234,7 @@ export const makeWithDrivers = Effect.fn("VcsDriverRegistry.makeWithDrivers")(fu
 
   return VcsDriverRegistry.of({
     get hasAdditionalDrivers() {
-      return additionalDrivers.size > 0;
+      return staticDrivers.size > 0 || plugins?.hasAny() === true;
     },
     get,
     detect,

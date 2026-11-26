@@ -226,6 +226,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   issueLinkedThreads: Schema.optionalKey(Schema.Boolean),
   /** Atelier fork: serves thread topics. Upstream servers omit it, so clients hide topics. */
   threadTopics: Schema.optionalKey(Schema.Boolean),
+  /** Atelier fork: serves `plugins.*`. Upstream servers omit it, so clients hide the plugin list. */
+  vcsPlugins: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

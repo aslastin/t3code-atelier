@@ -454,6 +454,14 @@ import {
   ThreadTopicsSubscribeInput,
 } from "./threadTopics.ts";
 import {
+  PluginError,
+  PluginIdInput,
+  PluginImportInput,
+  PluginListInput,
+  PluginListResult,
+  PluginSetEnabledInput,
+} from "./plugins.ts";
+import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
   SourceControlDiscoveryResult,
@@ -712,6 +720,13 @@ export const WS_METHODS = {
   // Atelier fork: thread topics.
   threadTopicsMutate: "threadTopics.mutate",
   subscribeThreadTopics: "subscribeThreadTopics",
+
+  // Atelier fork: VCS plugins.
+  pluginsList: "plugins.list",
+  pluginsImport: "plugins.import",
+  pluginsRemove: "plugins.remove",
+  pluginsSetEnabled: "plugins.setEnabled",
+  pluginsRecheck: "plugins.recheck",
 
   subscribeVcsStatus: "subscribeVcsStatus",
   subscribeVcsBranch: "subscribeVcsBranch",
@@ -1616,6 +1631,37 @@ const WsSubscribeThreadTopicsRpc = Rpc.make(WS_METHODS.subscribeThreadTopics, {
   success: ThreadTopicsSnapshot,
   error: Schema.Union([ThreadTopicError, EnvironmentAuthorizationError]),
   stream: true,
+});
+
+// Every plugin call answers with the whole list; it is small.
+const WsPluginsListRpc = Rpc.make(WS_METHODS.pluginsList, {
+  payload: PluginListInput,
+  success: PluginListResult,
+  error: Schema.Union([PluginError, EnvironmentAuthorizationError]),
+});
+
+const WsPluginsImportRpc = Rpc.make(WS_METHODS.pluginsImport, {
+  payload: PluginImportInput,
+  success: PluginListResult,
+  error: Schema.Union([PluginError, EnvironmentAuthorizationError]),
+});
+
+const WsPluginsRemoveRpc = Rpc.make(WS_METHODS.pluginsRemove, {
+  payload: PluginIdInput,
+  success: PluginListResult,
+  error: Schema.Union([PluginError, EnvironmentAuthorizationError]),
+});
+
+const WsPluginsSetEnabledRpc = Rpc.make(WS_METHODS.pluginsSetEnabled, {
+  payload: PluginSetEnabledInput,
+  success: PluginListResult,
+  error: Schema.Union([PluginError, EnvironmentAuthorizationError]),
+});
+
+const WsPluginsRecheckRpc = Rpc.make(WS_METHODS.pluginsRecheck, {
+  payload: PluginIdInput,
+  success: PluginListResult,
+  error: Schema.Union([PluginError, EnvironmentAuthorizationError]),
 });
 
 const WsSourceControlPublishRepositoryRpc = Rpc.make(WS_METHODS.sourceControlPublishRepository, {
@@ -2557,6 +2603,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeProjectClonesRpc,
   WsThreadTopicsMutateRpc,
   WsSubscribeThreadTopicsRpc,
+  WsPluginsListRpc,
+  WsPluginsImportRpc,
+  WsPluginsRemoveRpc,
+  WsPluginsSetEnabledRpc,
+  WsPluginsRecheckRpc,
   WsProjectsListEntriesRpc,
   WsProjectsListIgnoredFilesRpc,
   WsProjectsReadFileRpc,

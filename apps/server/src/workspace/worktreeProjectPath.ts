@@ -38,6 +38,8 @@ export const worktreeRootForProject = Effect.fn("worktreeRootForProject")(
     folder: string,
     projectCwd: string | Effect.Effect<string | undefined>,
     isManagedRoot?: (candidate: string) => Effect.Effect<boolean>,
+    /** Marker paths of VCS plugins, which mark a checkout root as `.git` does. */
+    rootMarkers: ReadonlyArray<string> = [],
   ) {
     const resolved = path.resolve(folder);
     if (resolved !== folder) {
@@ -49,7 +51,13 @@ export const worktreeRootForProject = Effect.fn("worktreeRootForProject")(
         return folder;
       folder = resolved;
     }
-    const hasGit = (dir: string) => fs.exists(path.join(dir, ".git"));
+    const hasGit = Effect.fnUntraced(function* (dir: string) {
+      if (yield* fs.exists(path.join(dir, ".git"))) return true;
+      for (const marker of rootMarkers) {
+        if (yield* fs.exists(path.join(dir, marker))) return true;
+      }
+      return false;
+    });
     const gitDirectory = (dir: string) =>
       fs.stat(path.join(dir, ".git")).pipe(
         Effect.flatMap((info) =>

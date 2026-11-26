@@ -223,6 +223,13 @@ function route<A, E>(
   return runDriver?.(handle.driver.workflow ?? {}) ?? Effect.fail(unsupported(handle, operation));
 }
 
+/** Ref names a driver lists, for the checks a worktree launch runs before it creates one. */
+function driverRefNames(ops: VcsWorkflowOps, cwd: string, local: boolean) {
+  return ops
+    .listRefs?.({ cwd, ...(local ? { refKind: "local" as const } : {}) })
+    .pipe(Effect.map((result) => result.refs.map((ref) => ref.name)));
+}
+
 function driverStatus(
   handle: DriverHandle,
   input: VcsStatusInput,
@@ -286,6 +293,40 @@ const runDriverAction = Effect.fn("GitWorkflowService.runDriverAction")(function
   if (reporter) yield* reporter.publish({ ...context, kind: "action_finished", result });
   return result;
 });
+
+/**
+ * Worktrees of the checkout at `cwd`, as the VCS that owns it lists them. Needs only the driver
+ * registry, so services below the Git workflow (known workspaces) can ask too.
+ */
+export const makeListWorktrees =
+  (
+    registry: VcsDriverRegistry.VcsDriverRegistry["Service"],
+    git: GitVcsDriver.GitVcsDriver["Service"],
+  ) =>
+  (cwd: string): Effect.Effect<ReadonlyArray<string>, VcsWorkflowCommandError> => {
+    const operation = "GitWorkflowService.listWorktrees";
+    if (!registry.hasAdditionalDrivers) return git.listWorktreePaths(cwd);
+    return registry.resolve({ cwd }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new GitCommandError({
+            operation,
+            command: "vcs-route",
+            cwd,
+            detail: "Failed to resolve the VCS driver for this Git command.",
+            cause,
+          }),
+      ),
+      Effect.flatMap((handle) =>
+        route<ReadonlyArray<string>, GitCommandError>(
+          handle,
+          operation,
+          () => git.listWorktreePaths(cwd),
+          (ops) => ops.listWorktrees?.({ cwd }),
+        ),
+      ),
+    );
+  };
 
 /** @public */
 export const make = Effect.gen(function* () {
@@ -371,6 +412,8 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  const listWorktrees = makeListWorktrees(registry, git);
+
   const isGitCheckout = (cwd: string) =>
     registry.detect({ cwd }).pipe(
       Effect.map((handle) => handle?.kind === GIT_VCS_KIND),
@@ -394,28 +437,51 @@ export const make = Effect.gen(function* () {
       );
     }),
     hasCommit: Effect.fn("GitWorkflowService.hasCommit")(function (input) {
-      return routeCommand("GitWorkflowService.hasCommit", input.cwd, () =>
-        git
-          .execute({
-            operation: "GitWorkflowService.hasCommit",
-            cwd: input.cwd,
-            args: ["rev-parse", "--verify", `${input.refName}^{commit}`],
-            allowNonZeroExit: true,
-          })
-          .pipe(Effect.map((result) => result.exitCode === 0)),
+      return routeCommand(
+        "GitWorkflowService.hasCommit",
+        input.cwd,
+        () =>
+          git
+            .execute({
+              operation: "GitWorkflowService.hasCommit",
+              cwd: input.cwd,
+              args: ["rev-parse", "--verify", `${input.refName}^{commit}`],
+              allowNonZeroExit: true,
+            })
+            .pipe(Effect.map((result) => result.exitCode === 0)),
+        // A driver cannot resolve arbitrary revisions; its worktreeCreate reports a bad base.
+        (ops) => {
+          const branch = /^refs\/heads\/(.+)$/.exec(input.refName)?.[1];
+          if (branch === undefined) return Effect.succeed(true);
+          return driverRefNames(ops, input.cwd, true)?.pipe(
+            Effect.map((names) => names.includes(branch)),
+          );
+        },
       );
     }),
     hasRefNamed: Effect.fn("GitWorkflowService.hasRefNamed")(function (input) {
       // Pattern characters would widen the ref match.
       if (/[*?[\\]/.test(input.refName)) return Effect.succeed(false);
-      return routeCommand("GitWorkflowService.hasRefNamed", input.cwd, () =>
-        git
-          .execute({
-            operation: "GitWorkflowService.hasRefNamed",
-            cwd: input.cwd,
-            args: ["for-each-ref", "--count=1", "--format=%(refname)", `refs/**/${input.refName}`],
-          })
-          .pipe(Effect.map((result) => result.stdout.trim().length > 0)),
+      return routeCommand(
+        "GitWorkflowService.hasRefNamed",
+        input.cwd,
+        () =>
+          git
+            .execute({
+              operation: "GitWorkflowService.hasRefNamed",
+              cwd: input.cwd,
+              args: [
+                "for-each-ref",
+                "--count=1",
+                "--format=%(refname)",
+                `refs/**/${input.refName}`,
+              ],
+            })
+            .pipe(Effect.map((result) => result.stdout.trim().length > 0)),
+        (ops) =>
+          driverRefNames(ops, input.cwd, false)?.pipe(
+            Effect.map((names) => names.includes(input.refName)),
+          ),
       );
     }),
     status: Effect.fn("GitWorkflowService.status")(function* (input) {
@@ -565,16 +631,14 @@ export const make = Effect.gen(function* () {
       );
     }),
     listWorktrees: Effect.fn("GitWorkflowService.listWorktrees")(function (cwd) {
-      return routeCommand<ReadonlyArray<string>>(
-        "GitWorkflowService.listWorktrees",
-        cwd,
-        () => git.listWorktreePaths(cwd),
-        (ops) => ops.listWorktrees?.({ cwd }),
-      );
+      return listWorktrees(cwd);
     }),
     listLocalBranchNames: Effect.fn("GitWorkflowService.listLocalBranchNames")(function (cwd) {
-      return routeCommand("GitWorkflowService.listLocalBranchNames", cwd, () =>
-        git.listLocalBranchNames(cwd),
+      return routeCommand(
+        "GitWorkflowService.listLocalBranchNames",
+        cwd,
+        () => git.listLocalBranchNames(cwd),
+        (ops) => driverRefNames(ops, cwd, true)?.pipe(Effect.map((names) => [...names])),
       );
     }),
     fetchRemote: Effect.fn("GitWorkflowService.fetchRemote")(function (input) {
@@ -608,22 +672,32 @@ export const make = Effect.gen(function* () {
     ),
     resolveWorktreeBaseRemote: Effect.fn("GitWorkflowService.resolveWorktreeBaseRemote")(
       function (input) {
-        return routeCommand("GitWorkflowService.resolveWorktreeBaseRemote", input.cwd, () =>
-          git.resolveWorktreeBaseRemote(input),
+        return routeCommand(
+          "GitWorkflowService.resolveWorktreeBaseRemote",
+          input.cwd,
+          () => git.resolveWorktreeBaseRemote(input),
+          // A driver's worktreeCreate starts from the base it is given; there is nothing to fetch.
+          () => Effect.succeed(null),
         );
       },
     ),
     fetchWorktreeBaseCommit: Effect.fn("GitWorkflowService.fetchWorktreeBaseCommit")(
       function (input) {
-        return routeCommand("GitWorkflowService.fetchWorktreeBaseCommit", input.cwd, () =>
-          git.fetchWorktreeBaseCommit(input),
+        return routeCommand(
+          "GitWorkflowService.fetchWorktreeBaseCommit",
+          input.cwd,
+          () => git.fetchWorktreeBaseCommit(input),
+          () => Effect.succeed(null),
         );
       },
     ),
     resolveDefaultBranchName: Effect.fn("GitWorkflowService.resolveDefaultBranchName")(
       function (cwd, remoteName) {
-        return routeCommand("GitWorkflowService.resolveDefaultBranchName", cwd, () =>
-          git.resolveDefaultBranchName(cwd, remoteName),
+        return routeCommand(
+          "GitWorkflowService.resolveDefaultBranchName",
+          cwd,
+          () => git.resolveDefaultBranchName(cwd, remoteName),
+          () => Effect.succeed(null),
         );
       },
     ),
