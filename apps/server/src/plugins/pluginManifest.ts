@@ -19,6 +19,8 @@ export const COMMAND_PLACEHOLDERS: Readonly<Record<ManifestCommandName, Readonly
   listRefs: ["repositoryRoot"],
   commit: ["repositoryRoot", "messageFile", "pathsFile"],
   diff: ["repositoryRoot", "pathsFile"],
+  log: ["repositoryRoot"],
+  branchCreate: ["repositoryRoot", "newRef"],
   push: ["repositoryRoot"],
   pull: ["repositoryRoot"],
   worktreeCreate: ["repositoryRoot", "path", "newRef", "baseRef"],

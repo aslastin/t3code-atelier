@@ -10,6 +10,7 @@ import {
   VcsPluginRefsOutput,
   VcsPluginRemotesOutput,
   VcsPluginCheckpointDiffOutput,
+  VcsPluginLogOutput,
   VcsPluginStatusOutput,
   VcsPluginWorktreeCreateOutput,
   VcsPluginWorktreeListOutput,
@@ -286,6 +287,26 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
         };
       }),
     }),
+    ...(commands.log && {
+      recentCommitSubjects: Effect.fn("ManifestVcsDriver.recentCommitSubjects")(
+        function* (request) {
+          return (yield* json("log", VcsPluginLogOutput, request.cwd)).subjects.slice(0, 20);
+        },
+      ),
+    }),
+    ...(commands.branchCreate && {
+      createBranch: Effect.fn("ManifestVcsDriver.createBranch")(function* (request) {
+        const root = yield* repositoryRoot(request.cwd).pipe(
+          Effect.mapError(toCommandError("branchCreate", request.cwd)),
+        );
+        yield* runner
+          .run("branchCreate", {
+            cwd: request.cwd,
+            values: { repositoryRoot: root, newRef: request.refName },
+          })
+          .pipe(Effect.mapError(toCommandError("branchCreate", request.cwd)));
+      }),
+    }),
     ...(commands.diff && {
       workingDiff: Effect.fn("ManifestVcsDriver.workingDiff")(function* (request) {
         const out = yield* withTextFile(request.filePaths?.join("\n"), (pathsFile) =>
@@ -419,6 +440,7 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
       supportsAtomicSnapshot: false,
       supportsPushDefaultRemote: false,
       ignoreClassifier: "git-compatible-fallback",
+      supportsBranchCreate: commands.branchCreate !== undefined,
     },
     execute: Effect.fn("ManifestVcsDriver.execute")(function* () {
       return yield* unsupported("execute", "Plugins run only their own commands.");

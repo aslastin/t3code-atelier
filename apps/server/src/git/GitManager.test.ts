@@ -3670,12 +3670,16 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         branch: "feature",
         summary: "notes.txt (+1 -0)",
         patch: "diff --git a/notes.txt b/notes.txt",
+        subjects: ["Fix the parser"],
       });
 
-      expect(message).toBe("Add notes\n\nExplain the notes.");
+      expect(message).toEqual({ commitMessage: "Add notes\n\nExplain the notes." });
       expect(seen?.summary).toBe("notes.txt (+1 -0)");
       expect(seen?.patch).toBe("diff --git a/notes.txt b/notes.txt");
-      expect(seen?.instructions ?? "").not.toContain("Recent commit subjects");
+      // The VCS's own subjects, not the surrounding checkout's "Initial commit".
+      expect(seen?.instructions).toMatch(
+        /Recent commit subjects from this repository:\nFix the parser$/,
+      );
     }),
   );
 

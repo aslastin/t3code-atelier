@@ -124,6 +124,16 @@ export interface VcsWorkflowOps {
     { readonly cwd: string; readonly filePaths?: ReadonlyArray<string> | undefined },
     string
   >;
+  /** Recent commit subjects, newest first, for the style of written commit messages. */
+  readonly recentCommitSubjects?: WorkflowOperation<
+    { readonly cwd: string },
+    ReadonlyArray<string>
+  >;
+  /** Starts a branch from the checkout and switches to it, keeping uncommitted changes. */
+  readonly createBranch?: WorkflowOperation<
+    { readonly cwd: string; readonly refName: string },
+    void
+  >;
   /** Forgets worktrees whose folder is gone, before one is created at the same path again. */
   readonly pruneWorktrees?: WorkflowOperation<{ readonly cwd: string }, void>;
   readonly commit?: WorkflowOperation<

@@ -96,7 +96,13 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
         pr: null,
       };
       const commits: string[] = [];
-      const written: Array<{ summary: string; patch: string }> = [];
+      const written: Array<{
+        summary: string;
+        patch: string;
+        subjects: ReadonlyArray<string> | undefined;
+        includeBranch: boolean | undefined;
+      }> = [];
+      const branches: string[] = [];
       const driver = testVcsDriver({
         capabilities,
         workflow: {
@@ -108,6 +114,15 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
               return { status: "created" as const, commitSha: "abc" };
             }),
           workingDiff: () => Effect.succeed("diff --git a/a.txt b/a.txt"),
+          recentCommitSubjects: () => Effect.succeed(["Fix the parser"]),
+          listRefs: () =>
+            Effect.succeed({
+              refs: [{ name: "trunk" }, { name: "feature/change-a-txt" }],
+            } as never),
+          createBranch: (input) =>
+            Effect.sync(() => {
+              branches.push(input.refName);
+            }),
         },
       });
       const handle = {
@@ -136,8 +151,16 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
             Layer.mock(GitManager.GitManager)({
               writeCommitMessage: (input) =>
                 Effect.sync(() => {
-                  written.push({ summary: input.summary, patch: input.patch });
-                  return "Change a.txt";
+                  written.push({
+                    summary: input.summary,
+                    patch: input.patch,
+                    subjects: input.subjects,
+                    includeBranch: input.includeBranch,
+                  });
+                  return {
+                    commitMessage: "Change a.txt",
+                    ...(input.includeBranch ? { branch: "change-a-txt" } : {}),
+                  };
                 }),
             }),
           ),
@@ -181,12 +204,28 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
       assert.equal(result.commit.commitSha, "abc");
       assert.deepEqual(events, ["action_started", "phase_started", "action_finished"]);
 
-      // Without a typed message, it is written from the driver's status and patch, as for Git.
+      // Without a typed message, it is written from the driver's status, patch and log, as for Git.
       yield* workflow.runStackedAction({ cwd, actionId: "generated", action: "commit" });
-      assert.deepEqual(written, [
-        { summary: "a.txt (+1 -0)", patch: "diff --git a/a.txt b/a.txt" },
-      ]);
+      const writtenFor = (includeBranch: boolean) => ({
+        summary: "a.txt (+1 -0)",
+        patch: "diff --git a/a.txt b/a.txt",
+        subjects: ["Fix the parser"],
+        includeBranch,
+      });
+      assert.deepEqual(written, [writtenFor(false)]);
       assert.deepEqual(commits, ["save", "Change a.txt"]);
+
+      // On a new branch: named with the message, made unique among the driver's refs.
+      const onBranch = yield* workflow.runStackedAction({
+        cwd,
+        actionId: "branch",
+        action: "commit",
+        featureBranch: true,
+      });
+      assert.deepEqual(written, [writtenFor(false), writtenFor(true)]);
+      assert.deepEqual(branches, ["feature/change-a-txt-2"]);
+      assert.deepEqual(onBranch.branch, { status: "created", name: "feature/change-a-txt-2" });
+      assert.deepEqual(commits, ["save", "Change a.txt", "Change a.txt"]);
     }),
   );
 

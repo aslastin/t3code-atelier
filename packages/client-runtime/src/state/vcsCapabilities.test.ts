@@ -45,8 +45,9 @@ describe("vcsCapabilities", () => {
       { id: "push" },
     ]);
     expect(vcsAllows(plugin(), "worktree")).toBe(false);
-    // A new branch goes through Git, whatever else the plugin supports.
+    // A new branch needs Git, or a plugin that can start one.
     expect(vcsAllows(plugin({ supportsPush: true }), "featureBranch")).toBe(false);
+    expect(vcsAllows(plugin({ supportsBranchCreate: true }), "featureBranch")).toBe(true);
     expect(vcsAllows(plugin({ kind: VcsDriverKind.make("git") }), "featureBranch")).toBe(true);
   });
 

@@ -148,6 +148,15 @@ describe("ManifestVcsDriver", () => {
       });
       const after = yield* driver!.workflow!.status!({ cwd: repository });
       assert.isFalse(after.hasWorkingTreeChanges);
+      assert.deepStrictEqual(yield* driver!.workflow!.recentCommitSubjects!({ cwd: repository }), [
+        "Change a",
+      ]);
+      assert.isTrue(driver!.capabilities?.supportsBranchCreate);
+      yield* driver!.workflow!.createBranch!({ cwd: repository, refName: "feature/next" });
+      assert.strictEqual(
+        (yield* driver!.workflow!.status!({ cwd: repository })).refName,
+        "feature/next",
+      );
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 

@@ -32,7 +32,12 @@ import {
   type VcsStatusResult,
 } from "@t3tools/contracts";
 
-import { toLocalStatusPart, toRemoteStatusPart } from "@t3tools/shared/git";
+import {
+  resolveAutoFeatureBranchName,
+  sanitizeFeatureBranchName,
+  toLocalStatusPart,
+  toRemoteStatusPart,
+} from "@t3tools/shared/git";
 import type { VcsWorkflowOps } from "../vcs/VcsDriver.ts";
 import * as GitManager from "./GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -252,25 +257,29 @@ const runDriverAction = Effect.fn("GitWorkflowService.runDriverAction")(function
   writeCommitMessage: GitManager.GitManager["Service"]["writeCommitMessage"],
 ) {
   const { action, cwd } = input;
-  if (input.featureBranch || action === "create_pr" || action === "commit_push_pr") {
-    return yield* unsupported(handle, input.featureBranch ? "featureBranch" : "create_pr");
+  if (action === "create_pr" || action === "commit_push_pr") {
+    return yield* unsupported(handle, "create_pr");
   }
   const ops = handle.driver.workflow;
   const commit = action === "push" ? undefined : ops?.commit;
   const push = action === "commit" ? undefined : ops?.push;
+  const createBranch = input.featureBranch ? ops?.createBranch : undefined;
   // Check the whole request before committing anything on a driver that cannot push.
+  if (input.featureBranch && (!createBranch || action === "push"))
+    return yield* unsupported(handle, "featureBranch");
   if (action !== "push" && !commit) return yield* unsupported(handle, "commit");
   if (action !== "commit" && !push) return yield* unsupported(handle, "push");
 
   const context = { action, cwd, actionId: options?.actionId ?? input.actionId };
   const reporter = options?.progressReporter;
-  const phases: Array<"commit" | "push"> = [];
+  const phases: Array<"branch" | "commit" | "push"> = [];
+  if (createBranch) phases.push("branch");
   if (commit) phases.push("commit");
   if (push) phases.push("push");
   if (reporter) yield* reporter.publish({ ...context, kind: "action_started", phases });
   const skipped = { status: "skipped_not_requested" } as const;
   const runPhase = <A, E extends { readonly message: string }>(
-    phase: "commit" | "push",
+    phase: "branch" | "commit" | "push",
     effect: Effect.Effect<A, E>,
   ) =>
     reporter
@@ -281,44 +290,91 @@ const runDriverAction = Effect.fn("GitWorkflowService.runDriverAction")(function
           ),
         )
       : effect;
+
+  // The message, and for a new branch its name, written as for Git from what the driver says
+  // changed. Null when nothing selected changed.
+  const writeMessage = Effect.fn("GitWorkflowService.writeDriverCommitMessage")(function* (
+    includeBranch: boolean,
+  ) {
+    const typed = input.commitMessage?.trim();
+    if (typed && !includeBranch) return { commitMessage: typed };
+    const status = yield* driverStatus(handle, { cwd });
+    const selected = input.filePaths ? new Set(input.filePaths) : null;
+    const files = status.workingTree.files.filter(
+      (file) => selected === null || selected.has(file.path),
+    );
+    if (files.length === 0) return null;
+    if (typed) return { commitMessage: typed };
+    if (reporter)
+      yield* reporter.publish({
+        ...context,
+        kind: "phase_started",
+        phase: includeBranch ? "branch" : "commit",
+        label: "Generating commit message...",
+      });
+    const patch = yield* (
+      ops?.workingDiff?.({ cwd, filePaths: input.filePaths }) ?? Effect.succeed("")
+    ).pipe(Effect.orElseSucceed(() => ""));
+    const subjects = yield* (
+      ops?.recentCommitSubjects?.({ cwd }) ?? Effect.succeed<ReadonlyArray<string>>([])
+    ).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+    return yield* writeCommitMessage({
+      cwd,
+      threadId: input.threadId,
+      branch: status.refName,
+      summary: files
+        .map((file) => `${file.path} (+${file.insertions} -${file.deletions})`)
+        .join("\n"),
+      patch,
+      subjects,
+      includeBranch,
+    });
+  });
+
+  let prepared: { readonly commitMessage: string; readonly branch?: string | undefined } | null =
+    null;
+  const branch: GitRunStackedActionResult["branch"] = createBranch
+    ? yield* runPhase(
+        "branch",
+        Effect.gen(function* () {
+          const message = yield* writeMessage(true);
+          prepared = message;
+          if (message === null)
+            return yield* new GitCommandError({
+              vcs: handle.kind,
+              operation: `${handle.kind}.featureBranch`,
+              command: "branchCreate",
+              cwd,
+              detail: "Cannot create a feature branch because there are no changes to commit.",
+            });
+          const listed = ops ? driverRefNames(ops, cwd, true) : undefined;
+          const existing =
+            listed === undefined
+              ? []
+              : yield* listed.pipe(Effect.orElseSucceed((): string[] => []));
+          const name = resolveAutoFeatureBranchName(
+            existing,
+            message.branch ?? sanitizeFeatureBranchName(message.commitMessage.split("\n")[0] ?? ""),
+          );
+          yield* createBranch({ cwd, refName: name });
+          return { status: "created" as const, name };
+        }),
+      )
+    : skipped;
   const result: GitRunStackedActionResult = {
     action,
-    branch: skipped,
+    branch,
     commit: commit
       ? yield* runPhase(
           "commit",
           Effect.gen(function* () {
-            const typed = input.commitMessage?.trim();
-            if (typed)
-              return yield* commit({ cwd, commitMessage: typed, filePaths: input.filePaths });
-            // Written as for Git, from what the driver says changed.
-            const status = yield* driverStatus(handle, { cwd });
-            const selected = input.filePaths ? new Set(input.filePaths) : null;
-            const files = status.workingTree.files.filter(
-              (file) => selected === null || selected.has(file.path),
-            );
-            if (files.length === 0) return { status: "skipped_no_changes" as const };
-            if (reporter)
-              yield* reporter.publish({
-                ...context,
-                kind: "phase_started",
-                phase: "commit",
-                label: "Generating commit message...",
-              });
-            const patch = yield* (
-              handle.driver.workflow?.workingDiff?.({ cwd, filePaths: input.filePaths }) ??
-              Effect.succeed("")
-            ).pipe(Effect.orElseSucceed(() => ""));
-            const commitMessage = yield* writeCommitMessage({
+            const message = prepared ?? (yield* writeMessage(false));
+            if (message === null) return { status: "skipped_no_changes" as const };
+            return yield* commit({
               cwd,
-              threadId: input.threadId,
-              branch: status.refName,
-              summary: files
-                .map((file) => `${file.path} (+${file.insertions} -${file.deletions})`)
-                .join("\n"),
-              patch,
+              commitMessage: message.commitMessage,
+              filePaths: input.filePaths,
             });
-            return yield* commit({ cwd, commitMessage, filePaths: input.filePaths });
           }),
         )
       : skipped,

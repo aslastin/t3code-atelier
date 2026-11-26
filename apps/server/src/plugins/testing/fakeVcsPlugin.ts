@@ -199,6 +199,18 @@ switch (command) {
     out({ commitSha: "kite-" + count, subject: message.split("\n")[0] });
     break;
   }
+  case "log": {
+    const log = path.join(kite, "commits.log");
+    const subjects = fs.existsSync(log) ? fs.readFileSync(log, "utf8").split("\n").filter(Boolean) : [];
+    out({ subjects: subjects.reverse() });
+    break;
+  }
+  case "branch-create": {
+    const [ref] = args;
+    fs.writeFileSync(path.join(kite, "HEAD"), ref + "\n");
+    fs.writeFileSync(path.join(kite, "refs.json"), JSON.stringify([...readRefs(), ref]));
+    break;
+  }
   case "diff":
     out({ patch: patch(path.join(kite, "base"), root) });
     break;
@@ -256,6 +268,8 @@ export function writeFakeVcsPlugin(directory: string, options: FakeVcsPluginOpti
           listRefs: [kite, "refs"],
           commit: [kite, "commit", "{messageFile}", "{pathsFile}"],
           diff: [kite, "diff"],
+          log: [kite, "log"],
+          branchCreate: [kite, "branch-create", "{newRef}"],
           worktreeCreate: [kite, "worktree-add", "{path}", "{newRef}", "{baseRef}"],
           worktreeRemove: [kite, "worktree-remove", "{path}"],
           worktreeAttach: [kite, "worktree-attach", "{path}", "{ref}"],

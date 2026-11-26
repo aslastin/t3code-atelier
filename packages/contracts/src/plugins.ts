@@ -32,6 +32,10 @@ export const VcsPluginCommands = Schema.Struct({
   worktreeRemove: Schema.optionalKey(PluginArgv),
   /** Uncommitted changes as a patch, for writing a commit message. */
   diff: Schema.optionalKey(PluginArgv),
+  /** Recent commit subjects, so written messages follow the repository's style. */
+  log: Schema.optionalKey(PluginArgv),
+  /** Starts a branch from the checkout and switches to it, keeping uncommitted changes. */
+  branchCreate: Schema.optionalKey(PluginArgv),
   /** Checks an existing ref out into a new worktree, to bring back one that was removed. */
   worktreeAttach: Schema.optionalKey(PluginArgv),
   worktreeList: Schema.optionalKey(PluginArgv),
@@ -97,6 +101,12 @@ export const VcsPluginStatusOutput = Schema.Struct({
   behindCount: Schema.optionalKey(NonNegativeInt),
 });
 export type VcsPluginStatusOutput = typeof VcsPluginStatusOutput.Type;
+
+export const VcsPluginLogOutput = Schema.Struct({
+  /** Newest first. */
+  subjects: Schema.Array(Schema.String),
+});
+export type VcsPluginLogOutput = typeof VcsPluginLogOutput.Type;
 
 export const VcsPluginRemotesOutput = Schema.Struct({
   remotes: Schema.Array(

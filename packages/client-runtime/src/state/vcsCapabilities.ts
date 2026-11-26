@@ -28,9 +28,9 @@ export function vcsAllows(status: CapabilityStatus, capability: VcsCapability): 
       return capabilities.supportsWorktrees;
     case "reviewDiff":
       return capabilities.supportsReviewDiff;
-    // "Commit on a new branch" creates and switches branches through Git.
+    // "Commit on a new branch": Git, or a plugin that can start a branch from the checkout.
     case "featureBranch":
-      return capabilities.kind === GIT_VCS_KIND;
+      return capabilities.kind === GIT_VCS_KIND || capabilities.supportsBranchCreate === true;
   }
 }
 

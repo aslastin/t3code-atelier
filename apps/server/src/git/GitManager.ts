@@ -200,7 +200,14 @@ export class GitManager extends Context.Service<
       readonly branch: string | null;
       readonly summary: string;
       readonly patch: string;
-    }) => Effect.Effect<string, GitManagerServiceError>;
+      /** The VCS's recent commit subjects, newest first, for the repository-conventions style. */
+      readonly subjects?: ReadonlyArray<string> | undefined;
+      /** Also name a feature branch for the commit. */
+      readonly includeBranch?: boolean | undefined;
+    }) => Effect.Effect<
+      { readonly commitMessage: string; readonly branch?: string | undefined },
+      GitManagerServiceError
+    >;
     /** Pushes the checkout's branch when needed, then opens its PR or returns the one already open. */
     readonly createPullRequest: (input: {
       readonly cwd: string;
@@ -4089,13 +4096,17 @@ export const make = Effect.gen(function* () {
     "GitManager.writeCommitMessage",
   )(function* (input) {
     const settings = yield* textGenerationSettingsFor(input, "writeCommitMessage");
-    const policy = yield* resolveStylePolicy(input.cwd, settings, () => Effect.succeed([]));
+    // Subjects from the VCS that owns the repository, never the Git log of a checkout around it.
+    const policy = yield* resolveStylePolicy(input.cwd, settings, () =>
+      Effect.succeed(input.subjects ?? []),
+    );
     const generated = yield* textGeneration
       .generateCommitMessage({
         cwd: input.cwd,
         branch: input.branch,
         stagedSummary: limitContext(input.summary, 8_000),
         stagedPatch: limitContext(input.patch, 50_000),
+        ...(input.includeBranch ? { includeBranch: true } : {}),
         ...(policy ? { policy } : {}),
         modelSelection: settings.modelSelection,
         projectId: settings.projectId,
@@ -4105,7 +4116,10 @@ export const make = Effect.gen(function* () {
           sanitizeCommitMessage(result, policy?.kind === "conventional_commits"),
         ),
       );
-    return formatCommitMessage(generated.subject, generated.body);
+    return {
+      commitMessage: formatCommitMessage(generated.subject, generated.body),
+      ...(generated.branch !== undefined ? { branch: generated.branch } : {}),
+    };
   });
 
   return GitManager.of({
