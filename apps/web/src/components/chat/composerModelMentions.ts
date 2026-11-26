@@ -20,7 +20,7 @@ export function composerModelItem(
   const descriptor = modelMentionEffortDescriptor(
     entry.models.find((model) => model.slug === option.slug)?.capabilities?.optionDescriptors,
   );
-  const choices = descriptor ? modelMentionEffortChoices(descriptor) : [];
+  const choices = descriptor ? modelMentionEffortChoices(descriptor, entry.driverKind) : [];
   return {
     id: `model:${entry.instanceId}:${option.slug}`,
     type: "model",
@@ -105,14 +105,20 @@ export function composerModelEffortItems(
   model: ComposerModelItem,
   defaultLabel: string,
 ): ComposerModelEffortItem[] {
+  const effort = model.effort;
   return [
-    { value: null, label: defaultLabel },
-    ...(model.effort?.choices ?? []).map((choice) => ({ value: choice.id, label: choice.label })),
-  ].map(({ value, label }) => ({
+    { value: null, label: defaultLabel, description: "" },
+    ...(effort?.choices ?? []).map((choice) => ({
+      value: choice.id,
+      label: choice.label,
+      // A level labelled like Default, as OpenCode's literal `default` variant, shows what it writes.
+      description: choice.label === defaultLabel ? `${effort?.optionId}=${choice.id}` : "",
+    })),
+  ].map(({ value, label, description }) => ({
     id: composerModelEffortItemId(value),
     type: "model-effort",
     value,
     label,
-    description: "",
+    description,
   }));
 }

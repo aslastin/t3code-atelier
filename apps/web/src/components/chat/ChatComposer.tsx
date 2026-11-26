@@ -1223,6 +1223,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const activeModelEffortStep =
     modelEffortStep !== null &&
     !isLiteralPendingAnswer &&
+    // A submitted answer locks the editor; a level picked now would change what no longer sends.
+    !activePendingIsResponding &&
     modelEffortStep.draftKey === composerDraftTargetKey &&
     modelEffortStep.target.cursor === composerCursor &&
     (modelEffortStep.target.kind === "insert"
@@ -2304,7 +2306,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const returnToModelList = () => {
     const step = activeModelEffortStep;
-    if (step?.target.kind !== "insert" || !replaceStepMention(step.target, null)) return;
+    if (step?.target.kind !== "insert") return;
+    const { target } = step;
+    const restored =
+      composerEditorRef.current?.replaceModelMention(target.start, target.source, target.query, {
+        removeFollowingSpace: target.addedSpace,
+      }) || replaceStepMention(target, null);
+    if (!restored) return;
     setModelEffortStep(null);
     setComposerHighlightedItemId(step.model.id);
     setComposerHighlightedSearchKey(step.target.modelSearchKey);

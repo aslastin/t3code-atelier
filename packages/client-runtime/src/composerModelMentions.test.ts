@@ -117,6 +117,7 @@ describe("collectComposerModelMentions", () => {
     ["agent effort?", "high"],
     ["_deep_", "_max_"],
     ["thought_level", "high-_fast_-v2"],
+    ["agent/_effort", "high"],
   ])("round-trips option %s with value %s as one reference", (optionId, value) => {
     const source = formatComposerModelMention("acp", "agent", { optionId, value });
     // A `_` outside a word would read as emphasis in a sent message's Markdown.
@@ -203,15 +204,14 @@ describe("modelMentionEffortDescriptor", () => {
   });
 
   it("offers levels without the choices that send no effort or prompt-injected levels", () => {
-    expect(modelMentionEffortChoices(select("effort")).map((choice) => choice.id)).toEqual([
-      "low",
-      "high",
-    ]);
-    // OpenCode distinguishes its literal `default` variant from sending none.
-    expect(modelMentionEffortChoices(select("variant")).map((choice) => choice.id)).toEqual([
-      "default",
-      "low",
-      "high",
-    ]);
+    const ids = (descriptor: ReturnType<typeof select>, driverKind: string) =>
+      modelMentionEffortChoices(descriptor, driverKind).map((choice) => choice.id);
+    expect(ids(select("effort"), "claudeAgent")).toEqual(["low", "high"]);
+    // Only Claude's `default` sends none; OpenCode's variant and an ACP level named so are real.
+    expect(ids(select("variant"), "opencode")).toEqual(["default", "low", "high"]);
+    expect(ids(select("effort"), "acp")).toEqual(["default", "low", "high"]);
+    expect(
+      ids({ ...select("effort"), options: [{ id: "\ud800", label: "Broken" }] }, "acp"),
+    ).toEqual([]);
   });
 });

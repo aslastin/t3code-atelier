@@ -234,7 +234,7 @@ export function buildComposerModelItems(
     }),
   ).map((option) => {
     const descriptor = modelMentionEffortDescriptor(option.capabilities?.optionDescriptors);
-    const choices = descriptor ? modelMentionEffortChoices(descriptor) : [];
+    const choices = descriptor ? modelMentionEffortChoices(descriptor, option.providerDriver) : [];
     return {
       id: `model:${option.key}`,
       type: "model",
@@ -265,15 +265,17 @@ export function buildComposerModelEffortItems(
   };
   const optionId = model.effort?.optionId;
   return [
-    { id: `${model.id}:effort-default`, effort: null, label: defaultLabel },
+    { id: `${model.id}:effort-default`, effort: null, label: defaultLabel, description: "" },
     ...(optionId
       ? (model.effort?.choices ?? []).map((choice) => ({
           id: `${model.id}:effort:${choice.id}`,
           effort: { optionId, value: choice.id },
           label: choice.label,
+          // A level labelled like Default, as OpenCode's literal `default` variant, shows what it writes.
+          description: choice.label === defaultLabel ? `${optionId}=${choice.id}` : "",
         }))
       : []),
-  ].map((item) => ({ ...item, type: "model-effort", selection, description: "" }));
+  ].map((item) => ({ ...item, type: "model-effort", selection }));
 }
 
 export function resolveComposerCommandSelection(input: {
@@ -455,10 +457,11 @@ export function useComposerCommandMenu({
   });
 
   const [modelEffortStep, setModelEffortStep] = useState<ComposerModelEffortStep | null>(null);
-  // A caret moved into another `@`, `/` or `$` search hands the menu to that search.
+  // A caret moved into another `@`, `/` or `$` search, or a selection, hands the menu back.
   const activeModelEffortStep =
     enabled &&
     trigger === null &&
+    selection.start === selection.end &&
     modelEffortStep?.ownerKey === ownerKey &&
     modelEffortStep.draftMessage === draftMessage
       ? modelEffortStep

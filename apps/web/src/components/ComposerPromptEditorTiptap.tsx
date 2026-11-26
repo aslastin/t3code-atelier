@@ -159,6 +159,16 @@ export interface ComposerPromptEditorHandle {
   focusAt: (cursor: number) => void;
   focusAtEnd: () => void;
   readSelectionRange: () => { start: number; end: number };
+  /**
+   * Swaps the model chip whose source starts at prompt offset `start` for plain `text`, caret after
+   * it, without rebuilding the document, which would turn an `@` search before a space into a chip.
+   */
+  replaceModelMention: (
+    start: number,
+    source: string,
+    text: string,
+    options: { removeFollowingSpace: boolean },
+  ) => boolean;
   captureAttachmentInsertion: () => ComposerAttachmentInsertion | undefined;
   requestCitationComment: (request: ComposerCitationCommentRequest) => void;
   readSnapshot: () => {
@@ -386,6 +396,7 @@ function ComposerModelNodeView({ node, editor, getPos }: NodeViewProps) {
                     ? after + 1
                     : after;
                 editor.chain().focus().setTextSelection(spaced).run();
+                const openedDoc = editor.state.doc;
                 const chipAt = () => {
                   // A remount, such as a rich-text toggle, leaves this editor behind.
                   if (editor.isDestroyed) return null;
@@ -398,11 +409,12 @@ function ComposerModelNodeView({ node, editor, getPos }: NodeViewProps) {
                   instanceId,
                   model,
                   effort: effort ?? null,
-                  // Undo, typing, or moving or extending the caret leaves the menu nothing to edit.
-                  isCurrent: () => {
-                    const { selection } = editor.state;
-                    return selection.empty && selection.from === spaced && chipAt() !== null;
-                  },
+                  // Any edit, Undo, or moving or extending the caret leaves the menu behind.
+                  isCurrent: () =>
+                    !editor.isDestroyed &&
+                    editor.state.doc === openedDoc &&
+                    editor.state.selection.empty &&
+                    editor.state.selection.from === spaced,
                   // Edits the chip in place, so a chip with no space after it stays a chip.
                   apply: (nextSource, nextEffort) => {
                     const current = chipAt();
@@ -1886,6 +1898,30 @@ function ComposerPromptEditorTiptapInner(
       readSelectionRange: () => {
         readSnapshot();
         return selectionRangeRef.current;
+      },
+      replaceModelMention: (start, source, text, { removeFollowingSpace }) => {
+        if (!editor || editor.isDestroyed) return false;
+        const run = serializeEditorDoc(editor.state.doc).runs.find(
+          (candidate) =>
+            candidate.kind === "token" &&
+            candidate.nodeName === "composer-model" &&
+            candidate.mdStart + candidate.openLen === start,
+        );
+        const node = run ? editor.state.doc.nodeAt(run.pmPos) : null;
+        if (!run || node?.attrs.source !== source) return false;
+        const after = run.pmPos + node.nodeSize;
+        const { doc } = editor.state;
+        const end =
+          removeFollowingSpace &&
+          after < doc.content.size &&
+          doc.textBetween(after, after + 1) === " "
+            ? after + 1
+            : after;
+        const tr = editor.state.tr.replaceWith(run.pmPos, end, editor.schema.text(text));
+        tr.setSelection(TextSelection.create(tr.doc, run.pmPos + text.length));
+        editor.view.dispatch(tr.scrollIntoView());
+        editor.view.focus();
+        return true;
       },
       captureAttachmentInsertion: () =>
         editor ? captureComposerAttachmentInsertion(editor) : undefined,

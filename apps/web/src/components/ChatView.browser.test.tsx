@@ -1327,10 +1327,12 @@ it("a picked model's levels keep the text around its mention and give way to edi
     await vi.waitFor(() => expect(prompt()).toBe("model:codex/gpt-5.5 today"));
   };
 
-  // Back keeps the space that was already there.
+  // Back keeps the space that was already there, and the search stays text, not a file chip.
   await pickBeforeToday();
   await userEvent.keyboard("{ArrowLeft}");
   await vi.waitFor(() => expect(prompt()).toBe("@gpt-5.5 today"));
+  await userEvent.keyboard("{Backspace}");
+  await vi.waitFor(() => expect(prompt()).toBe("@gpt-5. today"));
 
   // Selecting or deleting the text after the mention hands the keys back to the editor.
   await pickBeforeToday();
@@ -1340,4 +1342,19 @@ it("a picked model's levels keep the text around its mention and give way to edi
   await userEvent.keyboard("{Delete}");
   await expect.element(efforts).not.toBeInTheDocument();
   expect(prompt()).toBe("model:codex/gpt-5.5 oday");
+
+  // So does a delete after a chip whose level menu was reopened.
+  await pickBeforeToday();
+  await userEvent.keyboard("{ArrowDown}");
+  await expect
+    .element(page.getByRole("option", { selected: true, name: "Low", exact: true }))
+    .toBeVisible();
+  await userEvent.keyboard("{Enter}");
+  const low = page.getByRole("button", { name: "Reasoning effort Low. Change" });
+  await expect.element(low).toBeVisible();
+  await userEvent.click(low);
+  await expect.element(efforts).toBeVisible();
+  await userEvent.keyboard("{Delete}");
+  await expect.element(efforts).not.toBeInTheDocument();
+  expect(prompt()).toBe("model:codex/gpt-5.5?reasoningEffort=low oday");
 });

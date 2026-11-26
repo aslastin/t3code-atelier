@@ -40,12 +40,13 @@ function presentationsEqual(left: ModelMentionPresentation, right: ModelMentionP
 // Keyed per mention so provider status pushes don't rerender every message that names a model.
 const modelMentionPresentationAtom = Atom.family((key: string) =>
   Atom.make((get): ModelMentionPresentation | null => {
-    const [environmentId, instanceId, model, effortOptionId, effortValue] = key.split("\u0000") as [
+    // JSON, since an effort decoded from the prompt can hold any character.
+    const [environmentId, instanceId, model, effortOptionId, effortValue] = JSON.parse(key) as [
       string,
       string,
       string,
-      string | undefined,
-      string | undefined,
+      string | null,
+      string | null,
     ];
     if (!environmentId) return null;
     const config = get(serverEnvironment.configValueAtom(environmentId as EnvironmentId));
@@ -117,10 +118,15 @@ export function ModelMentionChip(props: {
   onEditEffort?: (() => void) | undefined;
 }) {
   const gt = useGT();
-  const effortKey = props.effort ? `\u0000${props.effort.optionId}\u0000${props.effort.value}` : "";
   const presentation = useAtomValue(
     modelMentionPresentationAtom(
-      `${props.environmentId ?? ""}\u0000${modelMentionKey(props.instanceId, props.model)}${effortKey}`,
+      JSON.stringify([
+        props.environmentId ?? "",
+        props.instanceId,
+        props.model,
+        props.effort?.optionId ?? null,
+        props.effort?.value ?? null,
+      ]),
     ),
   );
   if (!presentation) return props.source;

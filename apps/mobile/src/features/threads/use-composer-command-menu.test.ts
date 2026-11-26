@@ -191,6 +191,12 @@ describe("mobile model mentions", () => {
     if (model?.type !== "model") throw new Error("expected a model item");
     const levels = buildComposerModelEffortItems(model, "Default");
     expect(levels.map((item) => item.label)).toEqual(["Default", "Low", "High"]);
+    // OpenCode's literal `default` variant, labelled like Default, says what it writes.
+    const [, literal] = buildComposerModelEffortItems(
+      { ...model, effort: { optionId: "variant", choices: [{ id: "default", label: "Default" }] } },
+      "Default",
+    );
+    expect(literal?.description).toBe("variant=default");
     const inserted = resolveComposerCommandSelection({
       draftMessage: "Ask @gpt then",
       trigger: { rangeStart: 4, rangeEnd: 8 },

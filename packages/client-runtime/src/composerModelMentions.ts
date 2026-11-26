@@ -73,15 +73,14 @@ export function formatComposerModelMention(
 // a word, which Markdown would read as emphasis in a sent message. An option id keeps `.`, `:` and `/`,
 // which agents use in ids like `agent:effort`, since `=` always follows it.
 function encodeMentionPart(part: string, keep = ""): string {
-  let encoded = encodeURIComponent(part)
-    .replace(/[!'().*~]/gu, percentEncode)
-    .replace(/_/gu, (char, index: number, text: string) =>
-      WORD_CHAR.test(text[index - 1] ?? "") && WORD_CHAR.test(text[index + 1] ?? "")
-        ? char
-        : percentEncode(char),
-    );
+  let encoded = encodeURIComponent(part).replace(/[!'().*~]/gu, percentEncode);
   for (const char of keep) encoded = encoded.replaceAll(percentEncode(char), char);
-  return encoded;
+  // After restoring kept characters, so a `/_` in an id is seen as outside a word.
+  return encoded.replace(/_/gu, (char, index: number, text: string) =>
+    WORD_CHAR.test(text[index - 1] ?? "") && WORD_CHAR.test(text[index + 1] ?? "")
+      ? char
+      : percentEncode(char),
+  );
 }
 
 const WORD_CHAR = /^[\p{L}\p{N}]$/u;
@@ -105,20 +104,29 @@ export function modelMentionEffortDescriptor(
   return descriptor ?? null;
 }
 
-// Choices that send no effort, as the menu's own Default does. Claude's `effort` select spells it
-// `default`; elsewhere, as in OpenCode's variants, `default` can be a real level.
-function sendsNoEffort(descriptor: SelectProviderOptionDescriptor, choiceId: string): boolean {
+// Choices that send no effort, as the menu's own Default does. Claude spells it `default`; for
+// other agents, such as OpenCode's variants or an ACP agent's levels, `default` can be a real level.
+function sendsNoEffort(driverKind: string, choiceId: string): boolean {
   return (
-    choiceId === DEFAULT_VARIANT_CHOICE_ID || (descriptor.id === "effort" && choiceId === "default")
+    choiceId === DEFAULT_VARIANT_CHOICE_ID ||
+    (driverKind === "claudeAgent" && choiceId === "default")
   );
 }
 
+// A lone UTF-16 surrogate cannot be written into the prompt.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+
 /** Levels a mention offers besides Default. Prompt-injected levels like Ultrathink stay typed-only. */
-export function modelMentionEffortChoices(descriptor: SelectProviderOptionDescriptor) {
+export function modelMentionEffortChoices(
+  descriptor: SelectProviderOptionDescriptor,
+  driverKind: string,
+) {
+  if (LONE_SURROGATE.test(descriptor.id)) return [];
   return descriptor.options.filter(
     (choice) =>
-      !sendsNoEffort(descriptor, choice.id) &&
-      !descriptor.promptInjectedValues?.includes(choice.id),
+      !sendsNoEffort(driverKind, choice.id) &&
+      !descriptor.promptInjectedValues?.includes(choice.id) &&
+      !LONE_SURROGATE.test(choice.id),
   );
 }
 
