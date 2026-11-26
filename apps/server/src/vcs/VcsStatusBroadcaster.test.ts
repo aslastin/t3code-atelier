@@ -339,7 +339,7 @@ describe("VcsStatusBroadcaster", () => {
       const changes = yield* PubSub.unbounded<void>();
       const state = {
         currentLocalStatus: baseLocalStatus,
-        currentRemoteStatus: null,
+        currentRemoteStatus: remoteStatusWithPr as typeof remoteStatusWithPr | null,
         localStatusCalls: 0,
         remoteStatusCalls: 0,
         localInvalidationCalls: 0,
@@ -351,16 +351,21 @@ describe("VcsStatusBroadcaster", () => {
         const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
         const events = yield* Queue.unbounded<VcsStatusStreamEvent>();
         yield* Stream.runForEach(
-          broadcaster.streamStatus({ cwd: "/repo", includeRemote: false }),
+          broadcaster.streamStatus({ cwd: "/repo", includeRemote: true }),
           (event) => Queue.offer(events, event),
         ).pipe(Effect.forkScoped);
         assert.equal((yield* Queue.take(events))._tag, "snapshot");
-        // Turning worktrees off in the plugin changes the capabilities its status reports.
-        const withoutWorktrees = { ...baseLocalStatus, refName: "plugin-ref" };
-        state.currentLocalStatus = withoutWorktrees;
+        // A nearer plugin repository now owns the folder: its local status and no remote state,
+        // though the branch name is the same.
+        const pluginLocal = { ...baseLocalStatus };
+        state.currentLocalStatus = pluginLocal;
+        state.currentRemoteStatus = null;
         yield* PubSub.publish(changes, undefined);
-        const update = yield* Queue.take(events);
-        assert.deepStrictEqual(update, { _tag: "localUpdated", local: withoutWorktrees });
+        // The old repository's remote state, cached under the same branch name, is replaced.
+        let event = yield* Queue.take(events);
+        while (event._tag !== "remoteUpdated" || event.remote !== null)
+          event = yield* Queue.take(events);
+        assert.deepStrictEqual(event, { _tag: "remoteUpdated", remote: null });
       }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
     }),
   );

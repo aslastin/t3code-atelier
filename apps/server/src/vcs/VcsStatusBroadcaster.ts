@@ -1252,10 +1252,11 @@ export const make = Effect.gen(function* () {
         Effect.forEach(
           new Set([...detailedSubscribers.keys(), ...branches.keys()]),
           (cwd) =>
-            (detailedSubscribers.has(cwd)
-              ? refreshStatus(cwd, { localOnly: true })
-              : refreshBranchStatusCore(cwd)
-            ).pipe(Effect.ignore),
+            // A full refresh: the folder may now belong to another VCS, whose remote state differs
+            // even on a branch of the same name.
+            (detailedSubscribers.has(cwd) ? refreshStatus(cwd) : refreshBranchStatusCore(cwd)).pipe(
+              Effect.ignore,
+            ),
           { discard: true },
         ),
       ),
