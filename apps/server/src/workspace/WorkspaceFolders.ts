@@ -24,6 +24,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import { isWithinRoot } from "./KnownWorkspaces.ts";
 import * as TaskFolderStore from "./TaskFolderStore.ts";
 
@@ -116,12 +117,25 @@ const folderProbes = Effect.gen(function* () {
   const realPath = (target: string) =>
     fileSystem.realPath(target).pipe(Effect.orElseSucceed(() => target));
 
+  // Atelier fork: a VCS plugin's repository is one too, found by an installed plugin's marker,
+  // so a task folder checks it out instead of linking back to it. Read per call: the plugins
+  // are the caller's, and they change while the server runs.
+  const hasPluginMarker = Effect.fnUntraced(function* (folder: string) {
+    const plugins = yield* Effect.serviceOption(VcsPluginDrivers);
+    if (Option.isNone(plugins)) return false;
+    for (const marker of plugins.value.installedMarkers()) {
+      if (yield* exists(path.join(folder, marker))) return true;
+    }
+    return false;
+  });
+
   // A repository is a folder with its own `.git`; a folder deeper inside one is plain files.
   // Untraced: it runs once per folder inside the calling operation's span.
   const classify = Effect.fnUntraced(function* (
     folder: ProjectTrackedFolder,
   ): Effect.fn.Return<WorkspaceFolder> {
     if (yield* exists(path.join(folder.path, ".git"))) return { ...folder, state: "git" };
+    if (yield* hasPluginMarker(folder.path)) return { ...folder, state: "git" };
     return { ...folder, state: (yield* exists(folder.path)) ? "plain" : "missing" };
   });
 
@@ -130,6 +144,7 @@ const folderProbes = Effect.gen(function* () {
     fileSystem.stat(path.join(folder, ".git")).pipe(
       Effect.map((info) => info.type === "Directory"),
       Effect.orElseSucceed(() => false),
+      Effect.flatMap((owns) => (owns ? Effect.succeed(true) : hasPluginMarker(folder))),
     );
 
   const childFolders = (folder: string) =>

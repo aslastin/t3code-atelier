@@ -8,6 +8,7 @@ import * as Path from "effect/Path";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import * as TaskFolderStore from "./TaskFolderStore.ts";
 import * as WorkspaceFolders from "./WorkspaceFolders.ts";
 
@@ -190,6 +191,29 @@ it.layer(NodeServices.layer)("WorkspaceFolders", (it) => {
           ["Outside", outside],
         ]);
       }).pipe(Effect.provide(layerFor({ workspaceRoot, trackedFolders })));
+    }),
+  );
+
+  it.effect("finds a VCS plugin's repository inside a project folder", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tmp = yield* makeTempDir;
+      const workspaceRoot = path.join(tmp, "wrapper");
+      yield* fileSystem.makeDirectory(path.join(workspaceRoot, "api", ".git"), { recursive: true });
+      yield* fileSystem.makeDirectory(path.join(workspaceRoot, "web", ".kite"), {
+        recursive: true,
+      });
+      yield* fileSystem.writeFileString(path.join(workspaceRoot, "web", ".kite", "HEAD"), "main\n");
+      const found = yield* WorkspaceFolders.discoverFolders(workspaceRoot).pipe(
+        Effect.provideService(VcsPluginDrivers, {
+          installedMarkers: () => [".kite/HEAD"],
+        } as unknown as VcsPluginDrivers["Service"]),
+      );
+      assert.deepEqual(
+        found.map((folder) => folder.name),
+        ["api", "web"],
+      );
     }),
   );
 
