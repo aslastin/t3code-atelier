@@ -1,5 +1,15 @@
+import type { ComposerModelMentionEffort } from "@t3tools/client-runtime/composer-model-mentions";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { createContext, type MouseEvent } from "react";
+
+/** A model mention chip in the prompt, by its source range, whose effort the user wants to change. */
+export interface ComposerModelEffortEditRequest {
+  readonly instanceId: string;
+  readonly model: string;
+  readonly effort: ComposerModelMentionEffort | null;
+  readonly start: number;
+  readonly end: number;
+}
 
 export interface ComposerContextActions {
   environmentId: EnvironmentId | null;
@@ -10,6 +20,7 @@ export interface ComposerContextActions {
   openFile: (fileId: string) => void;
   openMention: (path: string) => void;
   openPullRequest: (event: MouseEvent<HTMLElement>, url: string) => void;
+  editModelEffort?: ((request: ComposerModelEffortEditRequest) => void) | undefined;
 }
 
 export const ComposerContextActionsContext = createContext<ComposerContextActions>({

@@ -100,6 +100,10 @@ export function composerCommandKeyHandler(input: {
   /** Predicted next prompt that Tab fills into an empty composer; Escape dismisses it. */
   readonly promptSuggestion: string | null;
   readonly dismissPromptSuggestion: () => void;
+  /** The `@` menu lists a model's effort levels; Left returns to models when `canGoBack`. */
+  readonly modelEffortStep: { readonly canGoBack: boolean } | null;
+  readonly returnToModelList: () => void;
+  readonly dismissModelEffortStep: () => void;
 }) {
   const {
     keybindings,
@@ -139,6 +143,9 @@ export function composerCommandKeyHandler(input: {
     submitComposer,
     promptSuggestion,
     dismissPromptSuggestion,
+    modelEffortStep,
+    returnToModelList,
+    dismissModelEffortStep,
   } = input;
 
   // The composer persists across threads. A recall from thread A must not
@@ -247,8 +254,26 @@ export function composerCommandKeyHandler(input: {
       input.togglePlanMode();
       return true;
     }
+    if (modelEffortStep !== null) {
+      if (key === "Escape" && !event.isComposing && event.keyCode !== 229) {
+        dismissModelEffortStep();
+        return true;
+      }
+      if (
+        key === "ArrowLeft" &&
+        modelEffortStep.canGoBack &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.isComposing
+      ) {
+        returnToModelList();
+        return true;
+      }
+    }
     const { trigger } = resolveActiveComposerTrigger();
-    const menuIsActive = !isLiteralPendingAnswer && trigger !== null;
+    const menuIsActive = !isLiteralPendingAnswer && (trigger !== null || modelEffortStep !== null);
     if (key === "Escape") {
       if (event.isComposing || event.keyCode === 229) return false;
       if (!menuIsActive && promptSuggestion !== null && promptRef.current.length === 0) {

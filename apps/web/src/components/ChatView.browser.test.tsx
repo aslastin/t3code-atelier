@@ -39,6 +39,7 @@ import { getRouter } from "~/router";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentThreadDetails } from "~/state/threads";
 import {
+  CODEX_PROVIDER,
   ENVIRONMENT_ID,
   PROJECT_ID,
   answerAssetUrls,
@@ -1036,5 +1037,109 @@ it("/side sends the draft's attachments and context, and keeps them when it does
       "next draft",
       "/side what is this?",
     ]),
+  );
+});
+
+it("an @ model mention takes the reasoning effort picked in the menu and changes it from its chip", async () => {
+  const thread = threadWithHistory("model-mention-effort", 1);
+  const reasoningEffort = {
+    id: "reasoningEffort",
+    label: "Reasoning",
+    type: "select",
+    options: [
+      { id: "low", label: "Low" },
+      { id: "medium", label: "Medium" },
+      { id: "high", label: "High", isDefault: true },
+      { id: "xhigh", label: "Extra High" },
+    ],
+  };
+  using _environment = installFakeEnvironment([thread], {
+    providers: [
+      {
+        ...CODEX_PROVIDER,
+        models: CODEX_PROVIDER.models.map((model) =>
+          model.slug === "gpt-5.5"
+            ? { ...model, capabilities: { optionDescriptors: [reasoningEffort] } }
+            : model,
+        ),
+      },
+    ],
+  });
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, {
+    // AppRoot brings its own router.
+    router: false,
+  });
+  await expect.element(page.getByText(`Answer 0 for ${thread.id}.`)).toBeVisible();
+
+  const prompt = () =>
+    useComposerDraftStore.getState().getComposerDraft(scopeThreadRef(ENVIRONMENT_ID, thread.id))
+      ?.prompt;
+  // A model option's name goes on with its provider.
+  const expectHighlighted = (label: string) =>
+    expect
+      .element(
+        page.getByRole("option", {
+          selected: true,
+          name: new RegExp(`^${label.replaceAll(".", "\\.")}(Codex)?$`),
+        }),
+      )
+      .toBeVisible();
+  const efforts = page.getByRole("listbox", { name: "Reasoning effort for GPT-5.5" });
+  const effortButton = (level: string) =>
+    page.getByRole("button", { name: `Reasoning effort ${level}. Change` });
+
+  await userEvent.click(page.getByTestId("composer-editor"));
+  await insertText("Ask @gpt-5.5");
+  await expectHighlighted("GPT-5.5");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(efforts).toBeVisible();
+  await expectHighlighted("Default");
+
+  // Left returns to the models with the search and the highlighted model kept.
+  await userEvent.keyboard("{ArrowLeft}");
+  await expectHighlighted("GPT-5.5");
+  expect(prompt()).toBe("Ask @gpt-5.5");
+
+  await userEvent.keyboard("{Enter}");
+  await expect.element(efforts).toBeVisible();
+  await userEvent.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}");
+  await expectHighlighted("High");
+  await userEvent.keyboard("{Enter}");
+  await vi.waitFor(() => expect(prompt()).toBe("Ask model:codex/gpt-5.5?reasoningEffort=high "));
+  await expect.element(efforts).not.toBeInTheDocument();
+
+  // The chip's level reopens the menu on it: Escape keeps it, Enter applies a change.
+  await userEvent.click(effortButton("High"));
+  await expectHighlighted("High");
+  await userEvent.keyboard("{Escape}");
+  await expect.element(efforts).not.toBeInTheDocument();
+  await userEvent.click(effortButton("High"));
+  await userEvent.keyboard("{ArrowDown}");
+  await expectHighlighted("Extra High");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(effortButton("Extra High")).toBeVisible();
+  expect(prompt()).toBe("Ask model:codex/gpt-5.5?reasoningEffort=xhigh ");
+
+  // Escape on a new mention keeps the model with no effort; a model without levels goes in at once.
+  await insertText("and @gpt-5.5");
+  await expectHighlighted("GPT-5.5");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(efforts).toBeVisible();
+  await userEvent.keyboard("{Escape}");
+  await insertText("or @gpt-5.4");
+  await expectHighlighted("GPT-5.4");
+  await userEvent.keyboard("{Enter}");
+  await vi.waitFor(() =>
+    expect(prompt()).toBe(
+      "Ask model:codex/gpt-5.5?reasoningEffort=xhigh and model:codex/gpt-5.5 or model:codex/gpt-5.4 ",
+    ),
   );
 });

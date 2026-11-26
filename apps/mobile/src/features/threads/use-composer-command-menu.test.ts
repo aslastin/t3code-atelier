@@ -22,6 +22,7 @@ vi.mock("../../state/server", () => ({
 
 import type { ModelOption } from "../../lib/modelOptions";
 import {
+  buildComposerModelEffortItems,
   buildComposerModelItems,
   buildComposerSlashCommandItems,
   resolveComposerCommandSelection,
@@ -162,6 +163,41 @@ describe("mobile model mentions", () => {
       ["model:opencode:traex/gpt-6.1", "OpenCode · Traex"],
       ["model:traex:gpt-6.1", "Traex"],
     ]);
+  });
+
+  it("offers a model's effort levels after Default and writes the chosen one into the mention", () => {
+    const [model] = buildComposerModelItems(
+      [
+        option("traex:gpt-6.1", {
+          capabilities: {
+            optionDescriptors: [
+              {
+                id: "reasoningEffort",
+                label: "Reasoning",
+                type: "select",
+                options: [
+                  { id: "low", label: "Low" },
+                  { id: "high", label: "High", isDefault: true },
+                ],
+              },
+            ],
+          },
+        }),
+      ],
+      "gpt",
+      [provider("traex")],
+    );
+    if (model?.type !== "model") throw new Error("expected a model item");
+    const levels = buildComposerModelEffortItems(model, "Default");
+    expect(levels.map((item) => item.label)).toEqual(["Default", "Low", "High"]);
+    const insert = (index: number) =>
+      resolveComposerCommandSelection({
+        draftMessage: "Ask @gpt",
+        trigger: { rangeStart: 4, rangeEnd: 8 },
+        item: levels[index]!,
+      }).text;
+    expect(insert(0)).toBe("Ask model:traex/gpt-6.1 ");
+    expect(insert(2)).toBe("Ask model:traex/gpt-6.1?reasoningEffort=high ");
   });
 
   it.each([

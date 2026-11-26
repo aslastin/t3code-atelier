@@ -53,7 +53,10 @@ import {
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import * as Schema from "effect/Schema";
-import { formatComposerModelMention } from "@t3tools/client-runtime/composer-model-mentions";
+import {
+  formatComposerModelMention,
+  type ComposerModelMentionEffort,
+} from "@t3tools/client-runtime/composer-model-mentions";
 import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
@@ -210,8 +213,17 @@ import { threadContextAttachment } from "~/lib/threadContextAttachment";
 import {
   type ComposerCommandItem,
   ComposerCommandMenu,
+  ComposerModelEffortHeader,
   composerSuggestionOptionId,
 } from "./ComposerCommandMenu";
+import {
+  composerModelEffortItemId,
+  composerModelEffortItems,
+  composerModelItem,
+  type ComposerModelEffortStep,
+  type ComposerModelItem,
+} from "./composerModelMentions";
+import type { ComposerModelEffortEditRequest } from "../composerContextActions";
 import {
   ComposerAttachButton,
   ComposerAttachmentFileList,
@@ -767,6 +779,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     openPullRequest: (event: React.MouseEvent<HTMLElement>, url: string) => {
       openPrLink(event, url);
     },
+    // Declared with the effort menu below; chips call it only after render.
+    editModelEffort: (request: ComposerModelEffortEditRequest) => editModelEffort(request),
   };
   const composerContextRecords = composerContextRecordsFromDraft({
     terminalContexts: composerTerminalContexts,
@@ -1049,6 +1063,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isLiteralPendingAnswer ? null : detectComposerTrigger(prompt, prompt.length),
   );
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
+  const [modelEffortStep, setModelEffortStep] = useState<ComposerModelEffortStep | null>(null);
   const composerSuggestionId = useId();
   const composerSuggestionListId = `${composerSuggestionId}-${encodeURIComponent(draftId ?? activeThreadId ?? "new")}-suggestions`;
   const promptHistoryPositionRef = useRef<{
@@ -1174,7 +1189,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerReviewComments.length === 0;
   const linkedEnvironments = useLinkedEnvironments(environmentId);
   const {
-    items: composerMenuItems,
+    items: triggerMenuItems,
     isLoading: isComposerMenuLoading,
     emptyState: composerMenuEmptyState,
   } = useComposerMenuItems({
@@ -1200,10 +1215,31 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     modelMentions: { instanceEntries: providerInstanceEntries, modelOptionsByInstance },
   });
 
-  const composerMenuOpen = Boolean(composerTrigger);
-  const composerMenuSearchKey = composerTrigger
+  const triggerMenuSearchKey = composerTrigger
     ? `${composerSuggestionListId}:${composerTrigger.kind}:${composerTrigger.query.trim().toLowerCase()}`
     : null;
+  const composerEditorValue = activePendingProgress ? activePendingProgress.customAnswer : prompt;
+  // Any edit ends the effort step; picking a model keeps it on the `@` mention it came from.
+  const activeModelEffortStep =
+    modelEffortStep !== null &&
+    !isLiteralPendingAnswer &&
+    modelEffortStep.prompt === composerEditorValue &&
+    (modelEffortStep.target.kind === "edit" ||
+      modelEffortStep.target.modelSearchKey === triggerMenuSearchKey)
+      ? modelEffortStep
+      : null;
+  const modelEffortSearchKey = (model: ComposerModelItem) =>
+    `${composerSuggestionListId}:model-effort:${model.id}`;
+  const composerMenuItems = activeModelEffortStep
+    ? composerModelEffortItems(
+        activeModelEffortStep.model,
+        gt("Default", { $context: "reasoning effort level that sets none" }),
+      )
+    : triggerMenuItems;
+  const composerMenuOpen = Boolean(composerTrigger) || activeModelEffortStep !== null;
+  const composerMenuSearchKey = activeModelEffortStep
+    ? modelEffortSearchKey(activeModelEffortStep.model)
+    : triggerMenuSearchKey;
   const activeComposerMenuItemId = resolveComposerMenuActiveItemId({
     items: composerMenuItems,
     highlightedItemId: composerHighlightedItemId,
@@ -1986,6 +2022,44 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     };
   };
 
+  const insertModelMention = (source: string): boolean => {
+    const { snapshot, trigger } = resolveActiveComposerTrigger();
+    if (trigger?.kind !== "path") return false;
+    const replacement = `${source} `;
+    const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+      snapshot.value,
+      trigger.rangeEnd,
+      replacement,
+    );
+    const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
+      expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+    });
+    if (applied) setComposerHighlightedItemId(null);
+    return applied;
+  };
+
+  const applyModelEffort = (
+    step: ComposerModelEffortStep,
+    effort: ComposerModelMentionEffort | null,
+  ) => {
+    const source = formatComposerModelMention(step.model.instanceId, step.model.model, effort);
+    const { target } = step;
+    if (target.kind === "insert") {
+      if (insertModelMention(source)) setModelEffortStep(null);
+      return;
+    }
+    // The caret stays where it was, shifted by the chip's new length.
+    const { expandedCursor } = readComposerSnapshot();
+    const applied = applyPromptReplacement(target.start, target.end, source, {
+      expectedText: step.prompt.slice(target.start, target.end),
+      expandedCursorAfterReplace:
+        expandedCursor <= target.start
+          ? expandedCursor
+          : Math.max(expandedCursor, target.end) + source.length - (target.end - target.start),
+    });
+    if (applied) setModelEffortStep(null);
+  };
+
   const { onUsageLimitsCommand } = props;
   const onSelectComposerItem = (item: ComposerCommandItem) => {
     if (composerSelectLockRef.current) return;
@@ -1993,6 +2067,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     window.requestAnimationFrame(() => {
       composerSelectLockRef.current = false;
     });
+    if (item.type === "model-effort") {
+      const step = activeModelEffortStep;
+      const optionId = step?.model.effort?.optionId;
+      if (!step || !optionId) return;
+      applyModelEffort(step, item.value === null ? null : { optionId, value: item.value });
+      return;
+    }
     const { snapshot, trigger } = resolveActiveComposerTrigger();
     if (!trigger) return;
     if (item.type === "path") {
@@ -2143,18 +2224,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     if (item.type === "model") {
       if (trigger.kind !== "path") return;
-      const replacement = `${formatComposerModelMention(item.instanceId, item.model)} `;
-      const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-        snapshot.value,
-        trigger.rangeEnd,
-        replacement,
-      );
-      const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
-        expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
-      });
-      if (applied) {
-        setComposerHighlightedItemId(null);
+      if (item.effort && triggerMenuSearchKey !== null) {
+        setModelEffortStep({
+          model: item,
+          prompt: snapshot.value,
+          target: { kind: "insert", modelSearchKey: triggerMenuSearchKey },
+        });
+        setComposerHighlightedItemId(composerModelEffortItemId(null));
+        setComposerHighlightedSearchKey(modelEffortSearchKey(item));
+        return;
       }
+      insertModelMention(formatComposerModelMention(item.instanceId, item.model));
       return;
     }
     if (item.type === "environment") {
@@ -2179,6 +2259,55 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
   };
   const onSelectComposerItemStable = useStableCallback(onSelectComposerItem);
+
+  // Escape on a new mention keeps the model without an effort; on a chip it keeps the old effort.
+  const dismissModelEffortStep = () => {
+    const step = activeModelEffortStep;
+    if (!step) return;
+    if (step.target.kind === "insert") {
+      applyModelEffort(step, null);
+      return;
+    }
+    setModelEffortStep(null);
+  };
+
+  const returnToModelList = () => {
+    const step = activeModelEffortStep;
+    if (step?.target.kind !== "insert") return;
+    setModelEffortStep(null);
+    setComposerHighlightedItemId(step.model.id);
+    setComposerHighlightedSearchKey(step.target.modelSearchKey);
+  };
+  const returnToModelListStable = useStableCallback(returnToModelList);
+
+  const editModelEffort = (request: ComposerModelEffortEditRequest) => {
+    const entry = providerInstanceEntries.find(
+      (candidate) => candidate.instanceId === request.instanceId,
+    );
+    const option =
+      entry &&
+      ((modelOptionsByInstance.get(entry.instanceId) ?? []).find(
+        (candidate) => candidate.slug === request.model,
+      ) ??
+        entry.models.find((candidate) => candidate.slug === request.model));
+    if (!entry || !option) return;
+    const model = composerModelItem(entry, option);
+    if (!model.effort) return;
+    const current =
+      request.effort?.optionId === model.effort.optionId &&
+      model.effort.choices.some((choice) => choice.id === request.effort?.value)
+        ? request.effort.value
+        : null;
+    setModelEffortStep({
+      model,
+      prompt: promptRef.current,
+      target: { kind: "edit", start: request.start, end: request.end },
+    });
+    setComposerHighlightedItemId(composerModelEffortItemId(current));
+    setComposerHighlightedSearchKey(modelEffortSearchKey(model));
+    // The editor's keys drive the menu.
+    composerEditorRef.current?.focus();
+  };
 
   const onComposerMenuItemHighlighted = (itemId: string | null) => {
     setComposerHighlightedItemId(itemId);
@@ -2475,6 +2604,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       submitComposer,
       promptSuggestion: offeredPromptSuggestion,
       dismissPromptSuggestion,
+      modelEffortStep: activeModelEffortStep && {
+        canGoBack: activeModelEffortStep.target.kind === "insert",
+      },
+      returnToModelList,
+      dismissModelEffortStep,
     })(key, event, isTaskItem);
 
   const {
@@ -3779,6 +3913,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     resolvedTheme={resolvedTheme}
                     isLoading={isComposerMenuLoading}
                     triggerKind={composerTriggerKind}
+                    header={
+                      activeModelEffortStep
+                        ? {
+                            label: gt("Reasoning effort for {model}", {
+                              model: activeModelEffortStep.model.label,
+                            }),
+                            node: (
+                              <ComposerModelEffortHeader
+                                model={activeModelEffortStep.model}
+                                onBack={
+                                  activeModelEffortStep.target.kind === "insert"
+                                    ? returnToModelListStable
+                                    : undefined
+                                }
+                              />
+                            ),
+                          }
+                        : undefined
+                    }
                     emptyStateText={composerMenuEmptyState}
                     activeItemId={activeComposerMenuItem?.id ?? null}
                     onHighlightedItemChange={onComposerMenuItemHighlightedStable}

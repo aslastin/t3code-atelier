@@ -1,4 +1,8 @@
+import type { ProviderOptionDescriptor, SelectProviderOptionDescriptor } from "@t3tools/contracts";
+import { DEFAULT_VARIANT_CHOICE_ID } from "@t3tools/shared/model";
+
 import { rankModelPickerSearch, type ModelPickerSearchableModel } from "./modelSearch.ts";
+import { REASONING_EFFORT_OPTION_IDS } from "./state/threadExecution.ts";
 
 const COMPOSER_MODEL_MENTION_LIMIT = 8;
 
@@ -44,17 +48,75 @@ export function rankComposerModelMentions<T>(
   return [];
 }
 
-/** Prompt text naming a provider instance and model for the agent. No `@`, which the editor would turn into a file chip. */
-export function formatComposerModelMention(instanceId: string, model: string): string {
-  return `model:${instanceId}/${model}`;
+/** A reasoning effort chosen for one mention: a select option id and one of its choice ids. */
+export interface ComposerModelMentionEffort {
+  readonly optionId: string;
+  readonly value: string;
+}
+
+/**
+ * Prompt text naming a provider instance and model for the agent, plus an explicit effort as
+ * `?<option id>=<choice id>`. No `@`, which the editor would turn into a file chip.
+ */
+export function formatComposerModelMention(
+  instanceId: string,
+  model: string,
+  effort?: ComposerModelMentionEffort | null,
+): string {
+  const mention = `model:${instanceId}/${model}`;
+  return effort ? `${mention}?${effort.optionId}=${encodeURIComponent(effort.value)}` : mention;
+}
+
+/** The model's reasoning effort select, which a mention may set, or null when it has none. */
+export function modelMentionEffortDescriptor(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor> | undefined,
+): SelectProviderOptionDescriptor | null {
+  const selects = (descriptors ?? []).filter(
+    (descriptor): descriptor is SelectProviderOptionDescriptor => descriptor.type === "select",
+  );
+  const descriptor =
+    selects.find((candidate) => candidate.role === "reasoning") ??
+    REASONING_EFFORT_OPTION_IDS.map((id) => selects.find((candidate) => candidate.id === id)).find(
+      (candidate) => candidate !== undefined,
+    );
+  return descriptor && EFFORT_OPTION_ID.test(descriptor.id) ? descriptor : null;
+}
+
+/** Levels a mention offers besides Default. Prompt-injected levels like Ultrathink stay typed-only. */
+export function modelMentionEffortChoices(descriptor: SelectProviderOptionDescriptor) {
+  return descriptor.options.filter(
+    (choice) =>
+      choice.id !== DEFAULT_VARIANT_CHOICE_ID &&
+      !descriptor.promptInjectedValues?.includes(choice.id),
+  );
 }
 
 export interface ComposerModelMentionOccurrence {
   readonly instanceId: string;
   readonly model: string;
+  readonly effort?: ComposerModelMentionEffort;
   readonly source: string;
   readonly start: number;
   readonly end: number;
+}
+
+const EFFORT_OPTION_ID = /^[A-Za-z_][\w.-]*$/u;
+const EFFORT_SUFFIX = /\?([A-Za-z_][\w.-]*)=([^\s?&=]+)$/u;
+
+function splitEffort(slug: string): {
+  readonly model: string;
+  readonly effort?: ComposerModelMentionEffort;
+} {
+  const match = EFFORT_SUFFIX.exec(slug);
+  if (!match || match.index === 0) return { model: slug };
+  try {
+    return {
+      model: slug.slice(0, match.index),
+      effort: { optionId: match[1]!, value: decodeURIComponent(match[2]!) },
+    };
+  } catch {
+    return { model: slug };
+  }
 }
 
 // Instance ids match ProviderInstanceId; model slugs may contain `/`, as in `opencode/anthropic/opus`.
@@ -86,7 +148,7 @@ function trimModelSlug(slug: string): string {
   return slug.slice(0, end);
 }
 
-/** Finds the `model:<instance>/<model>` references that `formatComposerModelMention` writes. */
+/** Finds the `model:<instance>/<model>[?<option>=<value>]` references `formatComposerModelMention` writes. */
 export function collectComposerModelMentions(
   text: string,
 ): ReadonlyArray<ComposerModelMentionOccurrence> {
@@ -94,11 +156,17 @@ export function collectComposerModelMentions(
   const occurrences: ComposerModelMentionOccurrence[] = [];
   for (const match of text.matchAll(MODEL_MENTION_PATTERN)) {
     const instanceId = match[1]!;
-    const model = trimModelSlug(match[2]!);
-    if (model.length === 0) continue;
+    const slug = trimModelSlug(match[2]!);
+    if (slug.length === 0) continue;
     const start = match.index;
-    const end = start + "model:".length + instanceId.length + 1 + model.length;
-    occurrences.push({ instanceId, model, source: text.slice(start, end), start, end });
+    const end = start + "model:".length + instanceId.length + 1 + slug.length;
+    occurrences.push({
+      instanceId,
+      ...splitEffort(slug),
+      source: text.slice(start, end),
+      start,
+      end,
+    });
   }
   return occurrences;
 }

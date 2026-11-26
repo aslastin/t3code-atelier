@@ -95,6 +95,43 @@ describe("Enriched link presentation", () => {
     ).toEqual(["$review", "model:codex/gpt-6.1"]);
   });
 
+  it("labels a mention with its effort, as its model names it", () => {
+    const providers = [
+      {
+        instanceId: "codex",
+        driver: "codex",
+        models: [
+          {
+            slug: "gpt-6.1",
+            name: "GPT-6.1",
+            capabilities: {
+              optionDescriptors: [
+                {
+                  id: "reasoningEffort",
+                  label: "Reasoning",
+                  type: "select" as const,
+                  options: [{ id: "xhigh", label: "Extra High" }],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ];
+    const sources = new Set([
+      "model:codex/gpt-6.1",
+      "model:codex/gpt-6.1?reasoningEffort=xhigh",
+      "model:codex/gpt-6.1?reasoningEffort=retired",
+    ]);
+    expect(
+      buildEnrichedModelReferences(providers, sources).map(({ source, label }) => [source, label]),
+    ).toEqual([
+      ["model:codex/gpt-6.1", "GPT-6.1"],
+      ["model:codex/gpt-6.1?reasoningEffort=xhigh", "GPT-6.1 · Extra High"],
+      ["model:codex/gpt-6.1?reasoningEffort=retired", "GPT-6.1 · retired"],
+    ]);
+  });
+
   it("matches only the complete URL, including literal regex metacharacters", () => {
     const url = "file:///workspace/app[1].tsx?line=3+4";
     const pattern = new RegExp(enrichedLinkVariantPattern(url));

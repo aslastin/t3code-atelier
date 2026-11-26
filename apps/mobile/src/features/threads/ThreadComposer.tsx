@@ -847,6 +847,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
               triggerKind={composerMenu.trigger.kind}
               isLoading={composerMenu.isLoading}
               error={composerMenu.error}
+              effortStep={composerMenu.effortStep}
               onSelect={composerMenu.onSelect}
             />
           </ComposerPopoverAnchor>

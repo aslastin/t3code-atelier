@@ -128,6 +128,7 @@ import { WorkspaceEntryTooltip } from "./chat/WorkspaceEntryIcon";
 import { FileTagChipContent } from "./chat/FileTagChip";
 import { SkillChipPopover, skillPopoverDescription } from "./chat/SkillInlineText";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
+import type { ComposerModelMentionEffort } from "@t3tools/client-runtime/composer-model-mentions";
 import { ModelMentionChip, modelMentionKey, modelMentionKeysAtom } from "./chat/ModelMentionChip";
 import { getTimelinePageScrollKey } from "./chat/pageScrollController";
 import { ContextChip } from "./ContextChip";
@@ -357,21 +358,44 @@ const ComposerSkillExtension = Node.create({
   },
 });
 
-function ComposerModelNodeView({ node }: NodeViewProps) {
+function ComposerModelNodeView({ node, editor, getPos }: NodeViewProps) {
   const actions = use(ComposerContextActionsContext);
+  const instanceId = String(node.attrs.instanceId);
+  const model = String(node.attrs.model);
+  const effort = (node.attrs.effort as ComposerModelMentionEffort | null) ?? undefined;
+  const { editModelEffort } = actions;
   return (
     <NodeViewWrapper as="span" className={CHIP_NODE_SELECTION_CLASS_NAME}>
       <ModelMentionChip
         environmentId={actions.environmentId}
-        instanceId={String(node.attrs.instanceId)}
-        model={String(node.attrs.model)}
+        instanceId={instanceId}
+        model={model}
+        effort={effort}
         source={String(node.attrs.source)}
+        onEditEffort={
+          editModelEffort && editor.isEditable
+            ? () => {
+                const pos = getPos();
+                const run = serializeEditorDoc(editor.state.doc).runs.find(
+                  (candidate) => candidate.kind === "token" && candidate.pmPos === pos,
+                );
+                if (!run) return;
+                editModelEffort({
+                  instanceId,
+                  model,
+                  effort: effort ?? null,
+                  start: run.mdStart + run.openLen,
+                  end: run.mdStart + run.mdLen - run.closeLen,
+                });
+              }
+            : undefined
+        }
       />
     </NodeViewWrapper>
   );
 }
 
-/** `model:<instance>/<model>` from the `@` menu; `source` is the exact prompt text. */
+/** `model:<instance>/<model>[?<option>=<value>]` from the `@` menu; `source` is the exact prompt text. */
 const ComposerModelExtension = Node.create({
   name: "composer-model",
   group: "inline",
@@ -382,6 +406,7 @@ const ComposerModelExtension = Node.create({
     return {
       instanceId: { default: "" },
       model: { default: "" },
+      effort: { default: null },
       source: { default: "" },
     };
   },
@@ -1177,6 +1202,12 @@ function ComposerPromptEditorTiptapInner(
           },
         },
         handleKeyDown: (view, event) => {
+          // A menu step, like the `@` menu's effort levels, takes Left before caret moves.
+          if (event.key === "ArrowLeft" && readCallbacks().onCommandKeyDown?.(event.key, event)) {
+            event.preventDefault();
+            event.stopPropagation();
+            return true;
+          }
           // In a right-to-left line the start is on the right.
           const backArrow = caretLineDirection(view.state) === "rtl" ? "ArrowRight" : "ArrowLeft";
           const boundary = event.metaKey

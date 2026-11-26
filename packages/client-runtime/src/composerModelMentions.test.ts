@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   collectComposerModelMentions,
   formatComposerModelMention,
+  modelMentionEffortChoices,
+  modelMentionEffortDescriptor,
   rankComposerModelMentions,
 } from "./composerModelMentions.ts";
 
@@ -79,8 +81,47 @@ describe("collectComposerModelMentions", () => {
     ]);
   });
 
+  it("reads back an explicit effort, kept apart from the model slug", () => {
+    const text = `${formatComposerModelMention("claudeAgent", "claude-opus-5-5", {
+      optionId: "effort",
+      value: "high",
+    })} and ${formatComposerModelMention("opencode", "anthropic/opus", {
+      optionId: "variant",
+      value: "deep think",
+    })}?`;
+    expect(collectComposerModelMentions(text)).toEqual([
+      {
+        instanceId: "claudeAgent",
+        model: "claude-opus-5-5",
+        effort: { optionId: "effort", value: "high" },
+        source: "model:claudeAgent/claude-opus-5-5?effort=high",
+        start: 0,
+        end: 45,
+      },
+      {
+        instanceId: "opencode",
+        model: "anthropic/opus",
+        effort: { optionId: "variant", value: "deep think" },
+        source: "model:opencode/anthropic/opus?variant=deep%20think",
+        start: 50,
+        end: 100,
+      },
+    ]);
+  });
+
+  it.each([
+    ["model:codex/gpt-6.1?", "gpt-6.1"],
+    ["model:codex/gpt-6.1?effort", "gpt-6.1?effort"],
+    ["model:codex/gpt-6.1?effort=%E0", "gpt-6.1?effort=%E0"],
+  ])("reads no effort from %s", (text, model) => {
+    expect(
+      collectComposerModelMentions(text).map((mention) => [mention.model, mention.effort]),
+    ).toEqual([[model, undefined]]);
+  });
+
   it.each([
     ["(model:codex/gpt-6.1).", ["codex/gpt-6.1"]],
+    ["(model:codex/gpt-6.1?reasoningEffort=xhigh).", ["codex/gpt-6.1"]],
     ['"model:codex/gpt-6.1"', ["codex/gpt-6.1"]],
     ["model:codex/gpt-6.1,model:claudeAgent/sonnet", ["codex/gpt-6.1", "claudeAgent/sonnet"]],
     ["model:codex/gpt-6.1's output", ["codex/gpt-6.1"]],
@@ -103,4 +144,43 @@ describe("collectComposerModelMentions", () => {
       expect(collectComposerModelMentions(text)).toEqual([]);
     },
   );
+});
+
+describe("modelMentionEffortDescriptor", () => {
+  const select = (id: string, role?: "reasoning") => ({
+    id,
+    label: id,
+    type: "select" as const,
+    options: [
+      { id: "t3:default", label: "Default" },
+      { id: "low", label: "Low" },
+      { id: "high", label: "High", isDefault: true },
+      { id: "ultrathink", label: "Ultrathink" },
+    ],
+    promptInjectedValues: ["ultrathink"],
+    ...(role ? { role } : {}),
+  });
+
+  it("prefers the select an agent marks as reasoning over a known effort id", () => {
+    expect(
+      modelMentionEffortDescriptor([select("effort"), select("thought_level", "reasoning")])?.id,
+    ).toBe("thought_level");
+    expect(modelMentionEffortDescriptor([select("speed"), select("reasoningEffort")])?.id).toBe(
+      "reasoningEffort",
+    );
+  });
+
+  it("finds none for a model without a reasoning select", () => {
+    expect(
+      modelMentionEffortDescriptor([{ id: "thinking", label: "Thinking", type: "boolean" }]),
+    ).toBeNull();
+    expect(modelMentionEffortDescriptor(undefined)).toBeNull();
+  });
+
+  it("offers levels without the default variant or prompt-injected levels", () => {
+    expect(modelMentionEffortChoices(select("effort")).map((choice) => choice.id)).toEqual([
+      "low",
+      "high",
+    ]);
+  });
 });
