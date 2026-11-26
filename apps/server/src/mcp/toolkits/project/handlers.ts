@@ -1,4 +1,5 @@
 import {
+  GIT_VCS_KIND,
   CommandId,
   MessageId,
   ThreadId,
@@ -142,9 +143,16 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
     return (yield* real(boundRoot)) === root ? binding : folder;
   }
   const realProject = yield* real(workspaceRoot);
-  const source = worktrees
+  // Git lists the repository with its worktrees; a VCS plugin lists only the worktrees.
+  const listedSource = worktrees
     .filter((candidate) => isWithinRoot(path, realProject, candidate))
     .toSorted((a, b) => b.length - a.length)[0];
+  const repositoryRoot =
+    listedSource === undefined && workflow !== undefined
+      ? yield* workflow.repositoryRoot(realProject).pipe(Effect.orElseSucceed(() => null))
+      : null;
+  const source =
+    listedSource ?? (repositoryRoot === null ? undefined : yield* real(repositoryRoot));
   if (source === undefined) return binding;
   return (
     (yield* worktreeProjectFolder(fileSystem, path, path.relative(source, realProject), binding)) ??
@@ -185,6 +193,21 @@ const defaultWorktreeStrategy = Effect.fn("mcp.defaultWorktreeStrategy")(functio
     message:
       "Could not read the project's current branch for the new worktree. No thread was created. Retry, or pass workspaceStrategy.",
   });
+  // Another VCS answers for its own repository: a worktree from its current branch when it
+  // offers worktrees, the shared checkout otherwise, as the composer does.
+  const workflow = Option.getOrUndefined(
+    yield* Effect.serviceOption(GitWorkflowService.GitWorkflowService),
+  );
+  const status =
+    workflow === undefined
+      ? null
+      : yield* workflow.localStatus({ cwd: workspaceRoot }).pipe(Effect.orElseSucceed(() => null));
+  const capabilities = status?.capabilities;
+  if (status !== null && capabilities !== undefined && capabilities.kind !== GIT_VCS_KIND) {
+    if (!capabilities.supportsWorktrees) return undefined;
+    if (status.refName === null) return yield* unreadable;
+    return { type: "worktree" as const, baseRef: status.refName };
+  }
   const commit = yield* git
     .execute({
       operation: "mcp.defaultWorktreeStrategy",
