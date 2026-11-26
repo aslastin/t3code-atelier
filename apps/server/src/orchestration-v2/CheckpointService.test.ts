@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   GIT_VCS_KIND,
+  VcsDriverKind,
   CheckpointRef,
   CheckpointScopeId,
   NodeId,
@@ -102,6 +103,10 @@ it.effect(
               ? { baseline: "Success", turn: "missing", files: [] }
               : { baseline: "Failure", turn: "error", files: [] },
           );
+          assert.strictEqual(
+            checkpoint.unavailableReason,
+            captureError._tag === "VcsUnsupportedOperationError" ? captureError.detail : undefined,
+          );
           if (baseline._tag === "Failure") {
             assert.strictEqual(baseline.failure.cause, captureError);
           } else {
@@ -116,6 +121,64 @@ it.effect(
         }).pipe(Effect.provide(layerTest));
       }
     }),
+);
+
+it.effect("keeps a snapshot its VCS cannot compare with the one before, and says why", () =>
+  Effect.gen(function* () {
+    const scope: OrchestrationV2CheckpointScope = {
+      id: CheckpointScopeId.make("checkpoint-scope:incomparable"),
+      threadId: ThreadId.make("thread:incomparable"),
+      runId: RunId.make("run:incomparable:2"),
+      nodeId: NodeId.make("node:incomparable:2"),
+      parentScopeId: null,
+      providerThreadId: ProviderThreadId.make("provider-thread:incomparable"),
+      kind: "root_run",
+      ordinalWithinParent: 0,
+      advancesAppRunCount: true,
+      cwd: "/repo/plugin",
+      createdAt: DateTime.makeUnsafe("2026-07-28T00:00:00.000Z"),
+    };
+    const detail = "The snapshots were taken with different strategies.";
+    const layerTest = CheckpointService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          layerNoTrackedFolders,
+          Layer.mock(CheckpointStore.CheckpointStore)({
+            isGitRepository: () => Effect.succeed(true),
+            hasCheckpointRef: () => Effect.succeed(true),
+            captureCheckpoint: () => Effect.void,
+            listAuthoredPaths: () => Effect.succeed(null),
+            diffCheckpoints: () =>
+              Effect.fail(
+                new VcsUnsupportedOperationError({
+                  operation: "kite.diffCheckpoints",
+                  kind: VcsDriverKind.make("kite"),
+                  detail,
+                }),
+              ),
+          }),
+        ),
+      ),
+      Layer.provideMerge(NodeCrypto.layer),
+    );
+    const checkpoint = yield* Effect.gen(function* () {
+      const checkpoints = yield* CheckpointService.CheckpointServiceV2;
+      return yield* checkpoints.capture({
+        scope,
+        ordinalWithinScope: 2,
+        runId: scope.runId!,
+        nodeId: scope.nodeId!,
+        appRunOrdinal: 2,
+        capturedAt: scope.createdAt,
+      });
+    }).pipe(Effect.provide(layerTest));
+
+    assert.deepEqual(
+      { status: checkpoint.status, files: checkpoint.files, reason: checkpoint.unavailableReason },
+      { status: "ready", files: [], reason: detail },
+    );
+  }),
 );
 
 it.effect(

@@ -4375,6 +4375,15 @@
   "405a3e88ee6e62b3": "Die Änderungen dieser Runde in diesem Repository können nicht aufgelistet werden.",
   "f6958f38dc87c712": "Ab dieser Antwort forken",
   "72f8e14b1246d224": "Auf diese Antwort antworten",
+  "33802dfa98c07ca7": [
+    "Die Änderungen dieses Turns lassen sich nicht anzeigen:",
+    " ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
   "424ed60f06d29981": [
     "Für diesen Turn gibt es keinen Checkpoint, daher lassen sich seine Änderungen weder anzeigen noch zurücksetzen:",
     " ",

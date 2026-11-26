@@ -709,6 +709,8 @@ export const layer: Layer.Layer<
             fromCheckpointRef: previousCheckpointRef,
             toCheckpointRef: checkpointRef,
           };
+          // A VCS plugin snapshot that cannot be compared with the one before it.
+          let diffUnavailableReason: string | undefined;
           // A pull or rebase can change thousands of files the turn did not write.
           const files = previousExists
             ? yield* Effect.all([
@@ -740,6 +742,12 @@ export const layer: Layer.Layer<
                       deletions: file.deletions,
                     })),
                 ),
+                Effect.catchTags({
+                  VcsUnsupportedOperationError: (error) => {
+                    diffUnavailableReason = error.detail;
+                    return Effect.succeed(null);
+                  },
+                }),
                 Effect.catch((cause) =>
                   Effect.logWarning("orchestration V2 checkpoint diff summary failed", {
                     scopeId: input.scope.id,
@@ -763,6 +771,9 @@ export const layer: Layer.Layer<
               status: "ready",
               files: files ?? [],
               capturedAt: input.capturedAt,
+              ...(diffUnavailableReason === undefined
+                ? {}
+                : { unavailableReason: diffUnavailableReason }),
             }),
             summaryFailed: files === null,
           };

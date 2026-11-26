@@ -4372,6 +4372,15 @@
   "405a3e88ee6e62b3": "No se pueden listar los cambios de este turno en este repositorio.",
   "f6958f38dc87c712": "Bifurcar desde esta respuesta",
   "72f8e14b1246d224": "Responder a esta respuesta",
+  "33802dfa98c07ca7": [
+    "Los cambios de este turno no se pueden mostrar:",
+    " ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
   "424ed60f06d29981": [
     "Este turno no tiene punto de control, así que sus cambios no se pueden mostrar ni revertir:",
     " ",

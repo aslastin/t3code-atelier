@@ -429,13 +429,25 @@ export function McpAppTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "
 }
 
 /** A VCS plugin left the turn without a checkpoint, so it has no diff or rollback. */
-function CheckpointUnavailableNote({ reason }: { readonly reason: string }) {
+function CheckpointUnavailableNote({
+  reason,
+  restorable,
+}: {
+  readonly reason: string;
+  readonly restorable: boolean;
+}) {
   return (
     <p className="mt-2 text-xs text-muted-foreground">
-      <T>
-        No checkpoint for this turn, so its changes cannot be shown or rolled back:{" "}
-        <Var>{reason}</Var>
-      </T>
+      {restorable ? (
+        <T>
+          This turn's changes cannot be shown: <Var>{reason}</Var>
+        </T>
+      ) : (
+        <T>
+          No checkpoint for this turn, so its changes cannot be shown or rolled back:{" "}
+          <Var>{reason}</Var>
+        </T>
+      )}
     </p>
   );
 }
@@ -458,7 +470,10 @@ const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection(
   const checkpointFiles = turnSummary.files;
   if (!turnHasChanges(turnSummary)) {
     return turnSummary.unavailableReason === undefined ? null : (
-      <CheckpointUnavailableNote reason={turnSummary.unavailableReason} />
+      <CheckpointUnavailableNote
+        reason={turnSummary.unavailableReason}
+        restorable={turnSummary.status === "ready"}
+      />
     );
   }
 

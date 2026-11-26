@@ -1627,7 +1627,10 @@ export const OrchestrationV2Checkpoint = Schema.Struct({
   files: Schema.Array(OrchestrationV2CheckpointFileSummary),
   filesTotal: Schema.optionalKey(OrchestrationV2CheckpointFileTotals),
   capturedAt: Schema.DateTimeUtc,
-  /** Atelier fork: why a VCS plugin's repository has no snapshot for this turn. */
+  /**
+   * Atelier fork: why a VCS plugin's repository has no snapshot for this turn, or, on a ready
+   * checkpoint, why its changes cannot be compared with the snapshot before it.
+   */
   unavailableReason: Schema.optionalKey(Schema.String),
 });
 export type OrchestrationV2Checkpoint = typeof OrchestrationV2Checkpoint.Type;

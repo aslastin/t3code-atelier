@@ -526,7 +526,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     if (from.strategy !== to.strategy)
       return yield* unsupported(
         "diffCheckpoints",
-        "These checkpoints were taken with different strategies and cannot be compared.",
+        `The snapshots were taken with different strategies (${from.strategy}, then ${to.strategy}), so they cannot be compared.`,
       );
     if (from.strategy === "native") {
       const { patch } = yield* nativeDiff(location, input.cwd, from.revision, to.revision);
