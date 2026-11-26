@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import {
+  ProjectId,
   VcsDriverKind,
   type VcsStatusResult,
   type VcsDriverCapabilities,
@@ -103,6 +104,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
         includeBranch: boolean | undefined;
       }> = [];
       const branches: string[] = [];
+      const diffPaths: Array<ReadonlyArray<string> | undefined> = [];
+      const projects: Array<string | undefined> = [];
       const driver = testVcsDriver({
         capabilities,
         workflow: {
@@ -113,7 +116,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
               commits.push(input.commitMessage ?? "");
               return { status: "created" as const, commitSha: "abc" };
             }),
-          workingDiff: () => Effect.succeed("diff --git a/a.txt b/a.txt"),
+          workingDiff: (input) =>
+            Effect.sync(() => {
+              diffPaths.push(input.filePaths);
+              return "diff --git a/a.txt b/a.txt";
+            }),
           recentCommitSubjects: () => Effect.succeed(["Fix the parser"]),
           listRefs: () =>
             Effect.succeed({
@@ -151,6 +158,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
             Layer.mock(GitManager.GitManager)({
               writeCommitMessage: (input) =>
                 Effect.sync(() => {
+                  projects.push(input.projectId);
                   written.push({
                     summary: input.summary,
                     patch: input.patch,
@@ -205,7 +213,15 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
       assert.deepEqual(events, ["action_started", "phase_started", "action_finished"]);
 
       // Without a typed message, it is written from the driver's status, patch and log, as for Git.
-      yield* workflow.runStackedAction({ cwd, actionId: "generated", action: "commit" });
+      yield* workflow.runStackedAction({
+        cwd,
+        actionId: "generated",
+        action: "commit",
+        projectId: ProjectId.make("project-1"),
+      });
+      // Committing everything still names the files, for a diff that takes a file list.
+      assert.deepEqual(diffPaths, [["a.txt"]]);
+      assert.deepEqual(projects, ["project-1"]);
       const writtenFor = (includeBranch: boolean) => ({
         summary: "a.txt (+1 -0)",
         patch: "diff --git a/a.txt b/a.txt",
@@ -226,6 +242,40 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
       assert.deepEqual(branches, ["feature/change-a-txt-2"]);
       assert.deepEqual(onBranch.branch, { status: "created", name: "feature/change-a-txt-2" });
       assert.deepEqual(commits, ["save", "Change a.txt", "Change a.txt"]);
+
+      // A driver that commits every change refuses selected files before starting a branch.
+      const wholeOnly = {
+        ...handle,
+        driver: testVcsDriver({
+          capabilities: { ...capabilities, supportsPartialCommit: false },
+          workflow: driver.workflow!,
+        }),
+      };
+      const refusingWorkflow = yield* GitWorkflowService.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
+              hasAdditionalDrivers: true,
+              detect: () => Effect.succeed(wholeOnly),
+              resolve: () => Effect.succeed(wholeOnly),
+            }),
+            Layer.mock(GitVcsDriver.GitVcsDriver)({}),
+            Layer.mock(GitManager.GitManager)({}),
+          ),
+        ),
+      );
+      const refused = yield* refusingWorkflow
+        .runStackedAction({
+          cwd,
+          actionId: "partial",
+          action: "commit",
+          featureBranch: true,
+          filePaths: ["a.txt"],
+          commitMessage: "save",
+        })
+        .pipe(Effect.flip);
+      assert.include(refused, { _tag: "VcsUnsupportedOperationError" });
+      assert.deepEqual(branches, ["feature/change-a-txt-2"]);
     }),
   );
 

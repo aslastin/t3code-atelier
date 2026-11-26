@@ -197,6 +197,7 @@ export class GitManager extends Context.Service<
     readonly writeCommitMessage: (input: {
       readonly cwd: string;
       readonly threadId?: ThreadId | undefined;
+      readonly projectId?: ProjectId | undefined;
       readonly branch: string | null;
       readonly summary: string;
       readonly patch: string;

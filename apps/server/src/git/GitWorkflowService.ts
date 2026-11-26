@@ -269,6 +269,9 @@ const runDriverAction = Effect.fn("GitWorkflowService.runDriverAction")(function
     return yield* unsupported(handle, "featureBranch");
   if (action !== "push" && !commit) return yield* unsupported(handle, "commit");
   if (action !== "commit" && !push) return yield* unsupported(handle, "push");
+  // Refused before a branch is started, so a failed request leaves the checkout as it was.
+  if (commit && input.filePaths && handle.driver.capabilities?.supportsPartialCommit === false)
+    return yield* unsupported(handle, "commit selected files");
 
   const context = { action, cwd, actionId: options?.actionId ?? input.actionId };
   const reporter = options?.progressReporter;
@@ -312,8 +315,9 @@ const runDriverAction = Effect.fn("GitWorkflowService.runDriverAction")(function
         phase: includeBranch ? "branch" : "commit",
         label: "Generating commit message...",
       });
+    // The files to describe are always named, so a diff that takes a file list gets one.
     const patch = yield* (
-      ops?.workingDiff?.({ cwd, filePaths: input.filePaths }) ?? Effect.succeed("")
+      ops?.workingDiff?.({ cwd, filePaths: files.map((file) => file.path) }) ?? Effect.succeed("")
     ).pipe(Effect.orElseSucceed(() => ""));
     const subjects = yield* (
       ops?.recentCommitSubjects?.({ cwd }) ?? Effect.succeed<ReadonlyArray<string>>([])
@@ -321,6 +325,7 @@ const runDriverAction = Effect.fn("GitWorkflowService.runDriverAction")(function
     return yield* writeCommitMessage({
       cwd,
       threadId: input.threadId,
+      projectId: input.projectId,
       branch: status.refName,
       summary: files
         .map((file) => `${file.path} (+${file.insertions} -${file.deletions})`)

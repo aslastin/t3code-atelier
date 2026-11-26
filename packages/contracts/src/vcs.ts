@@ -37,6 +37,8 @@ export const VcsDriverCapabilities = Schema.Struct({
   ignoreClassifier: Schema.Literals(["native", "git-compatible-fallback"]),
   /** Atelier fork: a VCS plugin can start a branch from the checkout, for "Commit on a new branch". */
   supportsBranchCreate: Schema.optionalKey(Schema.Boolean),
+  /** Atelier fork: false when a VCS plugin can only commit every change, not selected files. */
+  supportsPartialCommit: Schema.optionalKey(Schema.Boolean),
 });
 export type VcsDriverCapabilities = typeof VcsDriverCapabilities.Type;
 
