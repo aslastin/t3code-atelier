@@ -77,6 +77,10 @@ export interface ComposerModelEffortStep {
         readonly kind: "insert";
         readonly start: number;
         readonly source: string;
+        /** The text after the mention; an edit there, like a forward delete, ends the step. */
+        readonly tail: string;
+        /** Whether the insertion added the space after the mention, which Back then removes. */
+        readonly addedSpace: boolean;
         /** The caret after the insertion; moving it, or any edit, ends the step. */
         readonly cursor: number;
         /** The `@` search the mention replaced, which Back restores, and its menu key. */

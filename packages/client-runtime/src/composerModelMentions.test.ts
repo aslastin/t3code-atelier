@@ -207,5 +207,11 @@ describe("modelMentionEffortDescriptor", () => {
       "low",
       "high",
     ]);
+    // OpenCode distinguishes its literal `default` variant from sending none.
+    expect(modelMentionEffortChoices(select("variant")).map((choice) => choice.id)).toEqual([
+      "default",
+      "low",
+      "high",
+    ]);
   });
 });

@@ -1268,3 +1268,76 @@ it("a restored draft the editor re-serializes still offers a mentioned model's l
     .element(page.getByRole("listbox", { name: "Reasoning effort for GPT-5.5" }))
     .toBeVisible();
 });
+
+it("a picked model's levels keep the text around its mention and give way to edits after it", async () => {
+  const thread = threadWithHistory("model-mention-neighbours", 1);
+  using _environment = installFakeEnvironment([thread], {
+    providers: [
+      {
+        ...CODEX_PROVIDER,
+        models: CODEX_PROVIDER.models.map((model) =>
+          model.slug === "gpt-5.5"
+            ? {
+                ...model,
+                capabilities: {
+                  optionDescriptors: [
+                    {
+                      id: "reasoningEffort",
+                      label: "Reasoning",
+                      type: "select",
+                      options: [{ id: "low", label: "Low" }],
+                    },
+                  ],
+                },
+              }
+            : model,
+        ),
+      },
+    ],
+  });
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, {
+    // AppRoot brings its own router.
+    router: false,
+  });
+  await expect.element(page.getByText(`Answer 0 for ${thread.id}.`)).toBeVisible();
+
+  const prompt = () =>
+    useComposerDraftStore.getState().getComposerDraft(scopeThreadRef(ENVIRONMENT_ID, thread.id))
+      ?.prompt;
+  const efforts = page.getByRole("listbox", { name: "Reasoning effort for GPT-5.5" });
+  const editor = page.getByTestId("composer-editor");
+  // Writes `@gpt-5.5 today` with the caret after the search, then picks the model.
+  const pickBeforeToday = async () => {
+    await userEvent.click(editor);
+    await userEvent.keyboard("{ControlOrMeta>}a{/ControlOrMeta}");
+    await insertText(" today");
+    await userEvent.keyboard("{Home}");
+    await insertText("@gpt-5.5");
+    await expect.element(page.getByRole("option", { name: /^GPT-5\.5/ })).toBeVisible();
+    await userEvent.keyboard("{Enter}");
+    await expect.element(efforts).toBeVisible();
+    await vi.waitFor(() => expect(prompt()).toBe("model:codex/gpt-5.5 today"));
+  };
+
+  // Back keeps the space that was already there.
+  await pickBeforeToday();
+  await userEvent.keyboard("{ArrowLeft}");
+  await vi.waitFor(() => expect(prompt()).toBe("@gpt-5.5 today"));
+
+  // Selecting or deleting the text after the mention hands the keys back to the editor.
+  await pickBeforeToday();
+  await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
+  await expect.element(efforts).not.toBeInTheDocument();
+  await pickBeforeToday();
+  await userEvent.keyboard("{Delete}");
+  await expect.element(efforts).not.toBeInTheDocument();
+  expect(prompt()).toBe("model:codex/gpt-5.5 oday");
+});

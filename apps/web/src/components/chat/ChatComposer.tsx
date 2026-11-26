@@ -1226,10 +1226,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     modelEffortStep.draftKey === composerDraftTargetKey &&
     modelEffortStep.target.cursor === composerCursor &&
     (modelEffortStep.target.kind === "insert"
-      ? composerEditorValue.slice(
-          modelEffortStep.target.start,
-          modelEffortStep.target.start + modelEffortStep.target.source.length,
-        ) === modelEffortStep.target.source
+      ? composerEditorValue.slice(modelEffortStep.target.start) ===
+        modelEffortStep.target.source + modelEffortStep.target.tail
       : modelEffortStep.target.isCurrent())
       ? modelEffortStep
       : null;
@@ -2035,7 +2033,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     source: string,
     trigger: ComposerTrigger,
     value: string,
-  ): { readonly cursor: number } | null => {
+  ): { readonly cursor: number; readonly tail: string; readonly addedSpace: boolean } | null => {
     const replacement = `${source} `;
     const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
       value,
@@ -2053,6 +2051,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         trigger.rangeStart + replacement.length,
         isLiteralPendingAnswer,
       ),
+      tail: promptRef.current.slice(trigger.rangeStart + source.length),
+      addedSpace: replacementRangeEnd === trigger.rangeEnd,
     };
   };
 
@@ -2064,8 +2064,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const end = target.start + target.source.length;
     const spaced = promptRef.current[end] === " ";
     if (replacement === null) {
-      return applyPromptReplacement(target.start, spaced ? end + 1 : end, target.query, {
-        expectedText: `${target.source}${spaced ? " " : ""}`,
+      const removeSpace = spaced && target.addedSpace;
+      return applyPromptReplacement(target.start, removeSpace ? end + 1 : end, target.query, {
+        expectedText: `${target.source}${removeSpace ? " " : ""}`,
       });
     }
     return applyPromptReplacement(target.start, end, replacement, {
@@ -2080,9 +2081,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ) => {
     const source = formatComposerModelMention(step.model.instanceId, step.model.model, effort);
     const { target } = step;
-    const applied =
-      target.kind === "insert" ? replaceStepMention(target, source) : target.apply(source, effort);
-    if (applied) setModelEffortStep(null);
+    if (target.kind === "insert") replaceStepMention(target, source);
+    else target.apply(source, effort);
+    // A choice the mention can no longer take, as after an editor remount, still closes the menu.
+    setModelEffortStep(null);
   };
 
   const { onUsageLimitsCommand } = props;
@@ -2094,9 +2096,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     });
     if (item.type === "model-effort") {
       const step = activeModelEffortStep;
-      const optionId = step?.model.effort?.optionId;
-      if (!step || !optionId) return;
-      applyModelEffort(step, item.value === null ? null : { optionId, value: item.value });
+      if (!step) return;
+      const optionId = step.model.effort?.optionId;
+      if (item.value === null) applyModelEffort(step, null);
+      else if (optionId) applyModelEffort(step, { optionId, value: item.value });
       return;
     }
     const { snapshot, trigger } = resolveActiveComposerTrigger();
@@ -2260,6 +2263,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           kind: "insert",
           start: trigger.rangeStart,
           source,
+          tail: inserted.tail,
+          addedSpace: inserted.addedSpace,
           cursor: inserted.cursor,
           query: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
           modelSearchKey: triggerMenuSearchKey,
@@ -2306,11 +2311,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
   const returnToModelListStable = useStableCallback(returnToModelList);
 
-  // Extending a selection moves no caret and renders nothing, so it would leave a chip's menu up.
-  const dropModelEffortEdit = () => {
-    if (modelEffortStep?.target.kind === "edit") setModelEffortStep(null);
+  // Extending a selection moves no caret and renders nothing, so it would leave the levels up.
+  const dropModelEffortStep = () => {
+    if (modelEffortStep) setModelEffortStep(null);
   };
-  const dropModelEffortEditStable = useStableCallback(dropModelEffortEdit);
+  const dropModelEffortStepStable = useStableCallback(dropModelEffortStep);
 
   const editModelEffort = (request: ComposerModelEffortEditRequest) => {
     const entry = providerInstanceEntries.find(
@@ -2323,9 +2328,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ) ??
         entry.models.find((candidate) => candidate.slug === request.model));
     if (!entry || !option) return;
+    // A model that no longer lists levels still offers Default, to clear a restored effort.
     const model = composerModelItem(entry, option);
-    if (!model.effort) return;
     const current =
+      model.effort &&
       request.effort?.optionId === model.effort.optionId &&
       model.effort.choices.some((choice) => choice.id === request.effort?.value)
         ? request.effort.value
@@ -4028,7 +4034,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     className={cn(showMobilePendingAnswerActions && "max-sm:pb-12")}
                     onChange={onPromptChangeStable}
                     onCommandKeyDown={onComposerCommandKeyStable}
-                    onVisibleSelectionChange={dropModelEffortEditStable}
+                    onVisibleSelectionChange={dropModelEffortStepStable}
                     onPageScrollKeyDown={onPageScrollKeyDown}
                     onPageScrollKeyUp={onPageScrollKeyUp}
                     onPageScrollRelease={onPageScrollRelease}

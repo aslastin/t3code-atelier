@@ -387,6 +387,8 @@ function ComposerModelNodeView({ node, editor, getPos }: NodeViewProps) {
                     : after;
                 editor.chain().focus().setTextSelection(spaced).run();
                 const chipAt = () => {
+                  // A remount, such as a rich-text toggle, leaves this editor behind.
+                  if (editor.isDestroyed) return null;
                   const current = editor.state.doc.nodeAt(pos);
                   return current?.type.name === "composer-model" && current.attrs.source === source
                     ? current

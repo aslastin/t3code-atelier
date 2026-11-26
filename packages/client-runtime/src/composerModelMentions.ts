@@ -105,14 +105,20 @@ export function modelMentionEffortDescriptor(
   return descriptor ?? null;
 }
 
-// Choices that send no effort, as the menu's own Default does: OpenCode's variant and Claude's `default`.
-const NO_EFFORT_CHOICE_IDS: ReadonlySet<string> = new Set([DEFAULT_VARIANT_CHOICE_ID, "default"]);
+// Choices that send no effort, as the menu's own Default does. Claude's `effort` select spells it
+// `default`; elsewhere, as in OpenCode's variants, `default` can be a real level.
+function sendsNoEffort(descriptor: SelectProviderOptionDescriptor, choiceId: string): boolean {
+  return (
+    choiceId === DEFAULT_VARIANT_CHOICE_ID || (descriptor.id === "effort" && choiceId === "default")
+  );
+}
 
 /** Levels a mention offers besides Default. Prompt-injected levels like Ultrathink stay typed-only. */
 export function modelMentionEffortChoices(descriptor: SelectProviderOptionDescriptor) {
   return descriptor.options.filter(
     (choice) =>
-      !NO_EFFORT_CHOICE_IDS.has(choice.id) && !descriptor.promptInjectedValues?.includes(choice.id),
+      !sendsNoEffort(descriptor, choice.id) &&
+      !descriptor.promptInjectedValues?.includes(choice.id),
   );
 }
 

@@ -240,7 +240,7 @@ export function composerCommandKeyHandler(input: {
       prompt: promptRef.current,
     });
     if (key === "Tab" && event.shiftKey && submissionIntent === null) {
-      if (resolveActiveComposerTrigger().trigger !== null) return false;
+      if (resolveActiveComposerTrigger().trigger !== null || modelEffortStep !== null) return false;
       if (applyListEdit(event, listOutdentForTab)) return true;
       if (
         !input.togglePlanMode ||
