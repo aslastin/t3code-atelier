@@ -61,6 +61,7 @@ import {
   ThreadWorktreeRestore,
 } from "../workspace/restoreMissingWorktree.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import { layerNoTaskFolders, layerRealGit } from "./ProviderTurnStartService.testkit.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
@@ -403,6 +404,56 @@ effectIt.effect("restores into a leftover worktree folder that cannot itself be 
     ),
   );
 });
+
+effectIt.effect("recreates a missing project subfolder in a VCS plugin's checkout", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const base = yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix: "t3-restore-" }));
+    const worktreesDir = `${base}/worktrees`;
+    const repository = `${base}/repo`;
+    const checkout = `${worktreesDir}/project/feature`;
+    // A plugin checkout: its marker, no `.git`, and the project's subfolder gone.
+    for (const root of [repository, checkout])
+      yield* fs.makeDirectory(`${root}/.kite`, { recursive: true });
+    yield* fs.writeFileString(`${checkout}/.kite/HEAD`, "feature\n");
+    yield* fs.writeFileString(`${repository}/.kite/HEAD`, "main\n");
+    yield* fs.makeDirectory(`${repository}/my-project`);
+    yield* Effect.gen(function* () {
+      const { restore } = yield* ThreadWorktreeRestore;
+      yield* restore({
+        id: ThreadId.make("thread_plugin_subfolder"),
+        projectId: ProjectId.make("project_plugin_subfolder"),
+        worktreePath: `${checkout}/my-project`,
+        branch: "feature",
+      });
+    }).pipe(
+      Effect.provide(
+        layerThreadWorktreeRestore.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              layerNoTaskFolders,
+              Layer.mock(ServerConfig.ServerConfig)({
+                baseDir: base,
+                worktreesDir,
+              } as ServerConfig.ServerConfig["Service"]),
+              ServerSettings.layerTest(),
+              Layer.mock(GitWorkflow.GitWorkflowService)({}),
+              Layer.mock(ProjectService.ProjectService)({
+                getById: () =>
+                  Effect.succeedSome({ workspaceRoot: `${repository}/my-project` } as never),
+              }),
+            ),
+          ),
+        ),
+      ),
+      Effect.provideService(VcsPluginDrivers, {
+        markers: () => [".kite/HEAD"],
+        installedMarkers: () => [".kite/HEAD"],
+      } as unknown as VcsPluginDrivers["Service"]),
+    );
+    expect(yield* fs.exists(`${checkout}/my-project`)).toBe(true);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 it.each([
   { label: "directly in the scratch root", folder: "/tmp/t3-home/scratch/notes", recreated: true },

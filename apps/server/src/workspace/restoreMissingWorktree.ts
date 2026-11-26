@@ -16,6 +16,7 @@ import { isWithinRoot } from "./KnownWorkspaces.ts";
 import { withWorkspaceLease } from "./workspaceLease.ts";
 import { restoreWorktreeProjectFolder, worktreeRootForProject } from "./worktreeProjectPath.ts";
 import * as TaskFolders from "./TaskFolders.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import { TerminalCwdRecovery } from "../terminal/Manager.ts";
 
 export class WorktreeRecreateError extends Schema.TaggedError<WorktreeRecreateError>()(
@@ -243,12 +244,21 @@ export const makeRestoreMissingWorktree = Effect.gen(function* () {
     const exists = yield* fileSystem.exists(worktreePath).pipe(Effect.orElseSucceed(() => true));
     const leftover = exists && (yield* isLeftoverFolder(worktreePath));
     if (exists && !leftover) {
+      // A VCS plugin's checkout carries its marker where a Git checkout carries `.git`.
+      const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
+      let hasCheckout = false;
+      for (const marker of [".git", ...(plugins?.installedMarkers() ?? [])]) {
+        if (
+          yield* fileSystem
+            .exists(path.join(worktreePath, marker))
+            .pipe(Effect.orElseSucceed(() => false))
+        )
+          hasCheckout = true;
+      }
       if (
         folder !== worktreePath &&
         !(yield* fileSystem.exists(folder).pipe(Effect.orElseSucceed(() => true))) &&
-        (yield* fileSystem
-          .exists(path.join(worktreePath, ".git"))
-          .pipe(Effect.orElseSucceed(() => false)))
+        hasCheckout
       ) {
         yield* restoreWorktreeProjectFolder(fileSystem, path, worktreePath, folder).pipe(
           Effect.mapError((cause) => new WorktreeRecreateError({ worktreePath, branch, cause })),
