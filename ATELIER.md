@@ -29,6 +29,9 @@ appears in the app version as `+atelier.<N>`.
 4. **Reasoning effort in model mentions.** Picking a model in the composer's `@` menu lists its
    reasoning levels in the same menu, and the chip reads **Model · Level**. Click the level to
    change it. The agent reads the exact model and level from each mention.
+5. **Markdown links in the composer.** Typing `[label](https://…)` shows the label as a link with
+   the site's icon, and its Markdown returns while the caret is inside it. Select text and use
+   **Insert Link** (⌃⌘K on macOS, set in **Settings → Keybindings**) to link it.
 
 ### Plan mode
 
