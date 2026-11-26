@@ -773,7 +773,10 @@ const make = Effect.gen(function* () {
     let registered: ReadonlyArray<string> | undefined;
     const listRegistered = Effect.fnUntraced(function* () {
       registered ??= (yield* Effect.forEach(new Set(projectRoots), (root) =>
-        gitWorkflow.listWorktrees(root).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => [])),
+        (gitWorkflowHasPlugins()
+          ? gitWorkflow.listWorktrees(root)
+          : git.listWorktreePaths(root)
+        ).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => [])),
       )).flat();
       return registered;
     });
