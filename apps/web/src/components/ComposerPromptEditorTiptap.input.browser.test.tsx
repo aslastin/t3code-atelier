@@ -1735,6 +1735,39 @@ describe("Markdown links", () => {
     expect(textWithMark(editor, "link")).toEqual(["second"]);
   });
 
+  it.each([
+    {
+      name: "ArrowRight",
+      value: `[docs](${href})`,
+      keys: "{ArrowRight}X",
+      expected: `[dXocs](${href})`,
+    },
+    {
+      name: "Delete",
+      value: `[docs](${href}) now`,
+      keys: "{Delete}",
+      expected: `[ocs](${href}) now`,
+    },
+  ])("moves into a link that starts the line with one $name", async ({ value, keys, expected }) => {
+    await using screen = await mountEditor(value);
+    const { editor } = screen;
+    await focusAt(editor, 1);
+    expect(editor.state.doc.textContent).toBe("docs" + value.slice(value.indexOf(")") + 1));
+    await userEvent.keyboard(keys);
+    await vi.waitFor(() => expect(serializeEditorDoc(editor.state.doc).value).toBe(expected));
+  });
+
+  it("extends a selection into a link that starts the line with one Shift+ArrowRight", async () => {
+    await using screen = await mountEditor(`[docs](${href})`);
+    const { editor } = screen;
+    await focusAt(editor, 1);
+    await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    await vi.waitFor(() => expect(editor.state.selection.empty).toBe(false));
+    expect(
+      editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to),
+    ).toContain("d");
+  });
+
   it("does not open the URL field for a link's revealed address", async () => {
     const editorRef = createRef<ComposerPromptEditorHandle>();
     const value = "[docs](https://old.test) after";

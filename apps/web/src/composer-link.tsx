@@ -22,6 +22,7 @@ import {
   parseInlineMarkdownRange,
 } from "~/composer-markdown-source";
 import { buildTiptapContent, serializeEditorDoc } from "~/composer-rich-text-doc";
+import { caretLineDirection } from "~/composer-text-direction";
 import { isComposerLinkHref, MARKDOWN_SOURCE_MARK, TYPED_LINK } from "~/composer-rich-text";
 
 const URL_SCHEME = /^[a-z][a-z\d+.-]*:/i;
@@ -280,7 +281,7 @@ export const ComposerLinkExtension = TiptapMark.create({
     return [typedLinkRule()];
   },
   addProseMirrorPlugins() {
-    return [faviconPlugin(this.editor), pendingLinkPlugin()];
+    return [faviconPlugin(this.editor), pendingLinkPlugin(), linkStartKeysPlugin()];
   },
 });
 
@@ -406,6 +407,48 @@ export function applyComposerLink(editor: Editor, href: string): boolean {
     .command(({ tr }) => linkSelection(tr, href))
     .scrollIntoView()
     .run();
+}
+
+/**
+ * At the start of a line, Chromium gives the favicon before a link its own caret stop,
+ * so the first forward key would only step over the icon. Move and delete by the
+ * label's first character instead.
+ */
+function linkStartKeysPlugin(): Plugin {
+  return new Plugin({
+    props: {
+      handleKeyDown(view, event) {
+        const forward = caretLineDirection(view.state) === "rtl" ? "ArrowLeft" : "ArrowRight";
+        if (event.key !== forward && event.key !== "Delete") return false;
+        if (event.altKey || event.metaKey || event.ctrlKey || event.isComposing) return false;
+        if (event.key === "Delete" && event.shiftKey) return false;
+        const { selection } = view.state;
+        if (!(selection instanceof TextSelection)) return false;
+        if (event.key === "Delete" && !selection.empty) return false;
+        if (!event.shiftKey && !selection.empty) return false;
+        const { $head } = selection;
+        const link = (node: ProseMirrorNode | null) =>
+          node?.marks.find((mark) => mark.type.name === "link")?.attrs.href ?? null;
+        const href = link($head.nodeAfter);
+        if (!$head.nodeAfter?.isText || href === null || link($head.nodeBefore) === href) {
+          return false;
+        }
+        const next = $head.pos + 1;
+        const tr =
+          event.key === "Delete"
+            ? view.state.tr.delete($head.pos, next)
+            : view.state.tr.setSelection(
+                TextSelection.create(
+                  view.state.doc,
+                  event.shiftKey ? selection.anchor : next,
+                  next,
+                ),
+              );
+        view.dispatch(tr.scrollIntoView());
+        return true;
+      },
+    },
+  });
 }
 
 const pendingLinkKey = new PluginKey<DecorationSet>("composer-link-pending");
