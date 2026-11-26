@@ -9,17 +9,32 @@ import {
 } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { ReactRenderer } from "@tiptap/react";
+import { isPrivateNetworkHost } from "@t3tools/shared/hostClassification";
 
 import { MarkdownLinkFavicon } from "~/components/chat/MarkdownExternalLink";
 import { collapseMarkdownSource, parseInlineMarkdownRange } from "~/composer-markdown-source";
 import { literalBackticksBefore } from "~/composer-rich-text-doc";
 import { isComposerLinkHref, TYPED_LINK } from "~/composer-rich-text";
 
+// A colon before a port number, as in `localhost:3000`, does not end a scheme.
+const URL_SCHEME = /^[a-z][a-z\d+.-]*:(?!\d)/i;
+
 /** The destination a typed or pasted URL links to, or null when the composer cannot link it. */
 export function normalizeComposerLinkHref(input: string): string | null {
   const trimmed = input.trim();
   if (!trimmed || /\s/.test(trimmed)) return null;
-  const withScheme = /^[a-z][a-z\d+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  let withScheme = trimmed;
+  if (!URL_SCHEME.test(trimmed)) {
+    let host: string;
+    try {
+      host = new URL(`http://${trimmed}`).hostname;
+    } catch {
+      return null;
+    }
+    // Local dev servers rarely serve TLS; Tailscale names usually do.
+    const local = isPrivateNetworkHost(host) && !host.endsWith(".ts.net");
+    withScheme = `${local ? "http" : "https"}://${trimmed}`;
+  }
   let url: URL;
   try {
     url = new URL(withScheme);
@@ -27,9 +42,13 @@ export function normalizeComposerLinkHref(input: string): string | null {
     return null;
   }
   if ((url.protocol !== "http:" && url.protocol !== "https:") || !url.hostname) return null;
-  // Keep what the user wrote, escaping only what would end the Markdown destination.
-  const href = withScheme.replace(/[()<>]/g, (char) => encodeURIComponent(char));
-  return isComposerLinkHref(href) ? href : null;
+  if (isComposerLinkHref(withScheme)) return withScheme;
+  // Keep what the user wrote unless a bracket would end the Markdown destination.
+  const escaped = withScheme.replace(
+    /[()<>]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return isComposerLinkHref(escaped) ? escaped : null;
 }
 
 function linkHost(href: string): string | null {

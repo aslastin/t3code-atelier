@@ -1316,7 +1316,12 @@ describe("Markdown links", () => {
     // The field is portaled outside the composer.
     const field = page.getByRole("textbox", { name: "Link URL" });
     await expect.element(field).toHaveFocus();
-    await userEvent.keyboard("t3.co{Escape}");
+    await userEvent.keyboard("path:fool{Enter}");
+    await expect
+      .element(page.getByText("Enter a web address, like t3.codes or localhost:3000"))
+      .toBeVisible();
+    await expect.element(field).toHaveAttribute("aria-invalid", "true");
+    await userEvent.keyboard("{Escape}");
     await expect.element(field).not.toBeInTheDocument();
     expect(document.activeElement).toBe(editor.view.dom);
     expect(editor.state.selection).toMatchObject(selection);

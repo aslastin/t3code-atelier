@@ -1,6 +1,6 @@
 import type { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 import { useGT } from "gt-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import { normalizeComposerLinkHref } from "~/composer-link";
 
@@ -22,6 +22,7 @@ export function ComposerLinkEditor({
   const gt = useGT();
   const [value, setValue] = useState("");
   const [invalid, setInvalid] = useState(false);
+  const errorId = useId();
   return (
     <Popover
       open
@@ -45,6 +46,7 @@ export function ComposerLinkEditor({
           placeholder={gt("Paste or type a link")}
           aria-label={gt("Link URL")}
           aria-invalid={invalid || undefined}
+          aria-describedby={invalid ? errorId : undefined}
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck={false}
@@ -67,6 +69,11 @@ export function ComposerLinkEditor({
             }
           }}
         />
+        {invalid ? (
+          <p id={errorId} className="mt-1.5 text-xs text-destructive">
+            {gt("Enter a web address, like t3.codes or localhost:3000")}
+          </p>
+        ) : null}
       </PopoverPopup>
     </Popover>
   );
