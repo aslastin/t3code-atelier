@@ -189,8 +189,9 @@ function typedLinkRule(): InputRule {
     find: TYPED_LINK,
     handler: ({ state, range, match }) => {
       const href = match[2]!;
-      // Only the closing `)` may be new: text inserted in one go, like a paste, is not in
-      // the document yet and stays as typed. The match starts before any selection it replaces.
+      // Only the closing `)` may be new here: text inserted in one go is not in the document
+      // yet, so this rule cannot place it; `editedLinkPlugin` links it once it is inserted.
+      // The match starts before any selection it replaces.
       if (match[0].length - (state.selection.from - range.from) > 1) return null;
       const tail = `](${href}`;
       // Positions follow the match: the typed `)` may replace a selection or already be
@@ -431,6 +432,12 @@ export function applyComposerLink(editor: Editor, href: string): boolean {
  * so the first forward key would only step over the icon. Move and delete by the
  * label's first character instead.
  */
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+function firstGraphemeLength(text: string): number {
+  return graphemes.segment(text)[Symbol.iterator]().next().value?.segment.length ?? 1;
+}
+
 function linkStartKeysPlugin(): Plugin {
   return new Plugin({
     props: {
@@ -450,7 +457,8 @@ function linkStartKeysPlugin(): Plugin {
         if (!$head.nodeAfter?.isText || href === null || link($head.nodeBefore) === href) {
           return false;
         }
-        const next = $head.pos + 1;
+        // A whole character, so an emoji or accented letter is not split.
+        const next = $head.pos + firstGraphemeLength($head.nodeAfter.text!);
         const tr =
           event.key === "Delete"
             ? view.state.tr.delete($head.pos, next)

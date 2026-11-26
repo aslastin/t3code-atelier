@@ -1756,11 +1756,25 @@ describe("Markdown links", () => {
       keys: "{Delete}",
       expected: `[ocs](${href}) now`,
     },
+    {
+      name: "Delete before an emoji",
+      value: `[🚀 go](${href}) now`,
+      keys: "{Delete}",
+      expected: `[ go](${href}) now`,
+    },
+    {
+      name: "ArrowRight before an emoji",
+      value: `[🚀 go](${href})`,
+      keys: "{ArrowRight}X",
+      expected: `[🚀X go](${href})`,
+    },
   ])("moves into a link that starts the line with one $name", async ({ value, keys, expected }) => {
     await using screen = await mountEditor(value);
     const { editor } = screen;
     await focusAt(editor, 1);
-    expect(editor.state.doc.textContent).toBe("docs" + value.slice(value.indexOf(")") + 1));
+    expect(editor.state.doc.textContent).toBe(
+      value.slice(1, value.indexOf("]")) + value.slice(value.indexOf(")") + 1),
+    );
     await userEvent.keyboard(keys);
     await vi.waitFor(() => expect(serializeEditorDoc(editor.state.doc).value).toBe(expected));
   });
