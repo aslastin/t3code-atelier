@@ -1,6 +1,9 @@
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
+
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 
 import { resolveWorkspaceLocation } from "./workspaceLease.ts";
 import { WorkspacePathOutsideRootError } from "./WorkspacePaths.ts";
@@ -39,8 +42,15 @@ export const worktreeRootForProject = Effect.fn("worktreeRootForProject")(
     projectCwd: string | Effect.Effect<string | undefined>,
     isManagedRoot?: (candidate: string) => Effect.Effect<boolean>,
     /** Marker paths of VCS plugins, which mark a checkout root as `.git` does. */
-    rootMarkers: ReadonlyArray<string> = [],
+    markers?: ReadonlyArray<string>,
   ) {
+    // Without explicit markers, those of the plugins the caller's server runs.
+    const rootMarkers =
+      markers ??
+      Option.match(yield* Effect.serviceOption(VcsPluginDrivers), {
+        onNone: () => [],
+        onSome: (plugins) => plugins.markers(),
+      });
     const resolved = path.resolve(folder);
     if (resolved !== folder) {
       const trailing = folder.slice(resolved.length);
