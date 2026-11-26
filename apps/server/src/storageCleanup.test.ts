@@ -340,7 +340,13 @@ const cleanupFixture = (
   },
   sqlOverride?: SqlClient.SqlClient,
   /** A Kite plugin worktree, read and removed through the plugin instead of Git. */
-  plugin?: { readonly recreates: boolean },
+  plugin?: {
+    readonly recreates: boolean;
+    /** Placed outside the managed worktree folder. */
+    readonly outside?: boolean;
+    /** The project's driver also lists Git's worktree, as for a Git project. */
+    readonly listsGitWorktree?: boolean;
+  },
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -359,7 +365,9 @@ const cleanupFixture = (
     yield* fs.makeDirectory(config.worktreesDir, { recursive: true });
     const worktree = `${config.worktreesDir}/feature`;
     yield* command(repo, ["worktree", "add", "-b", "feature", worktree]);
-    const pluginWorktree = `${config.worktreesDir}/kite-feature`;
+    const pluginWorktree = plugin?.outside
+      ? `${repo}/kite-feature`
+      : `${config.worktreesDir}/kite-feature`;
     let pluginStatus = {
       refName: "feature",
       files: [] as ReadonlyArray<{ readonly path: string; readonly untracked?: boolean }>,
@@ -489,7 +497,8 @@ const cleanupFixture = (
             Effect.map((result) => result.stdout.trim() || null),
           ),
         ...(plugin && {
-          listWorktrees: () => Effect.succeed([pluginWorktree]),
+          listWorktrees: () =>
+            Effect.succeed(plugin.listsGitWorktree ? [pluginWorktree, worktree] : [pluginWorktree]),
           status: () =>
             Effect.sync(() => ({
               refName: pluginStatus.refName,
@@ -2267,6 +2276,82 @@ describe("VCS plugin worktrees", () => {
           : row.reason,
       });
       expect(yield* fixture.fs.exists(fixture.pluginWorktree)).toBe(row.removed !== true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("keeps a VCS plugin worktree outside the managed worktree folder", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, {
+        recreates: true,
+        outside: true,
+      });
+      const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry).toMatchObject({
+        outcome: "kept",
+        reason: "Outside the managed worktree folder",
+      });
+      expect(yield* fixture.fs.exists(fixture.pluginWorktree)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("cleans a Git worktree through Git while a VCS plugin is on", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, {
+        recreates: true,
+        listsGitWorktree: true,
+      });
+      const thread = shell({ branch: "feature", worktreePath: fixture.worktree });
+      fixture.setThreads([thread]);
+      // Git sees this edit; a plugin's status, read by mistake, would not.
+      yield* fixture.fs.writeFileString(`${fixture.worktree}/tracked.txt`, "edited\n");
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry).toMatchObject({ outcome: "kept", reason: "Has uncommitted changes (1 file)" });
+      expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("rechecks that a live thread's branch is still there right before removal", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, { recreates: true });
+      const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      fixture.setThreads([thread]);
+      fixture.setPluginStatus({
+        refName: "feature",
+        files: [],
+        aheadCount: 0,
+        repositoryBranches: ["feature"],
+      });
+      // The branch goes away between the first check and the lease.
+      fixture.setOpenSessionCwd(fixture.pluginWorktree);
+      fixture.setSessionLive(false);
+      fixture.setOnLiveCheck(
+        Effect.sync(() =>
+          fixture.setPluginStatus({
+            refName: "feature",
+            files: [],
+            aheadCount: 0,
+            repositoryBranches: [],
+          }),
+        ),
+      );
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry).toMatchObject({
+        outcome: "kept",
+        reason: "Kite could not recreate it for the thread's next turn",
+      });
+      expect(yield* fixture.fs.exists(fixture.pluginWorktree)).toBe(true);
     }).pipe(Effect.provide(cleanupTestLayer)),
   );
 });

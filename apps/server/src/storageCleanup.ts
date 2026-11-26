@@ -381,6 +381,15 @@ const make = Effect.gen(function* () {
     projectRoot: string,
   ) {
     if (!gitWorkflowHasPlugins()) return false;
+    // Git's own worktrees go through Git: a plugin checkout carries its marker, not `.git`.
+    if (yield* fs.exists(path.join(worktreePath, ".git")).pipe(Effect.orElseSucceed(() => true)))
+      return false;
+    let marked = false;
+    for (const marker of plugins?.markers() ?? []) {
+      if (yield* fs.exists(path.join(worktreePath, marker)).pipe(Effect.orElseSucceed(() => false)))
+        marked = true;
+    }
+    if (!marked) return false;
     const listed = yield* gitWorkflow
       .listWorktrees(projectRoot)
       .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
@@ -1098,6 +1107,8 @@ const make = Effect.gen(function* () {
     });
     const worktreePathReason = Effect.fn("StorageCleanup.worktreePathReason")(function* (
       worktreePath: string,
+      // A VCS plugin's checkout has no gitfile; its plugin listing it stands in for one.
+      requireGitLink = true,
     ) {
       // Allow symlinked parents, never a symlinked worktree directory.
       const realPath = yield* fs.realPath(worktreePath);
@@ -1106,6 +1117,7 @@ const make = Effect.gen(function* () {
         return "worktree is a symbolic link";
       if (!roots.some((root) => inside(root, realPath)))
         return "outside the managed worktree folder";
+      if (!requireGitLink) return null;
       const linked = yield* isLinkedWorktree(worktreePath).pipe(
         Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(false)),
       );
@@ -1548,6 +1560,8 @@ const make = Effect.gen(function* () {
         // deletion apply; the merge and unchanged rules read Git history a plugin does not expose.
         if (yield* isListedPluginWorktree(worktreePath, project.workspaceRoot)) {
           if (!eligible) return keep(notDueReason);
+          const pluginPathReason = yield* worktreePathReason(worktreePath, false);
+          if (pluginPathReason !== null) return keep(pluginPathReason);
           const first = yield* pluginWorktreeState(worktreePath, thread.branch, settings);
           if (first.branchChanged) {
             if (!deleted) yield* followBranch(thread.worktreePath!);
@@ -1555,16 +1569,15 @@ const make = Effect.gen(function* () {
           }
           // A live thread's next turn brings its checkout back: the plugin checks the branch out
           // again, so the repository must still list it once the worktree is gone.
-          const branch = thread.branch;
-          if (
-            !deleted &&
-            (!first.recreates ||
-              branch === null ||
-              !(yield* gitWorkflow
-                .listLocalBranchNames(project.workspaceRoot)
-                .pipe(Effect.map((names) => names.includes(branch)))))
-          )
-            return keep(`${first.label} could not recreate it for the thread's next turn`);
+          const unrecoverable = Effect.fnUntraced(function* (recreates: boolean) {
+            if (deleted) return false;
+            const branch = thread.branch;
+            if (!recreates || branch === null) return true;
+            const names = yield* gitWorkflow.listLocalBranchNames(project.workspaceRoot);
+            return !names.includes(branch);
+          });
+          const cannotRecreate = `${first.label} could not recreate it for the thread's next turn`;
+          if (yield* unrecoverable(first.recreates)) return keep(cannotRecreate);
           if (first.changes !== null) return keep(first.changes);
           const blocked = yield* blockedSinceCheck();
           if (blocked !== null) return keep(blocked);
@@ -1575,8 +1588,11 @@ const make = Effect.gen(function* () {
             Effect.gen(function* () {
               const blockedWhileMeasuring = yield* blockedSinceCheck();
               if (blockedWhileMeasuring !== null) return keep(blockedWhileMeasuring);
+              const lastPathReason = yield* worktreePathReason(worktreePath, false);
+              if (lastPathReason !== null) return keep(lastPathReason);
               const last = yield* pluginWorktreeState(worktreePath, thread.branch, settings);
               if (last.branchChanged) return keep("repository or branch changed since check");
+              if (yield* unrecoverable(last.recreates)) return keep(cannotRecreate);
               if (last.changes !== null) return keep(last.changes);
               if (yield* settingsChangedSinceCheck) return keep("settings changed since check");
               yield* gitWorkflow.removeWorktree({
