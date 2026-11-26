@@ -151,6 +151,28 @@ switch (command) {
     copyTree(snapshotDir(revision), root);
     break;
   }
+  case "commit": {
+    const [messageFile, pathsFile] = args;
+    const message = fs.readFileSync(messageFile, "utf8").trim();
+    const only = pathsFile ? fs.readFileSync(pathsFile, "utf8").split("\n").filter(Boolean) : null;
+    const base = path.join(kite, "base");
+    for (const change of changes()) {
+      if (only && !only.includes(change.path)) continue;
+      const from = path.join(root, change.path);
+      const to = path.join(base, change.path);
+      if (change.status === "deleted") fs.rmSync(to, { force: true });
+      else if (fs.statSync(from).isDirectory()) copyTree(from, to);
+      else {
+        fs.mkdirSync(path.dirname(to), { recursive: true });
+        fs.copyFileSync(from, to);
+      }
+    }
+    const log = path.join(kite, "commits.log");
+    fs.appendFileSync(log, message.split("\n")[0] + "\n");
+    const count = fs.readFileSync(log, "utf8").split("\n").filter(Boolean).length;
+    out({ commitSha: "kite-" + count, subject: message.split("\n")[0] });
+    break;
+  }
   case "changed":
     out({ revision: "base-1", files: changes() });
     break;
@@ -202,6 +224,7 @@ export function writeFakeVcsPlugin(directory: string, options: FakeVcsPluginOpti
         ...(options.checkpoints ? { checkpoints: options.checkpoints } : {}),
         commands: {
           status: [kite, options.statusCommand ?? "status"],
+          commit: [kite, "commit", "{messageFile}", "{pathsFile}"],
           worktreeCreate: [kite, "worktree-add", "{path}", "{newRef}", "{baseRef}"],
           worktreeRemove: [kite, "worktree-remove", "{path}"],
           worktreeList: [kite, "worktree-list"],

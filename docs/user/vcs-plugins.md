@@ -85,7 +85,7 @@ Every command except `readFile` prints one JSON object on stdout. Optional field
 | `status` (required) |                                   | `{ "refName": string \| null, "isDefaultRef"?, "hasPrimaryRemote"?, "files"?: [{ "path", "insertions"?, "deletions"? }], "hasUpstream"?, "aheadCount"?, "behindCount"? }` |
 | `listRemotes`       |                                   | `{ "remotes": [{ "name", "url", "pushUrl"?, "isPrimary"? }] }`. A VCS without URLs uses `<vcs>://<repository>`.                                                           |
 | `listRefs`          |                                   | `{ "refs": [{ "name", "current"?, "isDefault"?, "isRemote"?, "remoteName"? }] }`. Without it, only the current ref is offered.                                            |
-| `commit`            | `{messageFile}`, `{pathsFile}`    | `{ "commitSha"?, "subject"? }`. `{pathsFile}` lists the selected files, one per line. Without it, only "commit all" works.                                                |
+| `commit`            | `{messageFile}`, `{pathsFile}`    | `{ "commitSha"?, "subject"? }`. `{pathsFile}` lists the files to commit, one per line: the selected ones, or every changed file. Without it, only "commit all" works.     |
 | `push`              |                                   | `{ "branch"?, "upstreamBranch"? }`                                                                                                                                        |
 | `pull`              |                                   | `{ "status": "pulled" \| "skipped_up_to_date", "refName", "upstreamRef"? }`                                                                                               |
 | `worktreeCreate`    | `{path}`, `{newRef}`, `{baseRef}` | `{ "refName" }`. Create the checkout at `{path}`; T3 Code chooses it, as it does for Git.                                                                                 |
@@ -100,7 +100,7 @@ Every command except `readFile` prints one JSON object on stdout. Optional field
 
 Paths are relative to the repository root and use `/`. With `capabilities.worktrees`, both
 `worktreeCreate` and `worktreeRemove` are required, and **New worktree** is offered for the
-plugin's repositories. Commit and push are offered only when their commands exist. Pull requests,
+plugin's repositories. Commit and push are offered only when their commands exist. A commit needs a message you type: T3 Code does not write one for a plugin's repository. Pull requests,
 the branch comparison, and sparse checkouts stay Git-only.
 
 When a project is a subfolder of the repository, a new worktree's thread works in the same

@@ -128,6 +128,18 @@ describe("ManifestVcsDriver", () => {
         ["a.txt"],
       );
       assert.isTrue(status.hasWorkingTreeChanges);
+
+      const committed = yield* driver!.workflow!.commit!({
+        cwd: `${repository}/sub`,
+        commitMessage: "Change a\n\nBody",
+      });
+      assert.deepStrictEqual(committed, {
+        status: "created",
+        commitSha: "kite-1",
+        subject: "Change a",
+      });
+      const after = yield* driver!.workflow!.status!({ cwd: repository });
+      assert.isFalse(after.hasWorkingTreeChanges);
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 

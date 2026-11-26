@@ -240,8 +240,16 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
             cwd: request.cwd,
             detail: `${manifest.label} commits every change; it cannot commit only the selected files.`,
           });
+        // "Commit all" lists every changed file, so {pathsFile} always names what to commit.
+        const paths =
+          request.filePaths ??
+          (usesPlaceholder(commands.commit, "pathsFile")
+            ? ((yield* json("status", VcsPluginStatusOutput, request.cwd)).files ?? []).map(
+                (file) => file.path,
+              )
+            : undefined);
         const out = yield* withTextFile(request.commitMessage, (messageFile) =>
-          withTextFile(request.filePaths?.join("\n"), (pathsFile) =>
+          withTextFile(paths?.join("\n"), (pathsFile) =>
             json("commit", VcsPluginCommitOutput, request.cwd, { messageFile, pathsFile }),
           ),
         );
