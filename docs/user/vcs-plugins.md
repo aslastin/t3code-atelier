@@ -42,6 +42,7 @@ one closer to the project folder wins.
     "status": ["./bin/status.mjs"],
     "listRemotes": ["./bin/remotes.mjs"],
     "commit": ["myvcs", "commit", "--all", "--file", "{messageFile}"],
+    "diff": ["./bin/diff.mjs"],
     "worktreeCreate": ["./bin/worktree-add.mjs", "{path}", "{newRef}", "{baseRef}"],
     "worktreeRemove": ["./bin/worktree-remove.mjs", "{path}"],
     "worktreeAttach": ["./bin/worktree-attach.mjs", "{path}", "{ref}"],
@@ -87,6 +88,7 @@ Every command except `readFile` prints one JSON object on stdout. Optional field
 | `listRemotes`       |                                   | `{ "remotes": [{ "name", "url", "pushUrl"?, "isPrimary"? }] }`. A VCS without URLs uses `<vcs>://<repository>`.                                                           |
 | `listRefs`          |                                   | `{ "refs": [{ "name", "current"?, "isDefault"?, "isRemote"?, "remoteName"? }] }`. Without it, only the current ref is offered.                                            |
 | `commit`            | `{messageFile}`, `{pathsFile}`    | `{ "commitSha"?, "subject"? }`. `{pathsFile}` lists the files to commit, one per line: the selected ones, or every changed file. Without it, only "commit all" works.     |
+| `diff`              | `{pathsFile}`                     | `{ "patch" }`, the uncommitted changes as a Git-format patch, only of `{pathsFile}` when given. Optional.                                                                 |
 | `push`              |                                   | `{ "branch"?, "upstreamBranch"? }`                                                                                                                                        |
 | `pull`              |                                   | `{ "status": "pulled" \| "skipped_up_to_date", "refName", "upstreamRef"? }`                                                                                               |
 | `worktreeCreate`    | `{path}`, `{newRef}`, `{baseRef}` | `{ "refName" }`. Create the checkout at `{path}`; T3 Code chooses it, as it does for Git.                                                                                 |
@@ -102,8 +104,10 @@ Every command except `readFile` prints one JSON object on stdout. Optional field
 
 Paths are relative to the repository root and use `/`. With `capabilities.worktrees`, both
 `worktreeCreate` and `worktreeRemove` are required, and **New worktree** is offered for the
-plugin's repositories. Commit and push are offered only when their commands exist. A commit needs a message you type: T3 Code does not write one for a plugin's repository. Pull requests,
-the branch comparison, and sparse checkouts stay Git-only.
+plugin's repositories. Commit and push are offered only when their commands exist. Without a
+typed message, T3 Code writes one as it does for Git, from the files `status` lists and, when the
+plugin has it, the patch `diff` prints. Pull requests, committing on a new branch, the branch
+comparison, and sparse checkouts stay Git-only.
 
 When a project is a subfolder of the repository, a new worktree's thread works in the same
 subfolder of the new checkout.

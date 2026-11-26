@@ -85,13 +85,18 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
         refName: "trunk",
         hasPrimaryRemote: false,
         hasWorkingTreeChanges: true,
-        workingTree: { files: [], insertions: 0, deletions: 0 },
+        workingTree: {
+          files: [{ path: "a.txt", insertions: 1, deletions: 0 }],
+          insertions: 1,
+          deletions: 0,
+        },
         hasUpstream: true,
         aheadCount: 1,
         behindCount: 2,
         pr: null,
       };
       const commits: string[] = [];
+      const written: Array<{ summary: string; patch: string }> = [];
       const driver = testVcsDriver({
         capabilities,
         workflow: {
@@ -102,6 +107,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
               commits.push(input.commitMessage ?? "");
               return { status: "created" as const, commitSha: "abc" };
             }),
+          workingDiff: () => Effect.succeed("diff --git a/a.txt b/a.txt"),
         },
       });
       const handle = {
@@ -127,7 +133,13 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
               resolve: () => Effect.succeed(handle),
             }),
             Layer.mock(GitVcsDriver.GitVcsDriver)({}),
-            Layer.mock(GitManager.GitManager)({}),
+            Layer.mock(GitManager.GitManager)({
+              writeCommitMessage: (input) =>
+                Effect.sync(() => {
+                  written.push({ summary: input.summary, patch: input.patch });
+                  return "Change a.txt";
+                }),
+            }),
           ),
         ),
       );
@@ -168,6 +180,13 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
       assert.deepEqual(commits, ["save"]);
       assert.equal(result.commit.commitSha, "abc");
       assert.deepEqual(events, ["action_started", "phase_started", "action_finished"]);
+
+      // Without a typed message, it is written from the driver's status and patch, as for Git.
+      yield* workflow.runStackedAction({ cwd, actionId: "generated", action: "commit" });
+      assert.deepEqual(written, [
+        { summary: "a.txt (+1 -0)", patch: "diff --git a/a.txt b/a.txt" },
+      ]);
+      assert.deepEqual(commits, ["save", "Change a.txt"]);
     }),
   );
 

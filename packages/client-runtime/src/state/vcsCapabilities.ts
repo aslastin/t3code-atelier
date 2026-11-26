@@ -9,7 +9,6 @@ export type VcsCapability =
   | "pullRequest"
   | "worktree"
   | "reviewDiff"
-  | "commitMessageGeneration"
   | "featureBranch";
 
 type CapabilityStatus = Pick<VcsStatusLocalResult, "capabilities"> | null | undefined;
@@ -29,8 +28,7 @@ export function vcsAllows(status: CapabilityStatus, capability: VcsCapability): 
       return capabilities.supportsWorktrees;
     case "reviewDiff":
       return capabilities.supportsReviewDiff;
-    // Both read Git: the staged diff a message is written from, and the branch it starts.
-    case "commitMessageGeneration":
+    // "Commit on a new branch" creates and switches branches through Git.
     case "featureBranch":
       return capabilities.kind === GIT_VCS_KIND;
   }

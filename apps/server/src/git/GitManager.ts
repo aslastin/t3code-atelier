@@ -190,6 +190,17 @@ export class GitManager extends Context.Service<
       input: GitRunStackedActionInput,
       options?: GitRunStackedActionOptions,
     ) => Effect.Effect<GitRunStackedActionResult, GitManagerServiceError>;
+    /**
+     * Atelier fork: a commit message for changes another VCS describes, written as for Git's staged
+     * diff with the same model and style settings.
+     */
+    readonly writeCommitMessage: (input: {
+      readonly cwd: string;
+      readonly threadId?: ThreadId | undefined;
+      readonly branch: string | null;
+      readonly summary: string;
+      readonly patch: string;
+    }) => Effect.Effect<string, GitManagerServiceError>;
     /** Pushes the checkout's branch when needed, then opens its PR or returns the one already open. */
     readonly createPullRequest: (input: {
       readonly cwd: string;
@@ -827,6 +838,44 @@ export const make = Effect.gen(function* () {
       ));
     return { settings: resolveProjectSettings(settings, projectId).settings, projectId };
   });
+  const textGenerationSettingsFor = (
+    input: {
+      readonly cwd: string;
+      readonly threadId?: ThreadId | undefined;
+      readonly projectId?: ProjectId | undefined;
+    },
+    operation: string,
+  ): Effect.Effect<SourceControlTextGenerationSettings, GitManagerError> =>
+    projectSettingsFor(input).pipe(
+      Effect.flatMap(({ settings, projectId }) =>
+        settings.sourceControlWriterModelSelection === null
+          ? Effect.succeed({
+              modelSelection: settings.textGenerationModelSelection,
+              projectId,
+              style: settings.sourceControlWritingStyle,
+            })
+          : providerRegistry.getProviders.pipe(
+              Effect.map((providers) => ({
+                modelSelection: ServerSettings.resolveSourceControlWriterModelSelection(
+                  settings,
+                  providers,
+                  projectId,
+                ),
+                projectId,
+                style: settings.sourceControlWritingStyle,
+              })),
+            ),
+      ),
+      Effect.mapError(
+        (cause) =>
+          new GitManagerError({
+            operation,
+            cwd: input.cwd,
+            detail: "Failed to get server settings.",
+            cause,
+          }),
+      ),
+    );
   const readThreadContext = Effect.fnUntraced(
     function* (threadId: ThreadId | undefined) {
       if (threadId === undefined) return undefined;
@@ -3904,36 +3953,7 @@ export const make = Effect.gen(function* () {
         let commitMessageForStep = input.commitMessage;
         let preResolvedCommitSuggestion: CommitAndBranchSuggestion | undefined = undefined;
 
-        const textGenerationSettings = yield* projectSettingsFor(input).pipe(
-          Effect.flatMap(({ settings, projectId }) =>
-            settings.sourceControlWriterModelSelection === null
-              ? Effect.succeed({
-                  modelSelection: settings.textGenerationModelSelection,
-                  projectId,
-                  style: settings.sourceControlWritingStyle,
-                })
-              : providerRegistry.getProviders.pipe(
-                  Effect.map((providers) => ({
-                    modelSelection: ServerSettings.resolveSourceControlWriterModelSelection(
-                      settings,
-                      providers,
-                      projectId,
-                    ),
-                    projectId,
-                    style: settings.sourceControlWritingStyle,
-                  })),
-                ),
-          ),
-          Effect.mapError(
-            (cause) =>
-              new GitManagerError({
-                operation: "runStackedAction",
-                cwd: input.cwd,
-                detail: "Failed to get server settings.",
-                cause,
-              }),
-          ),
-        );
+        const textGenerationSettings = yield* textGenerationSettingsFor(input, "runStackedAction");
 
         if (input.featureBranch) {
           yield* Ref.set(currentPhase, Option.some("branch"));
@@ -4063,6 +4083,29 @@ export const make = Effect.gen(function* () {
     asUserAction,
   );
 
+  const writeCommitMessage: GitManager["Service"]["writeCommitMessage"] = Effect.fn(
+    "GitManager.writeCommitMessage",
+  )(function* (input) {
+    const settings = yield* textGenerationSettingsFor(input, "writeCommitMessage");
+    const policy = yield* resolveStylePolicy(input.cwd, settings);
+    const generated = yield* textGeneration
+      .generateCommitMessage({
+        cwd: input.cwd,
+        branch: input.branch,
+        stagedSummary: limitContext(input.summary, 8_000),
+        stagedPatch: limitContext(input.patch, 50_000),
+        ...(policy ? { policy } : {}),
+        modelSelection: settings.modelSelection,
+        projectId: settings.projectId,
+      })
+      .pipe(
+        Effect.map((result) =>
+          sanitizeCommitMessage(result, policy?.kind === "conventional_commits"),
+        ),
+      );
+    return formatCommitMessage(generated.subject, generated.body);
+  });
+
   return GitManager.of({
     createWorktree,
     localStatus,
@@ -4076,6 +4119,7 @@ export const make = Effect.gen(function* () {
     resolvePullRequest,
     preparePullRequestThread,
     runStackedAction,
+    writeCommitMessage,
     createPullRequest,
     subscribePullRequestStateChanges: PubSub.subscribe(pullRequestStateChanges).pipe(
       Effect.map((subscription) => Stream.fromSubscription(subscription)),

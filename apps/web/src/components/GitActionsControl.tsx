@@ -289,7 +289,6 @@ const COMMIT_DIALOG_TITLE = msg("Commit changes");
 const COMMIT_DIALOG_DESCRIPTION = msg(
   "Review and confirm your commit. Leave the message blank to auto-generate one.",
 );
-const COMMIT_DIALOG_DESCRIPTION_TYPED = msg("Review your commit and write its message.");
 
 function GitActionItemIcon({
   icon,
@@ -1093,8 +1092,7 @@ function CheckoutGitActionsControl({
     : null;
   // A VCS plugin's driver has no branch review diff; its turn diffs come from checkpoints.
   const offersReviewDiff = vcsAllows(gitStatusForActions, "reviewDiff");
-  // A VCS plugin's commit needs a typed message, and starts no branch of its own.
-  const generatesCommitMessage = vcsAllows(gitStatusForActions, "commitMessageGeneration");
+  // A VCS plugin's commit starts no branch of its own.
   const offersFeatureBranch = vcsAllows(gitStatusForActions, "featureBranch");
   const changesPreview = useEnvironmentQuery(
     showChanges &&
@@ -1405,15 +1403,6 @@ function CheckoutGitActionsControl({
         description: quickAction.hint,
         data: threadToastData,
       });
-      return;
-    }
-    if (
-      !generatesCommitMessage &&
-      (quickAction.action === "commit" || quickAction.action === "commit_push")
-    ) {
-      setExcludedFiles(new Set());
-      setIsEditingFiles(false);
-      setIsCommitDialogOpen(true);
       return;
     }
     if (quickAction.action) {
@@ -1829,13 +1818,7 @@ function CheckoutGitActionsControl({
         <DialogPopup>
           <DialogHeader>
             <DialogTitle>{messages(COMMIT_DIALOG_TITLE)}</DialogTitle>
-            <DialogDescription>
-              {messages(
-                generatesCommitMessage
-                  ? COMMIT_DIALOG_DESCRIPTION
-                  : COMMIT_DIALOG_DESCRIPTION_TYPED,
-              )}
-            </DialogDescription>
+            <DialogDescription>{messages(COMMIT_DIALOG_DESCRIPTION)}</DialogDescription>
           </DialogHeader>
           <DialogPanel>
             <div className="space-y-3 rounded-xl bg-zinc-25 p-3 text-sm ring-1 ring-black/5 dark:bg-white/[0.035] dark:ring-white/5">
@@ -1982,14 +1965,12 @@ function CheckoutGitActionsControl({
             </div>
             <div className="space-y-1">
               <p className="text-sm font-medium">
-                {generatesCommitMessage ? <T>Commit message (optional)</T> : <T>Commit message</T>}
+                <T>Commit message (optional)</T>
               </p>
               <Textarea
                 value={dialogCommitMessage}
                 onChange={(event) => setDialogCommitMessage(event.target.value)}
-                {...(generatesCommitMessage
-                  ? { placeholder: gt("Leave empty to auto-generate") }
-                  : {})}
+                placeholder={gt("Leave empty to auto-generate")}
                 size="sm"
               />
             </div>
@@ -2019,11 +2000,7 @@ function CheckoutGitActionsControl({
             ) : null}
             <Button
               size="sm"
-              disabled={
-                !canWriteSourceControl ||
-                noneSelected ||
-                (!generatesCommitMessage && dialogCommitMessage.trim() === "")
-              }
+              disabled={!canWriteSourceControl || noneSelected}
               onClick={runDialogAction}
             >
               <T context="verb">Commit</T>

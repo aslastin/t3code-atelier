@@ -9,6 +9,7 @@ import {
   VcsPluginPushOutput,
   VcsPluginRefsOutput,
   VcsPluginRemotesOutput,
+  VcsPluginCheckpointDiffOutput,
   VcsPluginStatusOutput,
   VcsPluginWorktreeCreateOutput,
   VcsPluginWorktreeListOutput,
@@ -282,6 +283,14 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
           ...(out.commitSha !== undefined ? { commitSha: out.commitSha } : {}),
           ...(out.subject !== undefined ? { subject: out.subject } : {}),
         };
+      }),
+    }),
+    ...(commands.diff && {
+      workingDiff: Effect.fn("ManifestVcsDriver.workingDiff")(function* (request) {
+        const out = yield* withTextFile(request.filePaths?.join("\n"), (pathsFile) =>
+          json("diff", VcsPluginCheckpointDiffOutput, request.cwd, { pathsFile }),
+        );
+        return out.patch;
       }),
     }),
     ...(commands.push && {

@@ -128,6 +128,10 @@ describe("ManifestVcsDriver", () => {
         ["a.txt"],
       );
       assert.isTrue(status.hasWorkingTreeChanges);
+      assert.include(
+        yield* driver!.workflow!.workingDiff!({ cwd: repository }),
+        "diff --git a/a.txt b/a.txt",
+      );
 
       const committed = yield* driver!.workflow!.commit!({
         cwd: `${repository}/sub`,

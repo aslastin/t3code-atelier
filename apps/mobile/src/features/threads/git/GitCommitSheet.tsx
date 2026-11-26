@@ -50,15 +50,13 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
   );
 
   const busy = gitState.gitOperationLabel !== null;
-  // A VCS plugin's commit needs a typed message, and starts no branch of its own.
-  const generatesCommitMessage = vcsAllows(gitStatus.data, "commitMessageGeneration");
+  // A VCS plugin's commit starts no branch of its own.
   const offersFeatureBranch = vcsAllows(gitStatus.data, "featureBranch");
   const isDefaultRef = gitStatus.data?.isDefaultRef ?? false;
   const allFiles = gitStatus.data?.workingTree?.files ?? [];
 
   const [dialogCommitMessage, setDialogCommitMessage] = useState("");
   const [excludedFiles, setExcludedFiles] = useState<ReadonlySet<string>>(new Set());
-  const missingMessage = !generatesCommitMessage && dialogCommitMessage.trim() === "";
 
   const selectedFiles = allFiles.filter((file) => !excludedFiles.has(file.path));
   const allSelected = excludedFiles.size === 0;
@@ -113,11 +111,9 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
           textAlignVertical="top"
           className="min-h-24 rounded-xl bg-subtle px-4 py-3 text-base"
         />
-        {generatesCommitMessage ? (
-          <Text className="text-xs text-foreground-muted">
-            <T>Leave empty to generate a message automatically.</T>
-          </Text>
-        ) : null}
+        <Text className="text-xs text-foreground-muted">
+          <T>Leave empty to generate a message automatically.</T>
+        </Text>
       </View>
       <View>
         <View className="flex-row items-center justify-between gap-2 pb-2">
@@ -226,7 +222,7 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
           icon="checkmark"
           tone="primary"
           fullWidth
-          disabled={!canWriteSourceControl || noneSelected || busy || missingMessage}
+          disabled={!canWriteSourceControl || noneSelected || busy}
           onPress={() => void runCommitAction(false)}
         />
         {offersFeatureBranch ? (
@@ -235,13 +231,7 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
             icon="arrow.branch"
             tone="text"
             fullWidth
-            disabled={
-              !canWriteSourceControl ||
-              !canCreateFeatureBranch ||
-              noneSelected ||
-              busy ||
-              missingMessage
-            }
+            disabled={!canWriteSourceControl || !canCreateFeatureBranch || noneSelected || busy}
             onPress={() => void runCommitAction(true)}
           />
         ) : null}

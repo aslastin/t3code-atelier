@@ -193,6 +193,9 @@ switch (command) {
     out({ commitSha: "kite-" + count, subject: message.split("\n")[0] });
     break;
   }
+  case "diff":
+    out({ patch: patch(path.join(kite, "base"), root) });
+    break;
   case "changed":
     out({ revision: "base-1", files: changes() });
     break;
@@ -246,6 +249,7 @@ export function writeFakeVcsPlugin(directory: string, options: FakeVcsPluginOpti
           status: [kite, options.statusCommand ?? "status"],
           listRefs: [kite, "refs"],
           commit: [kite, "commit", "{messageFile}", "{pathsFile}"],
+          diff: [kite, "diff"],
           worktreeCreate: [kite, "worktree-add", "{path}", "{newRef}", "{baseRef}"],
           worktreeRemove: [kite, "worktree-remove", "{path}"],
           worktreeAttach: [kite, "worktree-attach", "{path}", "{ref}"],

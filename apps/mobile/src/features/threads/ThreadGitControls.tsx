@@ -1,4 +1,4 @@
-import { limitGitQuickAction, vcsAllows } from "@t3tools/client-runtime/state/vcs-capabilities";
+import { limitGitQuickAction } from "@t3tools/client-runtime/state/vcs-capabilities";
 import { msg, useGT, useMessages } from "gt-react-native";
 
 import * as Dialog from "../../components/ui/Dialog";
@@ -280,17 +280,6 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
     }
     if (quickAction.kind === "run_pull") {
       await onPull();
-      return;
-    }
-    // A VCS plugin's commit needs a typed message, so commits go through the commit sheet.
-    if (
-      !vcsAllows(gitStatus, "commitMessageGeneration") &&
-      (quickAction.action === "commit" || quickAction.action === "commit_push")
-    ) {
-      navigation.navigate("GitCommit", {
-        environmentId: String(environmentId),
-        threadId: String(threadId),
-      });
       return;
     }
     if (quickAction.kind === "run_action" && quickAction.action) {

@@ -248,7 +248,8 @@ function withCapabilities<A extends VcsStatusLocalResult>(handle: DriverHandle, 
 const runDriverAction = Effect.fn("GitWorkflowService.runDriverAction")(function* (
   handle: DriverHandle,
   input: GitRunStackedActionInput,
-  options?: GitManager.GitRunStackedActionOptions,
+  options: GitManager.GitRunStackedActionOptions | undefined,
+  writeCommitMessage: GitManager.GitManager["Service"]["writeCommitMessage"],
 ) {
   const { action, cwd } = input;
   if (input.featureBranch || action === "create_pr" || action === "commit_push_pr") {
@@ -268,7 +269,10 @@ const runDriverAction = Effect.fn("GitWorkflowService.runDriverAction")(function
   if (push) phases.push("push");
   if (reporter) yield* reporter.publish({ ...context, kind: "action_started", phases });
   const skipped = { status: "skipped_not_requested" } as const;
-  const runPhase = <A>(phase: "commit" | "push", effect: Effect.Effect<A, GitCommandError>) =>
+  const runPhase = <A, E extends { readonly message: string }>(
+    phase: "commit" | "push",
+    effect: Effect.Effect<A, E>,
+  ) =>
     reporter
       ? reporter.publish({ ...context, kind: "phase_started", phase, label: phase }).pipe(
           Effect.andThen(effect),
@@ -283,7 +287,39 @@ const runDriverAction = Effect.fn("GitWorkflowService.runDriverAction")(function
     commit: commit
       ? yield* runPhase(
           "commit",
-          commit({ cwd, commitMessage: input.commitMessage, filePaths: input.filePaths }),
+          Effect.gen(function* () {
+            const typed = input.commitMessage?.trim();
+            if (typed)
+              return yield* commit({ cwd, commitMessage: typed, filePaths: input.filePaths });
+            // Written as for Git, from what the driver says changed.
+            const status = yield* driverStatus(handle, { cwd });
+            const selected = input.filePaths ? new Set(input.filePaths) : null;
+            const files = status.workingTree.files.filter(
+              (file) => selected === null || selected.has(file.path),
+            );
+            if (files.length === 0) return { status: "skipped_no_changes" as const };
+            if (reporter)
+              yield* reporter.publish({
+                ...context,
+                kind: "phase_started",
+                phase: "commit",
+                label: "Generating commit message...",
+              });
+            const patch = yield* (
+              handle.driver.workflow?.workingDiff?.({ cwd, filePaths: input.filePaths }) ??
+              Effect.succeed("")
+            ).pipe(Effect.orElseSucceed(() => ""));
+            const commitMessage = yield* writeCommitMessage({
+              cwd,
+              threadId: input.threadId,
+              branch: status.refName,
+              summary: files
+                .map((file) => `${file.path} (+${file.insertions} -${file.deletions})`)
+                .join("\n"),
+              patch,
+            });
+            return yield* commit({ cwd, commitMessage, filePaths: input.filePaths });
+          }),
         )
       : skipped,
     push: push ? yield* runPhase("push", push({ cwd })) : skipped,
@@ -591,7 +627,7 @@ export const make = Effect.gen(function* () {
         handle.repository.rootPath,
         handle.kind === GIT_VCS_KIND
           ? gitManager.runStackedAction(input, options)
-          : runDriverAction(handle, input, options),
+          : runDriverAction(handle, input, options, gitManager.writeCommitMessage),
       );
     }),
     resolvePullRequest: Effect.fn("GitWorkflowService.resolvePullRequest")(function* (input) {

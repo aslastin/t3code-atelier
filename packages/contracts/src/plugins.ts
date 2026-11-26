@@ -30,6 +30,8 @@ export const VcsPluginCommands = Schema.Struct({
   pull: Schema.optionalKey(PluginArgv),
   worktreeCreate: Schema.optionalKey(PluginArgv),
   worktreeRemove: Schema.optionalKey(PluginArgv),
+  /** Uncommitted changes as a patch, for writing a commit message. */
+  diff: Schema.optionalKey(PluginArgv),
   /** Checks an existing ref out into a new worktree, to bring back one that was removed. */
   worktreeAttach: Schema.optionalKey(PluginArgv),
   worktreeList: Schema.optionalKey(PluginArgv),
