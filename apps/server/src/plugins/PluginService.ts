@@ -21,9 +21,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -121,6 +123,9 @@ const make = Effect.gen(function* () {
   const entries = new Map<string, PluginEntry>();
   const lock = yield* Semaphore.make(1);
   const startupChecks = yield* Deferred.make<void>();
+  // Status caches hold what a driver reported, so they refresh when the drivers change.
+  const changes = yield* Effect.acquireRelease(PubSub.unbounded<void>(), PubSub.shutdown);
+  const announce = PubSub.publish(changes, undefined);
 
   const failure = (operation: string, detail: string, pluginId?: string) =>
     new PluginError({ operation, detail, ...(pluginId === undefined ? {} : { pluginId }) });
@@ -293,7 +298,10 @@ const make = Effect.gen(function* () {
         ),
       ),
     { concurrency: "unbounded", discard: true },
-  ).pipe(Effect.ensuring(Deferred.succeed(startupChecks, undefined)), Effect.forkScoped);
+  ).pipe(
+    Effect.ensuring(Deferred.succeed(startupChecks, undefined).pipe(Effect.andThen(announce))),
+    Effect.forkScoped,
+  );
 
   const findFolder = (id: string, operation: string) => {
     if (!entries.has(id)) return Effect.fail(failure(operation, `No plugin named "${id}".`, id));
@@ -467,20 +475,28 @@ const make = Effect.gen(function* () {
       }),
     ),
     hasAny: () => [...entries.values()].some((entry) => entry.manifest !== null && entry.enabled),
+    changes: Stream.fromPubSub(changes),
     markers: () =>
       [...entries.values()].flatMap((entry) =>
         entry.driver && entry.manifest ? entry.manifest.detect.markers : [],
       ),
   });
 
+  const announced =
+    <Args extends ReadonlyArray<unknown>>(
+      mutation: (...args: Args) => Effect.Effect<PluginListResult, PluginError>,
+    ) =>
+    (...args: Args) =>
+      mutation(...args).pipe(Effect.tap(() => announce));
+
   return Context.make(
     PluginService,
     PluginService.of({
       list: Effect.sync(snapshot),
-      importFolder,
-      remove,
-      setEnabled,
-      recheck,
+      importFolder: announced(importFolder),
+      remove: announced(remove),
+      setEnabled: announced(setEnabled),
+      recheck: announced(recheck),
     }),
   ).pipe(Context.add(VcsPluginDrivers, drivers));
 });

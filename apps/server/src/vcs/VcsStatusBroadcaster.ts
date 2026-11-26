@@ -7,6 +7,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
@@ -30,6 +31,7 @@ import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -1241,6 +1243,25 @@ export const make = Effect.gen(function* () {
         );
       }),
     );
+
+  // A VCS plugin turned on, off or rechecked changes what its repositories report.
+  const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
+  if (plugins !== undefined) {
+    yield* plugins.changes.pipe(
+      Stream.runForEach(() =>
+        Effect.forEach(
+          new Set([...detailedSubscribers.keys(), ...branches.keys()]),
+          (cwd) =>
+            (detailedSubscribers.has(cwd)
+              ? refreshStatus(cwd, { localOnly: true })
+              : refreshBranchStatusCore(cwd)
+            ).pipe(Effect.ignore),
+          { discard: true },
+        ),
+      ),
+      Effect.forkIn(broadcasterScope),
+    );
+  }
 
   return VcsStatusBroadcaster.of({
     streamBranchStatus,
