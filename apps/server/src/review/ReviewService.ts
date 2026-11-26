@@ -6,6 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import {
+  VcsDriverKind,
   VcsRepositoryDetectionError,
   VcsUnsupportedOperationError,
   type ReviewBranchCommitsInput,
@@ -124,6 +125,13 @@ export const make = Effect.gen(function* () {
       };
     }
 
+    if (handle.kind !== "git") {
+      return yield* new VcsUnsupportedOperationError({
+        operation: "ReviewService.getDiffPreview",
+        kind: handle.kind,
+        detail: "Review diffs require a Git repository.",
+      });
+    }
     return yield* git.getReviewDiffPreview(input);
   });
 
@@ -136,7 +144,7 @@ export const make = Effect.gen(function* () {
     if (handle?.kind !== "git") {
       return yield* new VcsUnsupportedOperationError({
         operation: "ReviewService.getDiffFileContents",
-        kind: handle?.kind ?? "unknown",
+        kind: handle?.kind ?? VcsDriverKind.make("unknown"),
         detail: "Unchanged diff expansion currently requires a Git repository.",
       });
     }

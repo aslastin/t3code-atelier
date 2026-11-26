@@ -1,4 +1,5 @@
 import {
+  GIT_VCS_KIND,
   type ReviewDiffPreviewInput,
   type ReviewDiffPreviewResult,
   VcsUnsupportedOperationError,
@@ -141,7 +142,7 @@ export function createReviewEnvironmentAtoms<R, E>(
               : Effect.fail(
                   new VcsUnsupportedOperationError({
                     operation: "review.diffFilePatch",
-                    kind: "git",
+                    kind: GIT_VCS_KIND,
                     detail: "Diff no longer available. Refresh the comparison.",
                   }),
                 );

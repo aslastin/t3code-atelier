@@ -1,6 +1,6 @@
 import {
   CommandId,
-  type GitCommandError,
+  type VcsWorkflowCommandError,
   type TaskFolderError,
   MessageId,
   type ProjectId,
@@ -47,7 +47,7 @@ export class WorktreeMcpService extends Context.Service<
         readonly worktreePath: string | null;
         readonly workspaceRoot: string;
       },
-    ) => Effect.Effect<VcsListRefsResult, GitCommandError | PlatformError.PlatformError>;
+    ) => Effect.Effect<VcsListRefsResult, VcsWorkflowCommandError | PlatformError.PlatformError>;
   }
 >()("t3/mcp/WorktreeMcpService") {}
 
@@ -266,7 +266,7 @@ const make = Effect.gen(function* () {
                 readonly taskFolder: string | null;
                 readonly projectPath?: string | null;
               },
-              GitCommandError | TaskFolderError
+              VcsWorkflowCommandError | TaskFolderError
             > =>
               taskPlan === null
                 ? gitWorkflow
@@ -314,7 +314,7 @@ const make = Effect.gen(function* () {
           });
 
         const removeCreatedWorktree = Effect.suspend(
-          (): Effect.Effect<unknown, GitCommandError | TaskFolderError> =>
+          (): Effect.Effect<unknown, VcsWorkflowCommandError | TaskFolderError> =>
             worktree.taskFolder === null
               ? gitWorkflow
                   .removeWorktree({ cwd: projectCwd, path: worktree.path, force: true })

@@ -1,4 +1,4 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { SourceControlProviderKind, VcsDriverKind } from "@t3tools/contracts";
 import type { VcsStatusRemoteResult, VcsStatusResult } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -304,6 +304,18 @@ describe("applyGitStatusStreamEvent", () => {
 
   it("preserves local-only fields when applying a remote update", () => {
     const current: VcsStatusResult = {
+      capabilities: {
+        kind: VcsDriverKind.make("test-vcs"),
+        supportsWorktrees: false,
+        supportsCommit: true,
+        supportsPush: false,
+        supportsReviewDiff: false,
+        supportsSparseCheckout: false,
+        supportsAtomicSnapshot: false,
+        supportsBookmarks: true,
+        supportsPushDefaultRemote: false,
+        ignoreClassifier: "native",
+      },
       isRepo: true,
       sourceControlProvider: {
         kind: SourceControlProviderKind.make("github"),

@@ -7,8 +7,13 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
-import type { VcsDriverKind, VcsError, VcsRepositoryIdentity } from "@t3tools/contracts";
-import { VcsUnsupportedOperationError } from "@t3tools/contracts";
+import {
+  GIT_VCS_KIND,
+  VcsDriverKind,
+  VcsUnsupportedOperationError,
+  type VcsError,
+  type VcsRepositoryIdentity,
+} from "@t3tools/contracts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import * as VcsProjectConfig from "./VcsProjectConfig.ts";
 import * as VcsDriver from "./VcsDriver.ts";
@@ -31,6 +36,7 @@ export interface VcsDriverHandle {
 export class VcsDriverRegistry extends Context.Service<
   VcsDriverRegistry,
   {
+    readonly hasAdditionalDrivers: boolean;
     readonly get: (kind: VcsDriverKind) => Effect.Effect<VcsDriver.VcsDriver["Service"], VcsError>;
     readonly detect: (
       input: VcsDriverResolveInput,
@@ -39,35 +45,15 @@ export class VcsDriverRegistry extends Context.Service<
   }
 >()("t3/vcs/VcsDriverRegistry") {}
 
-function detectionCacheKey(input: {
-  readonly cwd: string;
-  readonly requestedKind: VcsDriverKind | "auto";
-}): string {
-  return `${input.requestedKind}\0${input.cwd}`;
-}
-
-function parseDetectionCacheKey(key: string): {
-  readonly cwd: string;
-  readonly requestedKind: VcsDriverKind | "auto";
-} {
-  const separatorIndex = key.indexOf("\0");
-  return {
-    requestedKind: key.slice(0, separatorIndex) as VcsDriverKind | "auto",
-    cwd: key.slice(separatorIndex + 1),
-  };
-}
-
-export const make = Effect.gen(function* () {
+export const makeWithDrivers = Effect.fn("VcsDriverRegistry.makeWithDrivers")(function* (
+  additionalDrivers: ReadonlyMap<VcsDriverKind, VcsDriver.VcsDriver["Service"]>,
+) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const projectConfig = yield* VcsProjectConfig.VcsProjectConfig;
   const git = yield* GitVcsDriver.makeVcsDriver;
-  const drivers: Partial<Record<VcsDriverKind, VcsDriver.VcsDriver["Service"]>> = {
-    git,
-  };
-
   const get: VcsDriverRegistry["Service"]["get"] = (kind) => {
-    const driver = drivers[kind];
+    const driver = kind === GIT_VCS_KIND ? git : additionalDrivers.get(kind);
     if (!driver) {
       return Effect.fail(
         new VcsUnsupportedOperationError({
@@ -90,7 +76,7 @@ export const make = Effect.gen(function* () {
     const repository = yield* driver.detectRepository(cwd).pipe(
       Effect.catchTags({
         VcsProcessExitError: (error) =>
-          error.operation === GitVcsDriver.WORK_TREE_PROBE_OPERATION
+          kind === GIT_VCS_KIND && error.operation === GitVcsDriver.WORK_TREE_PROBE_OPERATION
             ? Effect.succeed(null)
             : Effect.fail(error),
       }),
@@ -105,24 +91,11 @@ export const make = Effect.gen(function* () {
     } satisfies VcsDriverHandle;
   });
 
-  const detectResolvedKind = Effect.fn("VcsDriverRegistry.detectResolvedKind")(function* (input: {
-    readonly cwd: string;
-    readonly requestedKind: VcsDriverKind | "auto";
-  }) {
-    const requestedKind = input.requestedKind;
-
-    if (requestedKind !== "auto" && requestedKind !== "unknown") {
-      const driver = yield* get(requestedKind);
-      return yield* detectWithDriver(requestedKind, driver, input.cwd);
-    }
-
-    return yield* detectWithDriver("git", git, input.cwd);
-  });
-
   // Symlinks can put cwd outside root; then inspect cwd alone.
   const foldersBelowRoot = (cwd: string, rootPath: string) => {
     const relative = path.relative(path.resolve(rootPath), path.resolve(cwd));
-    if (relative.startsWith("..") || path.isAbsolute(relative)) return [cwd];
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+      return [cwd];
     return Array.from({ length: relative.split(path.sep).length }, (_, levelsUp) =>
       path.resolve(cwd, ...Array<string>(levelsUp).fill("..")),
     );
@@ -146,12 +119,11 @@ export const make = Effect.gen(function* () {
     { readonly handle: VcsDriverHandle; readonly gitEntries: ReadonlyArray<boolean> } | null,
     VcsError
   >(
-    (key) =>
+    (cwd) =>
       Effect.gen(function* () {
-        const input = parseDetectionCacheKey(key);
-        const handle = yield* detectResolvedKind(input);
+        const handle = yield* detectWithDriver(GIT_VCS_KIND, git, cwd);
         if (handle === null) return null;
-        const disk = yield* readDiskState(input.cwd, handle.repository);
+        const disk = yield* readDiskState(cwd, handle.repository);
         return { handle, gitEntries: disk?.gitEntries ?? [] };
       }),
     {
@@ -163,22 +135,64 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  const detectGit = Effect.fn("VcsDriverRegistry.detectGit")(function* (cwd: string) {
+    const cached = yield* Cache.get(detectionCache, cwd);
+    if (cached === null) return null;
+    const disk = yield* readDiskState(cwd, cached.handle.repository);
+    if (
+      disk?.repositoryOnDisk &&
+      disk.gitEntries.length === cached.gitEntries.length &&
+      disk.gitEntries.every((exists, index) => exists === cached.gitEntries[index])
+    ) {
+      return cached.handle;
+    }
+    yield* Cache.invalidate(detectionCache, cwd);
+    return (yield* Cache.get(detectionCache, cwd))?.handle ?? null;
+  });
+
+  const canonicalPath = (cwd: string) =>
+    fileSystem.realPath(cwd).pipe(Effect.orElseSucceed(() => path.resolve(cwd)));
+
   const detect: VcsDriverRegistry["Service"]["detect"] = Effect.fn("VcsDriverRegistry.detect")(
     function* (input) {
-      const requestedKind = yield* projectConfig.resolveKind(input);
-      const key = detectionCacheKey({ cwd: input.cwd, requestedKind });
-      const cached = yield* Cache.get(detectionCache, key);
-      if (cached === null) return null;
-      const disk = yield* readDiskState(input.cwd, cached.handle.repository);
-      if (
-        disk?.repositoryOnDisk &&
-        disk.gitEntries.length === cached.gitEntries.length &&
-        disk.gitEntries.every((exists, index) => exists === cached.gitEntries[index])
-      ) {
-        return cached.handle;
+      const kind = yield* projectConfig.resolveKind(input);
+      if (kind === GIT_VCS_KIND) return yield* detectGit(input.cwd);
+      if (kind !== "auto" && kind !== "unknown") {
+        return yield* detectWithDriver(kind, yield* get(kind), input.cwd);
       }
-      yield* Cache.invalidate(detectionCache, key);
-      return (yield* Cache.get(detectionCache, key))?.handle ?? null;
+
+      if (additionalDrivers.size === 0) return yield* detectGit(input.cwd);
+      const roots = new Map<string, VcsDriverHandle>();
+      for (const [kind, driver] of additionalDrivers) {
+        if (kind === GIT_VCS_KIND) continue;
+        const handle = yield* detectWithDriver(kind, driver, input.cwd).pipe(
+          Effect.orElseSucceed(() => null),
+        );
+        if (handle === null) continue;
+        const root = yield* canonicalPath(handle.repository.rootPath);
+        if (!roots.has(root)) roots.set(root, handle);
+      }
+      if (roots.size === 0) return yield* detectGit(input.cwd);
+
+      // Marker probes run on every lookup, so a new nested repository wins over a cached parent.
+      const cwd = yield* canonicalPath(input.cwd);
+      let folder = cwd;
+      while (true) {
+        const candidate = roots.get(folder);
+        if (candidate) return candidate;
+        if (
+          yield* fileSystem
+            .exists(path.join(folder, ".git"))
+            .pipe(Effect.orElseSucceed(() => false))
+        ) {
+          const handle = yield* detectGit(cwd).pipe(Effect.orElseSucceed(() => null));
+          if (handle && (yield* canonicalPath(handle.repository.rootPath)) === folder)
+            return handle;
+        }
+        const parent = path.dirname(folder);
+        if (parent === folder) return yield* detectGit(cwd);
+        folder = parent;
+      }
     },
   );
 
@@ -192,7 +206,7 @@ export const make = Effect.gen(function* () {
       const requestedKind = input.requestedKind ?? "auto";
       return yield* new VcsUnsupportedOperationError({
         operation: "VcsDriverRegistry.resolve",
-        kind: requestedKind === "auto" ? "unknown" : requestedKind,
+        kind: requestedKind === "auto" ? VcsDriverKind.make("unknown") : requestedKind,
         detail:
           requestedKind === "auto"
             ? `No supported VCS repository was detected at ${input.cwd}.`
@@ -202,11 +216,16 @@ export const make = Effect.gen(function* () {
   );
 
   return VcsDriverRegistry.of({
+    get hasAdditionalDrivers() {
+      return additionalDrivers.size > 0;
+    },
     get,
     detect,
     resolve,
   });
 });
+
+export const make = makeWithDrivers(new Map());
 
 export const layer = Layer.effect(VcsDriverRegistry, make).pipe(
   Layer.provide(VcsProjectConfig.layer),

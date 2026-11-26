@@ -2,7 +2,24 @@ import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 
 import type {
+  GitCommandError,
+  GitRunStackedActionInput,
+  GitRunStackedActionResult,
+  VcsCreateRefInput,
+  VcsCreateRefResult,
+  VcsCreateWorktreeInput,
+  VcsCreateWorktreeResult,
+  VcsDriverCapabilities,
   VcsError,
+  VcsListRefsInput,
+  VcsListRefsResult,
+  VcsPullInput,
+  VcsPullResult,
+  VcsRemoveWorktreeInput,
+  VcsStatusInput,
+  VcsStatusResult,
+  VcsSwitchRefInput,
+  VcsSwitchRefResult,
   VcsInitInput,
   VcsListRemotesResult,
   VcsListWorkspaceFilesResult,
@@ -94,9 +111,29 @@ export interface VcsCheckpointOps {
   ) => Effect.Effect<void, VcsError>;
 }
 
+type WorkflowOperation<Input, Output> = (input: Input) => Effect.Effect<Output, GitCommandError>;
+
+export interface VcsWorkflowOps {
+  readonly status?: WorkflowOperation<VcsStatusInput, VcsStatusResult>;
+  readonly listRefs?: WorkflowOperation<VcsListRefsInput, VcsListRefsResult>;
+  readonly createWorktree?: WorkflowOperation<VcsCreateWorktreeInput, VcsCreateWorktreeResult>;
+  readonly removeWorktree?: WorkflowOperation<VcsRemoveWorktreeInput, void>;
+  readonly listWorktrees?: WorkflowOperation<VcsStatusInput, ReadonlyArray<string>>;
+  readonly commit?: WorkflowOperation<
+    Pick<GitRunStackedActionInput, "cwd" | "filePaths" | "commitMessage">,
+    GitRunStackedActionResult["commit"]
+  >;
+  readonly push?: WorkflowOperation<VcsStatusInput, GitRunStackedActionResult["push"]>;
+  readonly pull?: WorkflowOperation<VcsPullInput, VcsPullResult>;
+  readonly createRef?: WorkflowOperation<VcsCreateRefInput, VcsCreateRefResult>;
+  readonly switchRef?: WorkflowOperation<VcsSwitchRefInput, VcsSwitchRefResult>;
+}
+
 export class VcsDriver extends Context.Service<
   VcsDriver,
   {
+    readonly workflow?: VcsWorkflowOps;
+    readonly capabilities?: VcsDriverCapabilities;
     readonly execute: (
       input: Omit<VcsProcess.VcsProcessInput, "command">,
     ) => Effect.Effect<VcsProcess.VcsProcessOutput, VcsError>;

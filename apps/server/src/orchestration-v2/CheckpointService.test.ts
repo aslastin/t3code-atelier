@@ -2,6 +2,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
+  GIT_VCS_KIND,
   CheckpointRef,
   CheckpointScopeId,
   NodeId,
@@ -63,7 +64,7 @@ it.effect(
         }),
         new VcsUnsupportedOperationError({
           operation: "test.capture",
-          kind: "git",
+          kind: GIT_VCS_KIND,
           detail: "The workspace directory is ignored by its Git repository.",
         }),
       ]) {

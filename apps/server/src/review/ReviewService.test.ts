@@ -80,6 +80,7 @@ function layer(input: {
     ),
     Layer.provide(
       Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
+        hasAdditionalDrivers: false,
         get: () => Effect.die("unexpected VCS registry get"),
         resolve: () => Effect.die("unexpected VCS registry resolve"),
         detect: (request) =>

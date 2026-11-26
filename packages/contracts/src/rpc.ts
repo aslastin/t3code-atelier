@@ -150,7 +150,7 @@ import {
   GitActionProgressEvent,
   VcsSwitchRefInput,
   VcsSwitchRefResult,
-  GitCommandError,
+  VcsWorkflowCommandError,
   VcsCreateRefInput,
   VcsCreateRefResult,
   VcsCreateWorktreeInput,
@@ -1838,7 +1838,7 @@ const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
 const WsVcsPullRpc = Rpc.make(WS_METHODS.vcsPull, {
   payload: VcsPullInput,
   success: VcsPullResult,
-  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+  error: Schema.Union([VcsWorkflowCommandError, EnvironmentAuthorizationError]),
 });
 
 const WsVcsRefreshStatusRpc = Rpc.make(WS_METHODS.vcsRefreshStatus, {
@@ -1891,31 +1891,31 @@ const WsGitPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.gitPreparePullReque
 const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
   payload: VcsListRefsInput,
   success: VcsListRefsResult,
-  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+  error: Schema.Union([VcsWorkflowCommandError, EnvironmentAuthorizationError]),
 });
 
 const WsVcsCreateWorktreeRpc = Rpc.make(WS_METHODS.vcsCreateWorktree, {
   // Worktrees use the managed folder; required null path preserves compatibility with older servers.
   payload: Schema.Struct({ ...VcsCreateWorktreeInput.fields, path: Schema.Null }),
   success: VcsCreateWorktreeResult,
-  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+  error: Schema.Union([VcsWorkflowCommandError, EnvironmentAuthorizationError]),
 });
 
 const WsVcsRemoveWorktreeRpc = Rpc.make(WS_METHODS.vcsRemoveWorktree, {
   payload: VcsRemoveWorktreeInput,
-  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+  error: Schema.Union([VcsWorkflowCommandError, EnvironmentAuthorizationError]),
 });
 
 const WsVcsCreateRefRpc = Rpc.make(WS_METHODS.vcsCreateRef, {
   payload: VcsCreateRefInput,
   success: VcsCreateRefResult,
-  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+  error: Schema.Union([VcsWorkflowCommandError, EnvironmentAuthorizationError]),
 });
 
 const WsVcsSwitchRefRpc = Rpc.make(WS_METHODS.vcsSwitchRef, {
   payload: VcsSwitchRefInput,
   success: VcsSwitchRefResult,
-  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+  error: Schema.Union([VcsWorkflowCommandError, EnvironmentAuthorizationError]),
 });
 
 const WsVcsInitRpc = Rpc.make(WS_METHODS.vcsInit, {

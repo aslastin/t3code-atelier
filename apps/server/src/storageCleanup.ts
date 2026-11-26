@@ -3,6 +3,7 @@ import * as NodeFSP from "node:fs/promises";
 import {
   CheckpointScopeId,
   GitCommandError,
+  type VcsWorkflowCommandError,
   OrchestrationV2AppThreadJson,
   OrchestrationV2ProviderSessionJson,
 } from "@t3tools/contracts";
@@ -323,7 +324,7 @@ export class StorageCleanup extends Context.Service<
     ) => Effect.Effect<{ threadIds: ThreadId[]; worktreeRoot: string }, GitCommandError>;
     readonly removeWorktree: (
       input: VcsRemoveWorktreeInput,
-    ) => Effect.Effect<void, GitCommandError>;
+    ) => Effect.Effect<void, VcsWorkflowCommandError>;
     readonly runNow: Effect.Effect<StorageCleanupReport, ServerSettingsError>;
     readonly latestReport: Effect.Effect<StorageCleanupReport | null>;
     readonly reports: Stream.Stream<StorageCleanupReport | null>;

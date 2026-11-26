@@ -7,7 +7,6 @@ import type {
   SourceControlDiscoveryResult,
   SourceControlProviderAuth,
   SourceControlProviderDiscoveryItem,
-  VcsDriverKind,
   VcsDiscoveryItem,
 } from "@t3tools/contracts";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -61,10 +60,10 @@ const EMPTY_DISCOVERY_RESULT: SourceControlDiscoveryResult = {
   sourceControlProviders: [],
 };
 
-const VCS_ICONS: Partial<Record<VcsDriverKind, Icon>> = {
-  git: GitIcon,
-  jj: JujutsuIcon,
-};
+const VCS_ICONS = new Map<string, Icon>([
+  ["git", GitIcon],
+  ["jj", JujutsuIcon],
+]);
 
 const SOURCE_CONTROL_SKELETON_ROWS = ["primary", "secondary"] as const;
 function optionLabel(value: Option.Option<string>): string | null {
@@ -126,7 +125,7 @@ function sourceControlItemIcon(
   const host = isProviderDiscoveryItem(item) ? sourceControlClients.find(item.kind) : undefined;
   const Icon = isProviderDiscoveryItem(item)
     ? host && sourceControlIcon(host)
-    : VCS_ICONS[item.kind];
+    : VCS_ICONS.get(item.kind);
   return Icon ? <Icon className="size-4.5 text-foreground/80" aria-hidden /> : null;
 }
 

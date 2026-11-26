@@ -20,7 +20,7 @@ import {
   type RunId,
   type RuntimeMode,
   type ScheduledTaskId,
-  type GitCommandError,
+  type VcsWorkflowCommandError,
   type GitManagerServiceError,
   TaskFolderError,
   TextGenerationError,
@@ -593,7 +593,8 @@ const make = Effect.gen(function* () {
     const tracked = input.workspaceStrategy.type === "worktree" || reused !== undefined;
     let createdWorktreePath: string | null = null;
     let createdBranch: string | null = null;
-    let discardPending: ((branch: string) => Effect.Effect<void, GitCommandError>) | null = null;
+    let discardPending: ((branch: string) => Effect.Effect<void, VcsWorkflowCommandError>) | null =
+      null;
     let untrackPending: (() => void) | undefined;
     let createdTaskFolder: string | null = null;
     let setupTerminalId: string | null = null;
@@ -877,7 +878,8 @@ const make = Effect.gen(function* () {
                   )
                   .pipe(
                     Effect.catchIf(
-                      (error) => error.reason === "ref_not_found",
+                      (error) =>
+                        error._tag === "GitCommandError" && error.reason === "ref_not_found",
                       (cause) =>
                         Effect.fail(
                           new ThreadLaunchBaseRefError({
@@ -1273,7 +1275,8 @@ const make = Effect.gen(function* () {
                   : {}),
               })
               .pipe(Effect.ignore);
-            yield* Effect.suspend((): Effect.Effect<void, GitCommandError | TaskFolderError> =>
+            type CleanupError = VcsWorkflowCommandError | TaskFolderError;
+            yield* Effect.suspend((): Effect.Effect<void, CleanupError> =>
               discardPending && removedBranch
                 ? discardPending(removedBranch)
                 : removedTaskFolder === null

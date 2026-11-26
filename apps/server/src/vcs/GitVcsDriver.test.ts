@@ -19,7 +19,12 @@ import { ChildProcessSpawner } from "effect/process";
 import * as Metric from "effect/Metric";
 import { assert, it } from "@effect/vitest";
 
-import { CheckpointRef, GitCommandError, VcsProcessExitError } from "@t3tools/contracts";
+import {
+  GIT_VCS_KIND,
+  CheckpointRef,
+  GitCommandError,
+  VcsProcessExitError,
+} from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as ServerConfig from "../config.ts";
@@ -65,6 +70,7 @@ const makeCaptureStore = Effect.fn("test.makeCaptureStore")(function* (
   const handle = { kind: repository.kind, repository, driver };
   return yield* CheckpointStore.make.pipe(
     Effect.provideService(VcsDriverRegistry.VcsDriverRegistry, {
+      hasAdditionalDrivers: false,
       get: () => Effect.succeed(driver),
       detect: () => Effect.succeed(handle),
       resolve: () => Effect.succeed(handle),
@@ -76,7 +82,7 @@ type GitContractError = GitCommandError | PlatformError.PlatformError;
 
 runVcsDriverContractSuite<GitVcsDriver.GitVcsDriver, GitContractError>({
   name: "Git",
-  kind: "git",
+  kind: GIT_VCS_KIND,
   layer: layerGitContract,
   fixture: {
     createRepo: (cwd) =>

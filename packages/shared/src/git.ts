@@ -352,7 +352,7 @@ export function mergeGitStatusParts(
   };
 }
 
-function toRemoteStatusPart(status: VcsStatusResult): VcsStatusRemoteResult {
+export function toRemoteStatusPart(status: VcsStatusResult): VcsStatusRemoteResult {
   return {
     hasUpstream: status.hasUpstream,
     aheadCount: status.aheadCount,
@@ -364,9 +364,10 @@ function toRemoteStatusPart(status: VcsStatusResult): VcsStatusRemoteResult {
   };
 }
 
-function toLocalStatusPart(status: VcsStatusResult): VcsStatusLocalResult {
+export function toLocalStatusPart(status: VcsStatusResult): VcsStatusLocalResult {
   return {
     isRepo: status.isRepo,
+    ...(status.capabilities && { capabilities: status.capabilities }),
     ...(status.sourceControlProvider
       ? { sourceControlProvider: status.sourceControlProvider }
       : {}),
