@@ -7,7 +7,7 @@ import * as Path from "effect/Path";
 import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import { worktreeRootForProject } from "./worktreeProjectPath.ts";
 
-it.effect("finds a VCS plugin's checkout root by the markers of the running plugins", () =>
+it.effect("finds a VCS plugin's checkout root by the markers of the installed plugins", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -29,9 +29,11 @@ it.effect("finds a VCS plugin's checkout root by the markers of the running plug
     assert.strictEqual(yield* find, path.join(worktree, "app"));
     assert.strictEqual(
       yield* find.pipe(
+        // Installed, even while turned off.
         Effect.provideService(VcsPluginDrivers, {
-          hasAny: () => true,
-          markers: () => [".kite/HEAD"],
+          hasAny: () => false,
+          markers: () => [],
+          installedMarkers: () => [".kite/HEAD"],
         } as unknown as VcsPluginDrivers["Service"]),
       ),
       worktree,

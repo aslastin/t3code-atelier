@@ -446,8 +446,9 @@ effectIt.effect("recreates a missing project subfolder in a VCS plugin's checkou
           ),
         ),
       ),
+      // Kite is turned off: its marker is installed but not among the running plugins'.
       Effect.provideService(VcsPluginDrivers, {
-        markers: () => [".kite/HEAD"],
+        markers: () => [],
         installedMarkers: () => [".kite/HEAD"],
       } as unknown as VcsPluginDrivers["Service"]),
     );

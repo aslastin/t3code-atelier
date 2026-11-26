@@ -162,7 +162,7 @@ export const layer: Layer.Layer<
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
     const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
-    const rootMarkers = () => plugins?.markers() ?? [];
+    const rootMarkers = () => plugins?.installedMarkers() ?? [];
     // A VCS plugin's checkout carries its marker where a Git checkout carries `.git`, even
     // while that plugin is off: its folder is never a leftover to set aside.
     const hasCheckout = Effect.fnUntraced(function* (folder: string) {
@@ -407,7 +407,9 @@ export const layer: Layer.Layer<
         worktreePath !== folder &&
         (yield* hasCheckout(worktreePath))
       ) {
-        yield* restoreWorktreeProjectFolder(fileSystem, path, worktreePath, folder);
+        yield* restoreWorktreeProjectFolder(fileSystem, path, worktreePath, folder).pipe(
+          Effect.mapError(recreateFailed),
+        );
       }
 
       // Before the provider conversation changes: a rewind with nothing to restore is refused.

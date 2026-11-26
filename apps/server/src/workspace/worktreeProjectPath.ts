@@ -44,12 +44,13 @@ export const worktreeRootForProject = Effect.fn("worktreeRootForProject")(
     /** Marker paths of VCS plugins, which mark a checkout root as `.git` does. */
     markers?: ReadonlyArray<string>,
   ) {
-    // Without explicit markers, those of the plugins the caller's server runs.
+    // Without explicit markers, those of every installed plugin: a checkout stays one while its
+    // plugin is off.
     const rootMarkers =
       markers ??
       Option.match(yield* Effect.serviceOption(VcsPluginDrivers), {
         onNone: () => [],
-        onSome: (plugins) => plugins.markers(),
+        onSome: (plugins) => plugins.installedMarkers(),
       });
     const resolved = path.resolve(folder);
     if (resolved !== folder) {
