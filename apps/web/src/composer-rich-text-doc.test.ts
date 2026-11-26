@@ -72,6 +72,7 @@ const schema = getSchemaByResolvedExtensions(
     stubAtom("composer-model", {
       instanceId: { default: "" },
       model: { default: "" },
+      effort: { default: null },
       source: { default: "" },
     }),
     stubAtom("composer-citation", {
@@ -198,6 +199,7 @@ const plainSchema = getSchemaByResolvedExtensions(
     stubAtom("composer-model", {
       instanceId: { default: "" },
       model: { default: "" },
+      effort: { default: null },
       source: { default: "" },
     }),
     stubAtom("composer-citation", {
@@ -951,10 +953,25 @@ describe("model mention chips", () => {
     }
     return transaction.doc;
   };
-  const chip = { instanceId: "codex", model: "gpt-6.1", source: "model:codex/gpt-6.1" };
+  const chip = {
+    instanceId: "codex",
+    model: "gpt-6.1",
+    effort: null,
+    source: "model:codex/gpt-6.1",
+  };
 
   it.each([
     ["Ask model:codex/gpt-6.1 now", [chip]],
+    [
+      "Ask model:codex/gpt-6.1?reasoningEffort=high now",
+      [
+        {
+          ...chip,
+          effort: { optionId: "reasoningEffort", value: "high" },
+          source: "model:codex/gpt-6.1?reasoningEffort=high",
+        },
+      ],
+    ],
     ["Ask model:openai/gpt-4o now", []],
     // Still being typed: `gpt-6` must not chip on the way to `gpt-6.1`.
     ["Ask model:codex/gpt-6.1", []],

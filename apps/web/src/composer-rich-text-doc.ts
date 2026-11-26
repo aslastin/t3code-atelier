@@ -828,7 +828,12 @@ function atomJsonForSegment(
     if (!chips.model(segment.instanceId, segment.model)) return null;
     return {
       type: "composer-model",
-      attrs: { instanceId: segment.instanceId, model: segment.model, source: segment.source },
+      attrs: {
+        instanceId: segment.instanceId,
+        model: segment.model,
+        effort: segment.effort ?? null,
+        source: segment.source,
+      },
     };
   }
   if (segment.type === "citation") {

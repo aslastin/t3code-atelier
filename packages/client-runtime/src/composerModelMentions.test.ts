@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   collectComposerModelMentions,
   formatComposerModelMention,
+  modelMentionEffortChoices,
+  modelMentionEffortDescriptor,
   rankComposerModelMentions,
 } from "./composerModelMentions.ts";
 
@@ -79,8 +81,65 @@ describe("collectComposerModelMentions", () => {
     ]);
   });
 
+  it("reads back an explicit effort, kept apart from the model slug", () => {
+    const text = `${formatComposerModelMention("claudeAgent", "claude-opus-5-5", {
+      optionId: "effort",
+      value: "high",
+    })} and ${formatComposerModelMention("opencode", "anthropic/opus", {
+      optionId: "variant",
+      value: "deep think",
+    })}?`;
+    expect(collectComposerModelMentions(text)).toEqual([
+      {
+        instanceId: "claudeAgent",
+        model: "claude-opus-5-5",
+        effort: { optionId: "effort", value: "high" },
+        source: "model:claudeAgent/claude-opus-5-5?effort=high",
+        start: 0,
+        end: 45,
+      },
+      {
+        instanceId: "opencode",
+        model: "anthropic/opus",
+        effort: { optionId: "variant", value: "deep think" },
+        source: "model:opencode/anthropic/opus?variant=deep%20think",
+        start: 50,
+        end: 100,
+      },
+    ]);
+  });
+
+  it.each([
+    ["agent:effort", "vendor's"],
+    ["agent:effort", "extra!"],
+    ["agent:effort", "v1."],
+    ["agent/effort", "agent:deep (max)"],
+    ["agent effort?", "high"],
+    ["_deep_", "_max_"],
+    ["thought_level", "high-_fast_-v2"],
+    ["agent/_effort", "high"],
+  ])("round-trips option %s with value %s as one reference", (optionId, value) => {
+    const source = formatComposerModelMention("acp", "agent", { optionId, value });
+    // A `_` outside a word would read as emphasis in a sent message's Markdown.
+    expect(source).not.toMatch(/(?:^|[^\p{L}\p{N}])_|_(?:[^\p{L}\p{N}]|$)/u);
+    expect(collectComposerModelMentions(`${source}. next`)).toEqual([
+      expect.objectContaining({ source, model: "agent", effort: { optionId, value } }),
+    ]);
+  });
+
+  it.each([
+    ["model:codex/gpt-6.1?", "gpt-6.1"],
+    ["model:codex/gpt-6.1?effort", "gpt-6.1?effort"],
+    ["model:codex/gpt-6.1?effort=%E0", "gpt-6.1?effort=%E0"],
+  ])("reads no effort from %s", (text, model) => {
+    expect(
+      collectComposerModelMentions(text).map((mention) => [mention.model, mention.effort]),
+    ).toEqual([[model, undefined]]);
+  });
+
   it.each([
     ["(model:codex/gpt-6.1).", ["codex/gpt-6.1"]],
+    ["(model:codex/gpt-6.1?reasoningEffort=xhigh).", ["codex/gpt-6.1"]],
     ['"model:codex/gpt-6.1"', ["codex/gpt-6.1"]],
     ["model:codex/gpt-6.1,model:claudeAgent/sonnet", ["codex/gpt-6.1", "claudeAgent/sonnet"]],
     ["model:codex/gpt-6.1's output", ["codex/gpt-6.1"]],
@@ -103,4 +162,56 @@ describe("collectComposerModelMentions", () => {
       expect(collectComposerModelMentions(text)).toEqual([]);
     },
   );
+});
+
+describe("modelMentionEffortDescriptor", () => {
+  const select = (id: string, role?: "reasoning") => ({
+    id,
+    label: id,
+    type: "select" as const,
+    options: [
+      { id: "t3:default", label: "Default" },
+      { id: "default", label: "Default" },
+      { id: "low", label: "Low" },
+      { id: "high", label: "High", isDefault: true },
+      { id: "ultrathink", label: "Ultrathink" },
+    ],
+    promptInjectedValues: ["ultrathink"],
+    ...(role ? { role } : {}),
+  });
+
+  it("takes the model's first reasoning select, as the traits picker does", () => {
+    expect(
+      modelMentionEffortDescriptor([select("effort"), select("thought_level", "reasoning")])?.id,
+    ).toBe("effort");
+    expect(modelMentionEffortDescriptor([select("speed"), select("reasoningEffort")])?.id).toBe(
+      "reasoningEffort",
+    );
+    expect(modelMentionEffortDescriptor([select("thinking")])?.id).toBe("thinking");
+    expect(modelMentionEffortDescriptor([select("agent:effort", "reasoning")])?.id).toBe(
+      "agent:effort",
+    );
+    expect(modelMentionEffortDescriptor([select("agent/effort", "reasoning")])?.id).toBe(
+      "agent/effort",
+    );
+  });
+
+  it("finds none for a model without a reasoning select", () => {
+    expect(
+      modelMentionEffortDescriptor([{ id: "thinking", label: "Thinking", type: "boolean" }]),
+    ).toBeNull();
+    expect(modelMentionEffortDescriptor(undefined)).toBeNull();
+  });
+
+  it("offers levels without the choices that send no effort or prompt-injected levels", () => {
+    const ids = (descriptor: ReturnType<typeof select>, driverKind: string) =>
+      modelMentionEffortChoices(descriptor, driverKind).map((choice) => choice.id);
+    expect(ids(select("effort"), "claudeAgent")).toEqual(["low", "high"]);
+    // Only Claude's `default` sends none; OpenCode's variant and an ACP level named so are real.
+    expect(ids(select("variant"), "opencode")).toEqual(["default", "low", "high"]);
+    expect(ids(select("effort"), "acp")).toEqual(["default", "low", "high"]);
+    expect(
+      ids({ ...select("effort"), options: [{ id: "\ud800", label: "Broken" }] }, "acp"),
+    ).toEqual([]);
+  });
 });

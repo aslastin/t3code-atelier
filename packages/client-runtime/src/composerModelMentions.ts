@@ -1,4 +1,8 @@
+import type { ProviderOptionDescriptor, SelectProviderOptionDescriptor } from "@t3tools/contracts";
+import { DEFAULT_VARIANT_CHOICE_ID } from "@t3tools/shared/model";
+
 import { rankModelPickerSearch, type ModelPickerSearchableModel } from "./modelSearch.ts";
+import { isReasoningSelect } from "./state/threadExecution.ts";
 
 const COMPOSER_MODEL_MENTION_LIMIT = 8;
 
@@ -44,17 +48,106 @@ export function rankComposerModelMentions<T>(
   return [];
 }
 
-/** Prompt text naming a provider instance and model for the agent. No `@`, which the editor would turn into a file chip. */
-export function formatComposerModelMention(instanceId: string, model: string): string {
-  return `model:${instanceId}/${model}`;
+/** A reasoning effort chosen for one mention: a select option id and one of its choice ids. */
+export interface ComposerModelMentionEffort {
+  readonly optionId: string;
+  readonly value: string;
+}
+
+/**
+ * Prompt text naming a provider instance and model for the agent, plus an explicit effort as
+ * `?<option id>=<choice id>`. No `@`, which the editor would turn into a file chip.
+ */
+export function formatComposerModelMention(
+  instanceId: string,
+  model: string,
+  effort?: ComposerModelMentionEffort | null,
+): string {
+  const mention = `model:${instanceId}/${model}`;
+  return effort
+    ? `${mention}?${encodeMentionPart(effort.optionId, ".:/")}=${encodeMentionPart(effort.value)}`
+    : mention;
+}
+
+// Also escapes what the parser reads as a reference's end or prose punctuation, and any `_` outside
+// a word, which Markdown would read as emphasis in a sent message. An option id keeps `.`, `:` and `/`,
+// which agents use in ids like `agent:effort`, since `=` always follows it.
+function encodeMentionPart(part: string, keep = ""): string {
+  let encoded = encodeURIComponent(part).replace(/[!'().*~]/gu, percentEncode);
+  for (const char of keep) encoded = encoded.replaceAll(percentEncode(char), char);
+  // After restoring kept characters, so a `/_` in an id is seen as outside a word.
+  return encoded.replace(/_/gu, (char, index: number, text: string) =>
+    WORD_CHAR.test(text[index - 1] ?? "") && WORD_CHAR.test(text[index + 1] ?? "")
+      ? char
+      : percentEncode(char),
+  );
+}
+
+const WORD_CHAR = /^[\p{L}\p{N}]$/u;
+const percentEncode = (char: string) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`;
+
+/** The model's reasoning effort select, which a mention may set, or null when it has none. */
+export function modelMentionEffortDescriptor(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor> | undefined,
+): SelectProviderOptionDescriptor | null {
+  return (descriptors ?? []).find(isReasoningSelect) ?? null;
+}
+
+// Choices that send no effort, as the menu's own Default does. Claude spells it `default`; for
+// other agents, such as OpenCode's variants or an ACP agent's levels, `default` can be a real level.
+function sendsNoEffort(driverKind: string, choiceId: string): boolean {
+  return (
+    choiceId === DEFAULT_VARIANT_CHOICE_ID ||
+    (driverKind === "claudeAgent" && choiceId === "default")
+  );
+}
+
+// A lone UTF-16 surrogate cannot be written into the prompt.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+
+/** Levels a mention offers besides Default. Prompt-injected levels like Ultrathink stay typed-only. */
+export function modelMentionEffortChoices(
+  descriptor: SelectProviderOptionDescriptor,
+  driverKind: string,
+) {
+  if (LONE_SURROGATE.test(descriptor.id)) return [];
+  return descriptor.options.filter(
+    (choice) =>
+      !sendsNoEffort(driverKind, choice.id) &&
+      !descriptor.promptInjectedValues?.includes(choice.id) &&
+      !LONE_SURROGATE.test(choice.id),
+  );
 }
 
 export interface ComposerModelMentionOccurrence {
   readonly instanceId: string;
   readonly model: string;
+  readonly effort?: ComposerModelMentionEffort;
   readonly source: string;
   readonly start: number;
   readonly end: number;
+}
+
+// ACP agents may namespace their option ids, as in `agent:effort`.
+const EFFORT_SUFFIX = /\?([^\s?&=]+)=([^\s?&=]+)$/u;
+
+function splitEffort(slug: string): {
+  readonly model: string;
+  readonly effort?: ComposerModelMentionEffort;
+} {
+  const match = EFFORT_SUFFIX.exec(slug);
+  if (!match || match.index === 0) return { model: slug };
+  try {
+    return {
+      model: slug.slice(0, match.index),
+      effort: {
+        optionId: decodeURIComponent(match[1]!),
+        value: decodeURIComponent(match[2]!),
+      },
+    };
+  } catch {
+    return { model: slug };
+  }
 }
 
 // Instance ids match ProviderInstanceId; model slugs may contain `/`, as in `opencode/anthropic/opus`.
@@ -86,7 +179,7 @@ function trimModelSlug(slug: string): string {
   return slug.slice(0, end);
 }
 
-/** Finds the `model:<instance>/<model>` references that `formatComposerModelMention` writes. */
+/** Finds the `model:<instance>/<model>[?<option>=<value>]` references `formatComposerModelMention` writes. */
 export function collectComposerModelMentions(
   text: string,
 ): ReadonlyArray<ComposerModelMentionOccurrence> {
@@ -94,11 +187,17 @@ export function collectComposerModelMentions(
   const occurrences: ComposerModelMentionOccurrence[] = [];
   for (const match of text.matchAll(MODEL_MENTION_PATTERN)) {
     const instanceId = match[1]!;
-    const model = trimModelSlug(match[2]!);
-    if (model.length === 0) continue;
+    const slug = trimModelSlug(match[2]!);
+    if (slug.length === 0) continue;
     const start = match.index;
-    const end = start + "model:".length + instanceId.length + 1 + model.length;
-    occurrences.push({ instanceId, model, source: text.slice(start, end), start, end });
+    const end = start + "model:".length + instanceId.length + 1 + slug.length;
+    occurrences.push({
+      instanceId,
+      ...splitEffort(slug),
+      source: text.slice(start, end),
+      start,
+      end,
+    });
   }
   return occurrences;
 }

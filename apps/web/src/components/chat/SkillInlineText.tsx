@@ -44,6 +44,7 @@ function SkillInlineText(props: {
           environmentId={props.environmentId}
           instanceId={mention.instanceId}
           model={mention.model}
+          effort={mention.effort}
           source={mention.source}
         />
       ),

@@ -4,7 +4,10 @@ import {
   type ComposerDispatchMode,
   resolveComposerDispatchMode,
 } from "@t3tools/client-runtime/state/composer-dispatch";
-import { type ComposerPromptEditorHandle } from "../ComposerPromptEditorTiptap";
+import {
+  COMPOSER_MENU_BACK_KEY,
+  type ComposerPromptEditorHandle,
+} from "../ComposerPromptEditorTiptap";
 import {
   type ComposerPromptHistoryMentions,
   type ComposerPromptHistoryPosition,
@@ -100,6 +103,10 @@ export function composerCommandKeyHandler(input: {
   /** Predicted next prompt that Tab fills into an empty composer; Escape dismisses it. */
   readonly promptSuggestion: string | null;
   readonly dismissPromptSuggestion: () => void;
+  /** The `@` menu lists a model's effort levels; the back arrow returns to models when `canGoBack`. */
+  readonly modelEffortStep: { readonly canGoBack: boolean } | null;
+  readonly returnToModelList: () => void;
+  readonly dismissModelEffortStep: () => void;
 }) {
   const {
     keybindings,
@@ -139,6 +146,9 @@ export function composerCommandKeyHandler(input: {
     submitComposer,
     promptSuggestion,
     dismissPromptSuggestion,
+    modelEffortStep,
+    returnToModelList,
+    dismissModelEffortStep,
   } = input;
 
   // The composer persists across threads. A recall from thread A must not
@@ -222,6 +232,21 @@ export function composerCommandKeyHandler(input: {
   };
 
   const onComposerCommandKey = (key: string, event: KeyboardEvent, isTaskItem = false) => {
+    // Answered before anything reads the editor: the editor asks on every back arrow press.
+    if (key === COMPOSER_MENU_BACK_KEY) {
+      if (
+        !modelEffortStep?.canGoBack ||
+        event.shiftKey ||
+        event.altKey ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.isComposing
+      ) {
+        return false;
+      }
+      returnToModelList();
+      return true;
+    }
     const submissionIntent = composerSubmissionIntentForKey({
       event,
       keybindings,
@@ -233,7 +258,7 @@ export function composerCommandKeyHandler(input: {
       prompt: promptRef.current,
     });
     if (key === "Tab" && event.shiftKey && submissionIntent === null) {
-      if (resolveActiveComposerTrigger().trigger !== null) return false;
+      if (resolveActiveComposerTrigger().trigger !== null || modelEffortStep !== null) return false;
       if (applyListEdit(event, listOutdentForTab)) return true;
       if (
         !input.togglePlanMode ||
@@ -247,8 +272,17 @@ export function composerCommandKeyHandler(input: {
       input.togglePlanMode();
       return true;
     }
+    if (
+      modelEffortStep !== null &&
+      key === "Escape" &&
+      !event.isComposing &&
+      event.keyCode !== 229
+    ) {
+      dismissModelEffortStep();
+      return true;
+    }
     const { trigger } = resolveActiveComposerTrigger();
-    const menuIsActive = !isLiteralPendingAnswer && trigger !== null;
+    const menuIsActive = !isLiteralPendingAnswer && (trigger !== null || modelEffortStep !== null);
     if (key === "Escape") {
       if (event.isComposing || event.keyCode === 229) return false;
       if (!menuIsActive && promptSuggestion !== null && promptRef.current.length === 0) {
