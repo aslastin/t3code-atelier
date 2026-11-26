@@ -158,8 +158,6 @@ export function ModelMentionChip(props: {
       label={presentation.label}
       accessibleLabel={gt("Model {label}", { label: presentation.label })}
       copyMarkdown={props.source}
-      // Choosing an effort moves focus into the editor, whose keys drive the menu.
-      finalFocus={canChooseEffort ? false : undefined}
     >
       <div className="space-y-1 p-2 text-sm">
         <p className="font-medium">{presentation.label}</p>

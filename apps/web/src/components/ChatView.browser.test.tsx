@@ -1145,6 +1145,9 @@ it("picking a model with levels puts its mention in and lists them; Back restore
   await userEvent.keyboard("{ArrowLeft}");
   await composer.expectHighlighted("GPT-5.5");
   expect(composer.prompt()).toBe("Ask @gpt-5.5");
+  // Picking again from the restored list lists the levels again.
+  await userEvent.keyboard("{Enter}");
+  await expect.element(composer.efforts).toBeVisible();
 });
 
 it("a chosen level goes into the mention and shows on its chip", async () => {
@@ -1204,7 +1207,13 @@ it("a chip without an effort gets one from its details", async () => {
   await composer.pick("Ask @gpt-5.5");
   await userEvent.keyboard("{Escape}");
 
-  await userEvent.click(page.getByRole("button", { name: "Model GPT-5.5. Show details" }));
+  const details = page.getByRole("button", { name: "Model GPT-5.5. Show details" });
+  // Closing the details without choosing hands focus back to the chip.
+  await userEvent.click(details);
+  await expect.element(page.getByRole("button", { name: "Choose reasoning effort" })).toBeVisible();
+  await userEvent.keyboard("{Escape}");
+  await expect.element(details).toHaveFocus();
+  await userEvent.click(details);
   await userEvent.click(page.getByRole("button", { name: "Choose reasoning effort" }));
   await composer.expectHighlighted("Default");
   await composer.chooseLevel("Low");
