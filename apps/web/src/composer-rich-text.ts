@@ -1,11 +1,13 @@
-export type RichTextMark = "bold" | "italic" | "strike" | "code";
+export type RichTextMark = "bold" | "italic" | "strike" | "code" | "link";
 
 interface RichTextSpan {
   text: string;
   marks: RichTextMark[];
+  /** The destination of a `link` mark. */
+  href?: string;
 }
 
-export const RICH_TEXT_DELIMITERS: Record<RichTextMark, string> = {
+export const RICH_TEXT_DELIMITERS: Record<Exclude<RichTextMark, "link">, string> = {
   bold: "**",
   italic: "*",
   strike: "~~",
@@ -17,6 +19,28 @@ interface SourcePiece {
   start: number;
   end: number;
   marks: RichTextMark[];
+  href?: string;
+}
+
+// The composer styles only web links: one level of balanced parentheses, as in Wikipedia URLs.
+// A blank label would serialize as bare spaces and lose its destination.
+const LINK_LABEL = String.raw`(?!\s*\])(?:\\.|[^\\\[\]\n])+`;
+// Backslash escapes are left out rather than unescaped. U+FFFC and the private use area
+// stand in for chips while parsing, so a chip cannot hide inside a destination.
+const URL_CHAR = String.raw`[^\s()<>\\\uFFFC\uE000-\uF8FF]`;
+const LINK_DESTINATION = String.raw`https?:\/\/(?:${URL_CHAR}|\(${URL_CHAR}*\))+`;
+// Sticky, so matching at each `[` does not copy the rest of the text.
+const LINK_AT = new RegExp(String.raw`\[(${LINK_LABEL})\]\((${LINK_DESTINATION})\)`, "iy");
+/** A Markdown link ending the text, for the rule that styles one as its `)` is typed. */
+export const TYPED_LINK = new RegExp(
+  String.raw`\[(${LINK_LABEL})\]\((${LINK_DESTINATION})\)$`,
+  "i",
+);
+const LINK_DESTINATION_ONLY = new RegExp(String.raw`^${LINK_DESTINATION}$`, "i");
+
+/** Whether `href` can be written as a composer link destination and parsed back. */
+export function isComposerLinkHref(href: string): boolean {
+  return LINK_DESTINATION_ONLY.test(href);
 }
 
 function sameMarks(left: readonly RichTextMark[], right: readonly RichTextMark[]): boolean {
@@ -68,27 +92,73 @@ function literalUnderscoreRuns(text: string): Set<number> {
   return literal;
 }
 
+type ParseFrame = { delimiter: string; mark: RichTextMark; start: number; pieces: SourcePiece[] };
+
 // Pieces keep source offsets, so callers can map parsed text back onto the
 // characters it came from; parsing only drops delimiters.
-function parseInlineMarkdownPieces(text: string): SourcePiece[] {
+
+type LinkRange = { start: number; end: number; href: string };
+
+function parseInlineMarkdownPieces(text: string, links?: LinkRange[]): SourcePiece[] {
   const literalRuns = literalUnderscoreRuns(text);
   const root: SourcePiece[] = [];
-  const stack: { delimiter: string; mark: RichTextMark; start: number; pieces: SourcePiece[] }[] =
-    [];
-  const push = (start: number, end: number, marks: RichTextMark[] = []) => {
+  const stack: ParseFrame[] = [];
+  // Labels cannot hold `[`, so links never nest.
+  let link: { frame: ParseFrame; labelEnd: number; end: number; href: string } | null = null;
+  const push = (start: number, end: number, marks: RichTextMark[] = [], href?: string) => {
     if (end <= start) return;
     const pieces = stack.at(-1)?.pieces ?? root;
     const last = pieces.at(-1);
-    if (last?.end === start && sameMarks(last.marks, marks)) last.end = end;
-    else pieces.push({ start, end, marks });
+    if (last?.end === start && sameMarks(last.marks, marks) && last.href === href) last.end = end;
+    else pieces.push({ start, end, marks, ...(href === undefined ? {} : { href }) });
+  };
+  // Delimiters left open are text, as at the end of the text or a link label.
+  const unwind = (until: ParseFrame | undefined) => {
+    while (stack.length > 0 && stack.at(-1) !== until) {
+      const frame = stack.pop()!;
+      push(frame.start, frame.start + frame.delimiter.length);
+      for (const piece of frame.pieces) push(piece.start, piece.end, piece.marks, piece.href);
+    }
   };
   let index = 0;
+  let escapeEnd = -1;
   while (index < text.length) {
     const char = text[index]!;
+    if (link && index >= link.labelEnd) {
+      unwind(link.frame);
+      stack.pop();
+      // A label that parses to nothing, like `[****](url)`, would drop the whole link.
+      if (link.frame.pieces.length === 0) push(link.frame.start, link.end);
+      else links?.push({ start: link.frame.start, end: link.end, href: link.href });
+      for (const piece of link.frame.pieces) {
+        push(piece.start, piece.end, ["link", ...piece.marks], link.href);
+      }
+      index = link.end;
+      link = null;
+      continue;
+    }
     if (char === "\\") {
       push(index, Math.min(index + 2, text.length));
       index += 2;
+      escapeEnd = index;
       continue;
+    }
+    // `![label](url)` is an image, unless the `!` is escaped.
+    if (char === "[" && !link && (text[index - 1] !== "!" || escapeEnd === index)) {
+      LINK_AT.lastIndex = index;
+      const match = LINK_AT.exec(text);
+      if (match) {
+        const frame = { delimiter: "[", mark: "link" as const, start: index, pieces: [] };
+        stack.push(frame);
+        link = {
+          frame,
+          labelEnd: index + 1 + match[1]!.length,
+          end: index + match[0].length,
+          href: match[2]!,
+        };
+        index += 1;
+        continue;
+      }
     }
     if (char === "`") {
       const run = text.slice(index).match(/^`+/)![0];
@@ -96,6 +166,7 @@ function parseInlineMarkdownPieces(text: string): SourcePiece[] {
       if (
         run.length === 1 &&
         close > index + 1 &&
+        close < (link?.labelEnd ?? text.length) &&
         !text.slice(index, close).includes("\n") &&
         text[close + 1] !== "`"
       ) {
@@ -141,7 +212,9 @@ function parseInlineMarkdownPieces(text: string): SourcePiece[] {
         index + top.delimiter.length <= end
       ) {
         stack.pop();
-        for (const piece of top.pieces) push(piece.start, piece.end, [top.mark, ...piece.marks]);
+        for (const piece of top.pieces) {
+          push(piece.start, piece.end, [top.mark, ...piece.marks], piece.href);
+        }
         index += top.delimiter.length;
       } else if (canOpen && (char !== "~" || end - index >= 2)) {
         const length = char === "~" || end - index >= 2 ? 2 : 1;
@@ -160,22 +233,18 @@ function parseInlineMarkdownPieces(text: string): SourcePiece[] {
       }
     }
   }
-  while (stack.length > 0) {
-    const frame = stack.pop()!;
-    push(frame.start, frame.start + frame.delimiter.length);
-    for (const piece of frame.pieces) push(piece.start, piece.end, piece.marks);
-  }
+  unwind(undefined);
   return root;
 }
 
 export function parseInlineMarkdown(text: string): RichTextSpan[] {
   const spans: RichTextSpan[] = [];
-  for (const { start, end, marks } of parseInlineMarkdownPieces(text)) {
+  for (const { start, end, marks, href } of parseInlineMarkdownPieces(text)) {
     const last = spans.at(-1);
-    if (last && sameMarks(last.marks, marks)) {
+    if (last && sameMarks(last.marks, marks) && last.href === href) {
       last.text += text.slice(start, end);
     } else {
-      spans.push({ text: text.slice(start, end), marks });
+      spans.push({ text: text.slice(start, end), marks, ...(href === undefined ? {} : { href }) });
     }
   }
   return spans;
@@ -184,11 +253,26 @@ export function parseInlineMarkdown(text: string): RichTextSpan[] {
 /** Marks text the composer shows as editable Markdown source while the caret is in it. */
 export const MARKDOWN_SOURCE_MARK = "markdownSource";
 
-/** Marks for each UTF-16 unit of `text`, or null for a delimiter that parsing drops. */
-export function inlineMarkdownUnitMarks(text: string): Array<RichTextMark[] | null> {
-  const result: Array<RichTextMark[] | null> = Array.from({ length: text.length }, () => null);
-  for (const { start, end, marks } of parseInlineMarkdownPieces(text)) {
-    result.fill(marks, start, end);
+/**
+ * Marks for each UTF-16 unit of `text`, or null for a delimiter that parsing drops,
+ * and the destination of each unit inside a link.
+ */
+export function inlineMarkdownUnits(text: string): {
+  marks: Array<RichTextMark[] | null>;
+  hrefs: Array<string | undefined>;
+} {
+  const marks: Array<RichTextMark[] | null> = Array.from({ length: text.length }, () => null);
+  const hrefs: Array<string | undefined> = Array.from({ length: text.length }, () => undefined);
+  for (const piece of parseInlineMarkdownPieces(text)) {
+    marks.fill(piece.marks, piece.start, piece.end);
+    if (piece.href !== undefined) hrefs.fill(piece.href, piece.start, piece.end);
   }
-  return result;
+  return { marks, hrefs };
+}
+
+/** Where `text` holds Markdown links, from each `[` to just after its `)`. */
+export function inlineMarkdownLinks(text: string): LinkRange[] {
+  const links: LinkRange[] = [];
+  if (text.includes("](")) parseInlineMarkdownPieces(text, links);
+  return links;
 }

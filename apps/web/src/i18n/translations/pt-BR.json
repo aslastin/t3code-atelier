@@ -12510,5 +12510,9 @@
   "27d76249d09eb69f": "Guia de revisão pronto",
   "faa3bb26abb39c93": "O guia de revisão falhou",
   "b7df38b7d8792d78": "Abrir guia",
-  "9e91e9a77b664e4e": "Não foi possível iniciar um guia de revisão"
+  "9e91e9a77b664e4e": "Não foi possível iniciar um guia de revisão",
+  "37a429403eb2ce81": "Cole ou digite um link",
+  "e2a6de936b3851b1": "URL do link",
+  "a3dbdd8512f068e5": "Editor: inserir link",
+  "7c5424158a28488f": "Digite um endereço da web, como t3.codes ou localhost:3000"
 }

@@ -12,6 +12,7 @@ import { getTerminalFocusOwner, type TerminalFocusOwner } from "../../lib/termin
 import type { ComposerHandleRef } from "../../composerHandleContext";
 import type { BranchToolbarHandle } from "../BranchToolbar";
 import { shouldTypeToFocusComposer } from "./composerFocusRedirect";
+import { isInComposerLinkEditor } from "./ComposerLinkEditor";
 import { composerShortcutCommands } from "./composerShortcuts";
 
 /** Returning false lets the key event through untouched. */
@@ -72,6 +73,8 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
       return;
     }
     if (!input.enabled || isCommandPaletteOpen()) return;
+    // The URL field is a text input: its Enter must apply the link, not send or steer.
+    if (isInComposerLinkEditor(event.target)) return;
     const inSideChatPane = isInSideChatPane(event.target);
     const terminalFocusOwner = getTerminalFocusOwner();
     if (event.defaultPrevented && terminalFocusOwner === null) return;

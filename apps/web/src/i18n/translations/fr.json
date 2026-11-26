@@ -12510,5 +12510,9 @@
   "27d76249d09eb69f": "Guide de revue prêt",
   "faa3bb26abb39c93": "Échec du guide de revue",
   "b7df38b7d8792d78": "Ouvrir le guide",
-  "9e91e9a77b664e4e": "Impossible de démarrer un guide de revue"
+  "9e91e9a77b664e4e": "Impossible de démarrer un guide de revue",
+  "37a429403eb2ce81": "Collez ou saisissez un lien",
+  "e2a6de936b3851b1": "URL du lien",
+  "a3dbdd8512f068e5": "Zone de saisie : insérer un lien",
+  "7c5424158a28488f": "Saisissez une adresse web, comme t3.codes ou localhost:3000"
 }

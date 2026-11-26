@@ -6,6 +6,8 @@ import { EditorState, TextSelection } from "@tiptap/pm/state";
 import { splitBlockKeepMarks } from "@tiptap/pm/commands";
 import { describe, expect, it, onTestFinished } from "vite-plus/test";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
+import { formatComposerContextReference } from "@t3tools/shared/composerContextReferences";
+import { ComposerContextId } from "@t3tools/contracts";
 
 import {
   collapseExpandedComposerCursor,
@@ -36,6 +38,7 @@ import {
   stepCaretAcrossStyledEdge,
   surroundSelectionWithMark,
 } from "./composer-rich-text-doc";
+import { ComposerLinkExtension } from "./composer-link";
 
 function stubAtom(name: string, attrs: Record<string, { default: unknown }>) {
   return Node.create({
@@ -61,8 +64,10 @@ const schema = getSchemaByResolvedExtensions(
       gapcursor: false,
       trailingNode: false,
       code: false,
+      link: false,
     }),
     ComposerCodeExtension,
+    ComposerLinkExtension,
     stubAtom("composer-mention", { path: { default: "" }, source: { default: "" } }),
     stubAtom("composer-skill", {
       skillName: { default: "" },
@@ -325,6 +330,18 @@ describe("composer rich text document model", () => {
     "snake_case stays literal",
     "unmatched ** stays literal",
     "**bold** then @README.md then *italic*",
+    "see [project website](https://t3.codes) now",
+    "**see [docs](https://t3.codes)**",
+    "[**a** `b` c](https://t3.codes)",
+    "[a](https://t3.codes)[b](https://x.dev)",
+    "[@README.md](https://t3.codes)",
+    "[w](https://en.wikipedia.org/wiki/Foo_(bar))",
+    "![image](https://t3.codes/a.png) stays literal",
+    "[ spaced label ](https://t3.codes)",
+    "[   ](https://t3.codes)",
+    "before [****](https://one.dev) after",
+    `[open](https://t3.codes/?src=${formatComposerContextReference({ kind: "file", contextId: ComposerContextId.make("file_f1"), label: "r" })}) then ${formatComposerContextReference({ kind: "file", contextId: ComposerContextId.make("file_f2"), label: "doc" })}`,
+    "[relative](./a.ts) stays literal",
   ])("round-trips %s through a real ProseMirror document", (value) => {
     expect(roundTrip(value).value).toBe(value);
   });
@@ -337,6 +354,7 @@ describe("composer rich text document model", () => {
     "- [ ] parent\n  - [ ] child\n- [ ]",
     "para\n- [ ] task\npara",
     "**before @README.md after**",
+    "[abc](https://t3.codes) after",
   ])("maps editable positions in %s", (value) => {
     const doc = ProseMirrorNode.fromJSON(
       schema,
@@ -372,6 +390,56 @@ describe("composer rich text document model", () => {
     expect(list.childCount).toBe(2);
     expect(list.child(0).childCount).toBe(1);
     expect(list.child(1).child(1).firstChild!.textContent).toBe("child");
+  });
+
+  it("keeps a link's destination on its label and writes it back", () => {
+    const doc = ProseMirrorNode.fromJSON(
+      schema,
+      buildDocJson("see **[docs](https://t3.codes)**", (name) => ({
+        label: name,
+        description: null,
+      })),
+    );
+    expect(doc.textContent).toBe("see docs");
+    const label = doc.firstChild!.lastChild!;
+    expect(label.marks.map((mark) => [mark.type.name, mark.attrs.href ?? null])).toEqual([
+      ["link", "https://t3.codes"],
+      ["bold", null],
+    ]);
+    const plain = schema.text("see ");
+    const linked = (text: string, href: string) =>
+      schema.text(text, [schema.marks.link!.create({ href })]);
+    const adjacent = schema.node("doc", null, [
+      schema.node("paragraph", null, [
+        plain,
+        linked("a", "https://t3.codes"),
+        linked("b", "https://x.dev"),
+      ]),
+    ]);
+    expect(serializeEditorDoc(adjacent).value).toBe("see [a](https://t3.codes)[b](https://x.dev)");
+    // A caret before a link is outside it, so it maps before the `[`.
+    const map = serializeEditorDoc(adjacent);
+    expect(flatToMarkdown(map, "see ".length)).toBe("see ".length);
+    // An offset in an address lands inside the label, where the address shows as source;
+    // a one-character label has no inside, so it lands at the end.
+    expect(markdownToFlat(map, "see [a](https://t3".length)).toBe("see a".length);
+    const longLabel = serializeEditorDoc(
+      schema.node("doc", null, [
+        schema.node("paragraph", null, [linked("abc", "https://t3.codes")]),
+      ]),
+    );
+    expect(markdownToFlat(longLabel, "[abc](https://t3".length)).toBe(2);
+    expect(markdownToFlat(longLabel, "[".length)).toBe(1);
+    const styledStart = serializeEditorDoc(
+      ProseMirrorNode.fromJSON(
+        schema,
+        buildDocJson("[**doc**s](https://t3.codes) after", (name) => ({
+          label: name,
+          description: null,
+        })),
+      ),
+    );
+    expect(markdownToFlat(styledStart, "[**doc**s](https://t3".length)).toBe("doc".length);
   });
 
   it("applies a shared mark to text on both sides of a chip", () => {
