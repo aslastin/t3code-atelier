@@ -1094,6 +1094,10 @@ function CheckoutGitActionsControl({
   const offersReviewDiff = vcsAllows(gitStatusForActions, "reviewDiff");
   // A VCS plugin's commit starts no branch of its own.
   const offersFeatureBranch = vcsAllows(gitStatusForActions, "featureBranch");
+  // A plugin starts a branch only with a commit; a push alone moves to one through Git.
+  const offersPendingFeatureBranch =
+    offersFeatureBranch &&
+    (pendingDefaultBranchAction?.action !== "push" || vcsAllows(gitStatusForActions, "switchRef"));
   // A plugin whose commit takes no file list commits every change: no file is left out.
   const offersPartialCommit = vcsAllows(gitStatusForActions, "partialCommit");
   const changesPreview = useEnvironmentQuery(
@@ -1316,7 +1320,9 @@ function CheckoutGitActionsControl({
     if (!pendingDefaultBranchAction || !canWriteSourceControl) return;
     if (
       featureBranch &&
-      (!offersFeatureBranch || !canCreateFeatureBranch || featureBranchUnavailableReason !== null)
+      (!offersPendingFeatureBranch ||
+        !canCreateFeatureBranch ||
+        featureBranchUnavailableReason !== null)
     )
       return;
     const { action, commitMessage, onConfirmed, filePaths } = pendingDefaultBranchAction;
@@ -2043,7 +2049,7 @@ function CheckoutGitActionsControl({
               {pendingDefaultBranchActionCopy?.title ?? gt("Run action on default branch?")}
             </DialogTitle>
             <DialogDescription>{pendingDefaultBranchActionCopy?.description}</DialogDescription>
-            {offersFeatureBranch && featureBranchUnavailableReason && (
+            {offersPendingFeatureBranch && featureBranchUnavailableReason && (
               <p className="text-xs text-muted-foreground">{featureBranchUnavailableReason}</p>
             )}
           </DialogHeader>
@@ -2065,7 +2071,7 @@ function CheckoutGitActionsControl({
             >
               {pendingDefaultBranchActionCopy?.continueLabel ?? gt("Continue")}
             </Button>
-            {offersFeatureBranch && (
+            {offersPendingFeatureBranch && (
               <Button
                 className="w-full max-w-full sm:w-auto"
                 size="sm-multiline"

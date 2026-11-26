@@ -65,7 +65,11 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
         })
       : null,
   );
-  const offersFeatureBranch = vcsAllows(vcsStatus.data, "featureBranch");
+  const includesCommit = props.route.params.includesCommit === "true";
+  // A plugin starts a branch only with a commit; a push alone would need Git's createRef.
+  const offersFeatureBranch =
+    vcsAllows(vcsStatus.data, "featureBranch") &&
+    (includesCommit || vcsAllows(vcsStatus.data, "switchRef"));
   const terminology = sourceControlClients.get(
     repository === undefined
       ? selectedThreadProject?.repositoryIdentity?.provider
@@ -81,7 +85,6 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
     | "commit_push_pr"
     | undefined;
   const branchName = params.branchName ?? "";
-  const includesCommit = params.includesCommit === "true";
   const environmentId = params.environmentId ?? "";
   const threadId = params.threadId ?? "";
 

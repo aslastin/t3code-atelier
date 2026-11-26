@@ -1190,41 +1190,43 @@ export default function DiffPanel({
             )}
           </DropdownMenuContent>
         </DropdownMenu>
-        {isGitSelection && gitRepositories.length > 0 && (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={<Button size="xs" variant="ghost-muted" />}
-              className="min-w-14 max-w-48 shrink"
-              aria-label={gt("Repository: {name}", {
-                name: gitRepository?.name ?? threadFolderName,
-              })}
-            >
-              <span className="truncate">{gitRepository?.name ?? threadFolderName}</span>
-              <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="max-h-80 max-w-72">
-              <DropdownMenuRadioGroup
-                value={gitRepository?.repositoryPath ?? THREAD_FOLDER}
-                onValueChange={selectGitRepository}
+        {/* Still offered on a plugin repository's turn diffs, so another repository can be chosen. */}
+        {(isGitSelection || (gitRepository !== null && !offersGitScopes)) &&
+          gitRepositories.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={<Button size="xs" variant="ghost-muted" />}
+                className="min-w-14 max-w-48 shrink"
+                aria-label={gt("Repository: {name}", {
+                  name: gitRepository?.name ?? threadFolderName,
+                })}
               >
-                {threadFolderIsRepo ? (
-                  <DropdownMenuRadioItem value={THREAD_FOLDER} closeOnClick>
-                    <span className="min-w-0 truncate">{threadFolderName}</span>
-                  </DropdownMenuRadioItem>
-                ) : null}
-                {gitRepositories.map((repository) => (
-                  <DropdownMenuRadioItem
-                    key={repository.repositoryPath}
-                    value={repository.repositoryPath}
-                    closeOnClick
-                  >
-                    <span className="min-w-0 truncate">{repository.name}</span>
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+                <span className="truncate">{gitRepository?.name ?? threadFolderName}</span>
+                <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="max-h-80 max-w-72">
+                <DropdownMenuRadioGroup
+                  value={gitRepository?.repositoryPath ?? THREAD_FOLDER}
+                  onValueChange={selectGitRepository}
+                >
+                  {threadFolderIsRepo ? (
+                    <DropdownMenuRadioItem value={THREAD_FOLDER} closeOnClick>
+                      <span className="min-w-0 truncate">{threadFolderName}</span>
+                    </DropdownMenuRadioItem>
+                  ) : null}
+                  {gitRepositories.map((repository) => (
+                    <DropdownMenuRadioItem
+                      key={repository.repositoryPath}
+                      value={repository.repositoryPath}
+                      closeOnClick
+                    >
+                      <span className="min-w-0 truncate">{repository.name}</span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         {repositorySections.length > 0 && (
           <DropdownMenu>
             <DropdownMenuTrigger
