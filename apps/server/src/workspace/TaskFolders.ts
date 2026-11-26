@@ -366,6 +366,19 @@ const make = Effect.gen(function* () {
       ? resolved
       : null;
   });
+  // A VCS plugin's checkout has no gitfile; its plugin listing the folder stands in for one.
+  const listedPluginCheckout = Effect.fnUntraced(function* (checkout: TaskFolderCheckout) {
+    if (plugins?.hasAny() !== true || (yield* exists(path.join(checkout.worktreePath, ".git"))))
+      return false;
+    const real = (target: string) =>
+      fileSystem.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
+    const target = yield* real(checkout.worktreePath);
+    const listed = yield* git
+      .listWorktrees(checkout.repositoryPath)
+      .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+    for (const entry of listed) if ((yield* real(entry)) === target) return true;
+    return false;
+  });
   const unadoptable = Effect.fnUntraced(function* (checkout: TaskFolderCheckout, branch: string) {
     const resolved = yield* linkedGitDir(checkout);
     if (resolved === null)
@@ -1366,7 +1379,8 @@ const make = Effect.gen(function* () {
     const recreateMissing = Effect.fnUntraced(function* (checkout: TaskFolderCheckout) {
       if (yield* isRepository(checkout.worktreePath)) {
         // Another checkout in its place is not the thread's: resuming there would work on it.
-        if ((yield* linkedGitDir(checkout)) !== null) return;
+        if ((yield* linkedGitDir(checkout)) !== null || (yield* listedPluginCheckout(checkout)))
+          return;
         return yield* new TaskFolderError({
           operation: "create",
           detail: `${checkout.worktreePath} holds a checkout that is not a worktree of ${checkout.repositoryPath}. Move it away to restore the thread's worktree.`,

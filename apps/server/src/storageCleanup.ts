@@ -375,9 +375,16 @@ const make = Effect.gen(function* () {
       !path.isAbsolute(relative)
     );
   };
-  // A VCS plugin's worktree: its project's plugin lists it, as Git lists a linked worktree.
   // A VCS plugin's worktree: the plugin that owns the project lists it, and the folder carries
   // that plugin's marker, not `.git`. Its kind, or null for anything else.
+  const projectPlugin = Effect.fnUntraced(function* (projectRoot: string) {
+    const project = yield* gitWorkflow
+      .localStatus({ cwd: projectRoot })
+      .pipe(Effect.orElseSucceed(() => null));
+    const kind = project?.capabilities?.kind;
+    const plugin = kind === undefined ? undefined : plugins?.describe(kind);
+    return kind === undefined || plugin === undefined ? null : { kind, plugin };
+  });
   const pluginWorktreeKind = Effect.fnUntraced(function* (
     worktreePath: string,
     projectRoot: string,
@@ -385,12 +392,9 @@ const make = Effect.gen(function* () {
     if (!gitWorkflowHasPlugins()) return null;
     if (yield* fs.exists(path.join(worktreePath, ".git")).pipe(Effect.orElseSucceed(() => true)))
       return null;
-    const project = yield* gitWorkflow
-      .localStatus({ cwd: projectRoot })
-      .pipe(Effect.orElseSucceed(() => null));
-    const kind = project?.capabilities?.kind;
-    const plugin = kind === undefined ? undefined : plugins?.describe(kind);
-    if (kind === undefined || plugin === undefined) return null;
+    const project = yield* projectPlugin(projectRoot);
+    if (project === null) return null;
+    const { kind, plugin } = project;
     let marked = false;
     for (const marker of plugin.markers) {
       if (yield* fs.exists(path.join(worktreePath, marker)).pipe(Effect.orElseSucceed(() => false)))
@@ -402,10 +406,11 @@ const make = Effect.gen(function* () {
       .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
     return listed.some((entry) => pathKey(entry) === pathKey(worktreePath)) ? kind : null;
   });
-  // The checkout around `target` for a plugin's worktree, found by any installed plugin's marker,
-  // as the plugin's own removal resolves it; null inside the project's repository itself.
+  // The checkout around `target` for a plugin's worktree, found by the project plugin's marker as
+  // that plugin's removal resolves it; null inside the project's repository itself.
   const pluginCheckoutAround = Effect.fnUntraced(function* (target: string, projectCwd: string) {
-    const markers = plugins?.installedMarkers() ?? [];
+    if (!gitWorkflowHasPlugins()) return null;
+    const markers = (yield* projectPlugin(projectCwd))?.plugin.markers ?? [];
     if (markers.length === 0) return null;
     let folder = path.resolve(target);
     while (true) {
@@ -601,6 +606,8 @@ const make = Effect.gen(function* () {
       const incomplete = { bytes: null, reason: "worktree could not be fully inspected" };
       // A plain folder is not a checkout, so a repository at its root counts like one below it.
       const repositories = new Set(inspectRepositories === "plain-folder" ? [] : [pathKey(root)]);
+      // A VCS plugin's checkout below the root is a repository of its own, as a `.git` is.
+      const pluginMarkers = inspectRepositories ? (plugins?.installedMarkers() ?? []) : [];
       const moduleStores: string[] = [];
       if (inspectRepositories === true && (yield* fs.exists(path.join(root, ".gitmodules")))) {
         const submodules = yield* git.execute({
@@ -705,6 +712,14 @@ const make = Effect.gen(function* () {
             if (isNestedRepository(result.target, names))
               return { bytes: null, reason: "contains a nested Git repository" };
           }
+          if (!repositories.has(pathKey(result.target)))
+            for (const marker of pluginMarkers) {
+              if (
+                result.names.includes(marker.split("/")[0]!) &&
+                (yield* fs.exists(path.join(result.target, marker)))
+              )
+                return { bytes: null, reason: "contains a nested repository" };
+            }
           bytes += result.bytes;
           entries += result.names.length;
           if (entries > 2_000_000) return incomplete;
@@ -1157,11 +1172,40 @@ const make = Effect.gen(function* () {
     // The checks a single worktree passes before removal, for one checkout of a task folder.
     const inspectCheckout = Effect.fn("StorageCleanup.inspectCheckout")(
       function* (
-        checkoutPath: string,
+        checkout: { readonly worktreePath: string; readonly repositoryPath: string },
         branch: string | null,
         rules: WorktreeCleanupRules,
         settingsChanged: Effect.Effect<boolean, ServerSettingsError>,
+        deleted: boolean,
       ) {
+        const checkoutPath = checkout.worktreePath;
+        // A VCS plugin's checkout passes the checks its own sweep does, and the plugin removes it.
+        const pluginKind = yield* pluginWorktreeKind(checkoutPath, checkout.repositoryPath);
+        if (pluginKind !== null) {
+          const state = yield* pluginWorktreeState(checkoutPath, branch, rules);
+          const recoverable =
+            deleted ||
+            (state.recreates &&
+              branch !== null &&
+              (yield* gitWorkflow.listLocalBranchNames(checkout.repositoryPath)).includes(branch));
+          const pluginReason =
+            (yield* worktreePathReason(checkoutPath, false)) ??
+            (state.kind !== pluginKind || state.branchChanged
+              ? "repository or branch changed"
+              : null) ??
+            (recoverable
+              ? null
+              : `${state.label} could not recreate it for the thread's next turn`) ??
+            state.changes;
+          if (pluginReason !== null) return { keep: pluginReason, force: false, bytes: null };
+          const inspection = yield* measureWorktree(checkoutPath, true);
+          if (inspection.reason !== null)
+            return { keep: inspection.reason, force: false, bytes: inspection.bytes };
+          if (yield* settingsChanged)
+            return { keep: "settings changed since check", force: false, bytes: inspection.bytes };
+          // Checked as the sweep checks it, so the plugin is not asked to keep untracked files.
+          return { keep: null, force: true, bytes: inspection.bytes };
+        }
         const reason =
           (yield* worktreePathReason(checkoutPath)) ??
           ((yield* branchChanged(checkoutPath, branch)) ? "repository or branch changed" : null) ??
@@ -1548,10 +1592,11 @@ const make = Effect.gen(function* () {
                 forget: deleted,
                 inspect: (checkout) =>
                   inspectCheckout(
-                    checkout.worktreePath,
+                    checkout,
                     thread.branch,
                     settings,
                     settingsChangedSinceCheck,
+                    deleted,
                   ).pipe(
                     Effect.tap(({ bytes }) =>
                       Effect.sync(() => checkoutBytes.set(checkout.worktreePath, bytes)),

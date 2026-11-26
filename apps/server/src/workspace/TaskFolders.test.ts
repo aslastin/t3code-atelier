@@ -287,13 +287,38 @@ it.live("gives a VCS plugin's project folder a checkout, not links to the origin
     const api = yield* repository("shop/api");
     state.workspaceRoot = shop;
     state.trackedFolders = tracked(api);
-    const plan = yield* (yield* TaskFolders.TaskFolders).plan({ projectId });
+    const taskFolders = yield* TaskFolders.TaskFolders;
+    const plan = yield* taskFolders.plan({ projectId });
     assert.isTrue(plan?.projectIsRepository);
+
+    // Recovery finds the plugin's checkout in place: the plugin lists it, so it is the thread's.
+    const root = path.join(tmp, "task");
+    const checkout = path.join(root, "shop");
+    yield* fileSystem.makeDirectory(path.join(checkout, ".kite"), { recursive: true });
+    yield* fileSystem.writeFileString(path.join(checkout, ".kite", "HEAD"), "feature\n");
+    const restore = taskFolders.restore({
+      taskFolder: {
+        root,
+        projectId,
+        projectRoot: shop,
+        anchor: shop,
+        projectPath: checkout,
+        projectIsWorktree: true,
+        repositories: [],
+      },
+      branch: "feature",
+      recreate: () => Effect.die("an existing checkout is never recreated"),
+    });
+    const unlisted = yield* restore.pipe(Effect.flip);
+    assert.include(unlisted.detail, "is not a worktree of");
+    state.pluginWorktrees = [shop, checkout];
+    yield* restore;
   }).pipe(
     Effect.provide(
       layerFor(state).pipe(
         Layer.provide(
           Layer.succeed(VcsPluginDrivers, {
+            hasAny: () => true,
             installedMarkers: () => [".kite/HEAD"],
           } as unknown as VcsPluginDrivers["Service"]),
         ),

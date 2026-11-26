@@ -2341,6 +2341,75 @@ describe("VCS plugin worktrees", () => {
     }).pipe(Effect.provide(cleanupTestLayer)),
   );
 
+  it.effect.each([
+    { name: "a clean checkout", files: [], verdict: { keep: null, force: true } },
+    {
+      name: "a checkout with changes",
+      files: [{ path: "a.txt" }],
+      verdict: { keep: "has uncommitted changes (1 file)", force: false },
+    },
+  ])("checks $name in a task folder through the plugin", (row) =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, { recreates: true });
+      const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      fixture.setPluginStatus({
+        refName: "feature",
+        files: row.files,
+        aheadCount: 0,
+        repositoryBranches: ["feature"],
+      });
+      let verdict: unknown;
+      fixture.setTaskFolders({
+        find: () =>
+          Effect.succeed({
+            root: fixture.pluginWorktree,
+            projectId: ProjectId.make("project-1"),
+            projectRoot: fixture.repo,
+            anchor: fixture.repo,
+            projectPath: fixture.pluginWorktree,
+            projectIsWorktree: true,
+            repositories: [],
+          }),
+        remove: (input) =>
+          input.inspect!({
+            worktreePath: fixture.pluginWorktree,
+            repositoryPath: fixture.repo,
+          }).pipe(
+            Effect.map((decided) => {
+              verdict = { keep: decided.keep, force: decided.force };
+              return { removed: [], kept: [] };
+            }),
+          ),
+      });
+      yield* fixture.service.runNow;
+      expect(verdict).toEqual(row.verdict);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("keeps a VCS plugin worktree holding another plugin's checkout", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, { recreates: true });
+      // Another installed plugin's checkout, with work of its own the Kite status never lists.
+      yield* fixture.fs.makeDirectory(`${fixture.pluginWorktree}/vendor/.other`, {
+        recursive: true,
+      });
+      yield* fixture.fs.writeFileString(`${fixture.pluginWorktree}/vendor/.other/HEAD`, "main\n");
+      yield* fixture.fs.writeFileString(`${fixture.pluginWorktree}/vendor/work.txt`, "local\n");
+      const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry).toMatchObject({ outcome: "kept", reason: "Contains a nested repository" });
+      expect(yield* fixture.fs.exists(`${fixture.pluginWorktree}/vendor/work.txt`)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
   it.effect("keeps a VCS plugin worktree holding a Git repository of its own", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
@@ -2389,7 +2458,9 @@ describe("VCS plugin worktrees", () => {
   it.effect("checks the whole VCS plugin checkout before removing it from a subfolder", () =>
     Effect.gen(function* () {
       const fixture = yield* cleanupFixture(undefined, undefined, { recreates: true });
-      yield* fixture.fs.makeDirectory(`${fixture.pluginWorktree}/sub`);
+      // Another installed plugin's marker in the subfolder does not make it the checkout.
+      yield* fixture.fs.makeDirectory(`${fixture.pluginWorktree}/sub/.other`, { recursive: true });
+      yield* fixture.fs.writeFileString(`${fixture.pluginWorktree}/sub/.other/HEAD`, "main\n");
       // Another thread works at the checkout's root.
       fixture.setThreads([
         shell({

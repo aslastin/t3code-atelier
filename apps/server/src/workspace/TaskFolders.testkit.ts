@@ -25,6 +25,8 @@ export interface TaskFoldersTestState {
   workspaceRoot: string;
   trackedFolders: ReadonlyArray<ProjectTrackedFolder>;
   thread: { worktreePath: string | null; branch: string | null } | null;
+  /** The worktrees a VCS plugin lists for its repository. */
+  pluginWorktrees?: ReadonlyArray<string>;
 }
 
 /**
@@ -52,6 +54,7 @@ export const layerTaskFoldersWithGit = (state: TaskFoldersTestState) => {
             Effect.map((commit) => commit !== null),
           ),
         currentBranch: (cwd) => succeeds(cwd, ["symbolic-ref", "--short", "--quiet", "HEAD"]),
+        listWorktrees: () => Effect.sync(() => state.pluginWorktrees ?? []),
       });
     }),
   );
