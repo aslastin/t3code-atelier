@@ -51,6 +51,20 @@ describe("vcsCapabilities", () => {
     expect(vcsAllows(plugin({ kind: VcsDriverKind.make("git") }), "featureBranch")).toBe(true);
   });
 
+  it("offers publishing and pulling only where the VCS can", () => {
+    const git = plugin({ kind: VcsDriverKind.make("git") });
+    const publish = { label: "Publish", disabled: false, kind: "open_publish" };
+    const pull = { label: "Pull", disabled: false, kind: "run_pull" };
+    // A Git repository with capabilities keeps Publish and Pull.
+    expect(limitGitQuickAction(publish, git, copy)).toEqual(publish);
+    expect(limitGitQuickAction(pull, git, copy)).toEqual(pull);
+    expect(limitGitQuickAction(publish, plugin(), copy)).toMatchObject({ kind: "show_hint" });
+    expect(limitGitQuickAction(pull, plugin(), copy)).toMatchObject({ kind: "show_hint" });
+    expect(limitGitQuickAction(pull, plugin({ supportsPull: true }), copy)).toEqual(pull);
+    expect(vcsAllows(plugin(), "switchRef")).toBe(false);
+    expect(vcsAllows(git, "switchRef")).toBe(true);
+  });
+
   it("narrows a quick action to the steps the plugin supports", () => {
     expect(limitGitQuickAction(run("commit_push_pr"), plugin(), copy)).toMatchObject({
       action: "commit",

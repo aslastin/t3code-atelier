@@ -1466,8 +1466,13 @@ function CheckoutGitActionsControl({
     })();
   };
 
+  // Publishing creates a Git remote; another VCS's repository nested in Git must not push that.
   const canPublishRepository =
-    canWriteSourceControl && isRepo && gitStatusForActions !== null && !hasPrimaryRemote;
+    canWriteSourceControl &&
+    isRepo &&
+    gitStatusForActions !== null &&
+    !hasPrimaryRemote &&
+    vcsAllows(gitStatusForActions, "publish");
   const isDetachedHead = gitStatusForActions?.refName === null;
   const isCleanAndBehind =
     gitStatusForActions !== null &&

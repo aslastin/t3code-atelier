@@ -39,6 +39,8 @@ export const VcsDriverCapabilities = Schema.Struct({
   supportsBranchCreate: Schema.optionalKey(Schema.Boolean),
   /** Atelier fork: false when a VCS plugin can only commit every change, not selected files. */
   supportsPartialCommit: Schema.optionalKey(Schema.Boolean),
+  /** Atelier fork: whether a VCS plugin can pull. */
+  supportsPull: Schema.optionalKey(Schema.Boolean),
 });
 export type VcsDriverCapabilities = typeof VcsDriverCapabilities.Type;
 

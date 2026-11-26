@@ -468,6 +468,7 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
       ignoreClassifier: "git-compatible-fallback",
       supportsBranchCreate: commands.branchCreate !== undefined,
       supportsPartialCommit: usesPlaceholder(commands.commit, "pathsFile"),
+      supportsPull: commands.pull !== undefined,
     },
     execute: Effect.fn("ManifestVcsDriver.execute")(function* () {
       return yield* unsupported("execute", "Plugins run only their own commands.");

@@ -1,6 +1,7 @@
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import { ComposerContextLabel } from "./ComposerContextLabel";
 import { useVcsPlugin, VcsKindIcon } from "./VcsKindIcon";
+import { vcsAllows } from "@t3tools/client-runtime/state/vcs-capabilities";
 import { useRightPanelStore } from "../rightPanelStore";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
@@ -307,8 +308,13 @@ export function BranchToolbarBranchSelector({
     canChangeThreadBranch && prReference && onCheckoutPullRequestRequest
       ? `__checkout_pull_request__:${prReference}`
       : null;
+  // A VCS plugin starts no branch in place and cannot switch one: only its worktrees are offered.
+  const canSwitchRefs = vcsAllows(branchStatusQuery.data, "switchRef");
   const canCreateBranch =
-    canChangeThreadBranch && !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
+    canChangeThreadBranch &&
+    canSwitchRefs &&
+    !isSelectingWorktreeBase &&
+    trimmedBranchQuery.length > 0;
   const newRefName = sanitizeNewRefName(trimmedBranchQuery);
   const hasExactBranchMatch = branchByName.has(newRefName);
   const createBranchItemValue = canCreateBranch
@@ -317,7 +323,9 @@ export function BranchToolbarBranchSelector({
   const pickerCreateBranchItemValue = hasExactBranchMatch ? null : createBranchItemValue;
   const branchPickerItems = [
     ...(checkoutPullRequestItemValue ? [checkoutPullRequestItemValue] : []),
-    ...refs.map((refName) => refName.name),
+    ...refs
+      .filter((ref) => canSwitchRefs || isSelectingWorktreeBase || ref.current || ref.worktreePath)
+      .map((refName) => refName.name),
     ...(pickerCreateBranchItemValue ? [pickerCreateBranchItemValue] : []),
   ];
   const filteredBranchPickerItems =

@@ -9,7 +9,10 @@ export type VcsCapability =
   | "pullRequest"
   | "worktree"
   | "reviewDiff"
-  | "featureBranch";
+  | "featureBranch"
+  | "publish"
+  | "pull"
+  | "switchRef";
 
 type CapabilityStatus = Pick<VcsStatusLocalResult, "capabilities"> | null | undefined;
 
@@ -31,6 +34,12 @@ export function vcsAllows(status: CapabilityStatus, capability: VcsCapability): 
     // "Commit on a new branch": Git, or a plugin that can start a branch from the checkout.
     case "featureBranch":
       return capabilities.kind === GIT_VCS_KIND || capabilities.supportsBranchCreate === true;
+    // Publishing creates a Git remote; switching and creating refs go through Git.
+    case "publish":
+    case "switchRef":
+      return capabilities.kind === GIT_VCS_KIND;
+    case "pull":
+      return capabilities.kind === GIT_VCS_KIND || capabilities.supportsPull === true;
   }
 }
 
@@ -88,8 +97,8 @@ export function limitGitQuickAction<
 ): Action {
   if (status?.capabilities === undefined) return quick;
   const unsupported = { ...quick, disabled: true, kind: "show_hint", hint: copy.unsupportedHint };
-  // Publishing creates a Git remote, which a plugin's repository does not have.
-  if (quick.kind === "open_publish") return unsupported;
+  if (quick.kind === "open_publish") return vcsAllows(status, "publish") ? quick : unsupported;
+  if (quick.kind === "run_pull") return vcsAllows(status, "pull") ? quick : unsupported;
   if (quick.kind !== "run_action" || quick.action === undefined) return quick;
   const fallback = FALLBACKS[quick.action].find((action) => runs(status, action));
   if (fallback === undefined) return unsupported;
