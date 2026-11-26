@@ -1,4 +1,5 @@
 import { FitSheet } from "../../../components/ui/FitSheet";
+import { vcsAllows } from "@t3tools/client-runtime/state/vcs-capabilities";
 import { SheetHeader } from "../../../components/ui/SheetHeader";
 import { Button } from "../../../components/ui/Button";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
@@ -49,11 +50,15 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
   );
 
   const busy = gitState.gitOperationLabel !== null;
+  // A VCS plugin's commit needs a typed message, and starts no branch of its own.
+  const generatesCommitMessage = vcsAllows(gitStatus.data, "commitMessageGeneration");
+  const offersFeatureBranch = vcsAllows(gitStatus.data, "featureBranch");
   const isDefaultRef = gitStatus.data?.isDefaultRef ?? false;
   const allFiles = gitStatus.data?.workingTree?.files ?? [];
 
   const [dialogCommitMessage, setDialogCommitMessage] = useState("");
   const [excludedFiles, setExcludedFiles] = useState<ReadonlySet<string>>(new Set());
+  const missingMessage = !generatesCommitMessage && dialogCommitMessage.trim() === "";
 
   const selectedFiles = allFiles.filter((file) => !excludedFiles.has(file.path));
   const allSelected = excludedFiles.size === 0;
@@ -108,9 +113,11 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
           textAlignVertical="top"
           className="min-h-24 rounded-xl bg-subtle px-4 py-3 text-base"
         />
-        <Text className="text-xs text-foreground-muted">
-          <T>Leave empty to generate a message automatically.</T>
-        </Text>
+        {generatesCommitMessage ? (
+          <Text className="text-xs text-foreground-muted">
+            <T>Leave empty to generate a message automatically.</T>
+          </Text>
+        ) : null}
       </View>
       <View>
         <View className="flex-row items-center justify-between gap-2 pb-2">
@@ -219,17 +226,25 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
           icon="checkmark"
           tone="primary"
           fullWidth
-          disabled={!canWriteSourceControl || noneSelected || busy}
+          disabled={!canWriteSourceControl || noneSelected || busy || missingMessage}
           onPress={() => void runCommitAction(false)}
         />
-        <Button
-          label={gt("Commit on a new branch")}
-          icon="arrow.branch"
-          tone="text"
-          fullWidth
-          disabled={!canWriteSourceControl || !canCreateFeatureBranch || noneSelected || busy}
-          onPress={() => void runCommitAction(true)}
-        />
+        {offersFeatureBranch ? (
+          <Button
+            label={gt("Commit on a new branch")}
+            icon="arrow.branch"
+            tone="text"
+            fullWidth
+            disabled={
+              !canWriteSourceControl ||
+              !canCreateFeatureBranch ||
+              noneSelected ||
+              busy ||
+              missingMessage
+            }
+            onPress={() => void runCommitAction(true)}
+          />
+        ) : null}
       </View>
     </FitSheet>
   );

@@ -45,6 +45,11 @@ describe("vcsCapabilities", () => {
       { id: "push" },
     ]);
     expect(vcsAllows(plugin(), "worktree")).toBe(false);
+    // Generated messages and new branches read Git, whatever else the plugin supports.
+    for (const capability of ["commitMessageGeneration", "featureBranch"] as const) {
+      expect(vcsAllows(plugin({ supportsPush: true }), capability)).toBe(false);
+      expect(vcsAllows(plugin({ kind: VcsDriverKind.make("git") }), capability)).toBe(true);
+    }
   });
 
   it("narrows a quick action to the steps the plugin supports", () => {

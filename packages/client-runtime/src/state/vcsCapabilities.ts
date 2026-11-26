@@ -3,7 +3,14 @@ import { GIT_VCS_KIND, type GitStackedAction, type VcsStatusLocalResult } from "
 // Atelier fork: a VCS plugin's driver reports what it can do in `status.capabilities`. Clients
 // hide what it cannot. Servers that omit capabilities keep the Git UI unchanged.
 
-export type VcsCapability = "commit" | "push" | "pullRequest" | "worktree" | "reviewDiff";
+export type VcsCapability =
+  | "commit"
+  | "push"
+  | "pullRequest"
+  | "worktree"
+  | "reviewDiff"
+  | "commitMessageGeneration"
+  | "featureBranch";
 
 type CapabilityStatus = Pick<VcsStatusLocalResult, "capabilities"> | null | undefined;
 
@@ -22,6 +29,10 @@ export function vcsAllows(status: CapabilityStatus, capability: VcsCapability): 
       return capabilities.supportsWorktrees;
     case "reviewDiff":
       return capabilities.supportsReviewDiff;
+    // Both read Git: the staged diff a message is written from, and the branch it starts.
+    case "commitMessageGeneration":
+    case "featureBranch":
+      return capabilities.kind === GIT_VCS_KIND;
   }
 }
 

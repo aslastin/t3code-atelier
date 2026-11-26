@@ -1092,6 +1092,9 @@ function CheckoutGitActionsControl({
     : null;
   // A VCS plugin's driver has no branch review diff; its turn diffs come from checkpoints.
   const offersReviewDiff = vcsAllows(gitStatusForActions, "reviewDiff");
+  // A VCS plugin's commit needs a typed message, and starts no branch of its own.
+  const generatesCommitMessage = vcsAllows(gitStatusForActions, "commitMessageGeneration");
+  const offersFeatureBranch = vcsAllows(gitStatusForActions, "featureBranch");
   const changesPreview = useEnvironmentQuery(
     showChanges &&
       isRepo &&
@@ -1401,6 +1404,15 @@ function CheckoutGitActionsControl({
         description: quickAction.hint,
         data: threadToastData,
       });
+      return;
+    }
+    if (
+      !generatesCommitMessage &&
+      (quickAction.action === "commit" || quickAction.action === "commit_push")
+    ) {
+      setExcludedFiles(new Set());
+      setIsEditingFiles(false);
+      setIsCommitDialogOpen(true);
       return;
     }
     if (quickAction.action) {
@@ -1963,12 +1975,14 @@ function CheckoutGitActionsControl({
             </div>
             <div className="space-y-1">
               <p className="text-sm font-medium">
-                <T>Commit message (optional)</T>
+                {generatesCommitMessage ? <T>Commit message (optional)</T> : <T>Commit message</T>}
               </p>
               <Textarea
                 value={dialogCommitMessage}
                 onChange={(event) => setDialogCommitMessage(event.target.value)}
-                placeholder={gt("Leave empty to auto-generate")}
+                {...(generatesCommitMessage
+                  ? { placeholder: gt("Leave empty to auto-generate") }
+                  : {})}
                 size="sm"
               />
             </div>
@@ -1986,17 +2000,23 @@ function CheckoutGitActionsControl({
             >
               <T>Cancel</T>
             </Button>
+            {offersFeatureBranch ? (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!canCreateFeatureBranch || noneSelected}
+                onClick={runDialogActionOnNewBranch}
+              >
+                <T>Commit on new branch</T>
+              </Button>
+            ) : null}
             <Button
-              variant="outline"
               size="sm"
-              disabled={!canCreateFeatureBranch || noneSelected}
-              onClick={runDialogActionOnNewBranch}
-            >
-              <T>Commit on new branch</T>
-            </Button>
-            <Button
-              size="sm"
-              disabled={!canWriteSourceControl || noneSelected}
+              disabled={
+                !canWriteSourceControl ||
+                noneSelected ||
+                (!generatesCommitMessage && dialogCommitMessage.trim() === "")
+              }
               onClick={runDialogAction}
             >
               <T context="verb">Commit</T>
