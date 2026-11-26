@@ -2214,7 +2214,7 @@ describe("VCS plugin worktrees", () => {
             : "Inactive for 30 days"
           : files.length > 0
             ? "Has uncommitted changes (1 file)"
-            : "Kite cannot bring back a removed worktree",
+            : "Kite could not recreate it for the thread's next turn",
       });
       expect(yield* fixture.fs.exists(fixture.pluginWorktree)).toBe(!removed);
     }).pipe(Effect.provide(cleanupTestLayer)),

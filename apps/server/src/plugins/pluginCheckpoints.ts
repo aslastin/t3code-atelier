@@ -29,17 +29,20 @@ const CHECKPOINT_TIMEOUT_MS = 120_000;
 const READ_FILE_MAX_BYTES = 50_000_000;
 const CHANGED_FILES_MAX_BYTES = 5_000_000;
 
-/** One line per failed strategy for the turn's note; the full error, with paths, goes to the log. */
+/**
+ * One line per failed strategy for the turn's note; the full error, with paths, goes to the log.
+ * Names in backticks are shown as code.
+ */
 const describeFailure = (error: { readonly _tag: string; readonly message: string }) => {
   const operation = "operation" in error ? String(error.operation) : "";
   const command = operation.slice(operation.lastIndexOf(".") + 1);
   switch (error._tag) {
     case "VcsProcessExitError":
-      return `${command} exited with code ${"exitCode" in error ? String(error.exitCode) : "?"}.`;
+      return `\`${command}\` exited with code ${"exitCode" in error ? String(error.exitCode) : "?"}.`;
     case "VcsProcessTimeoutError":
-      return `${command} timed out.`;
+      return `\`${command}\` timed out.`;
     case "VcsProcessSpawnError":
-      return `${command} could not start.`;
+      return `\`${command}\` could not start.`;
     default:
       return error.message;
   }
@@ -468,7 +471,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         strategy,
         error: result.failure,
       });
-      failures.push(`${strategy}: ${describeFailure(result.failure)}`);
+      failures.push(`\`${strategy}\`: ${describeFailure(result.failure)}`);
     }
     return yield* unsupported(
       "captureCheckpoint",
@@ -526,7 +529,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     if (from.strategy !== to.strategy)
       return yield* unsupported(
         "diffCheckpoints",
-        `The snapshots were taken with different strategies (${from.strategy}, then ${to.strategy}), so they cannot be compared.`,
+        `The snapshots were taken with different strategies (\`${from.strategy}\`, then \`${to.strategy}\`), so they cannot be compared.`,
       );
     if (from.strategy === "native") {
       const { patch } = yield* nativeDiff(location, input.cwd, from.revision, to.revision);

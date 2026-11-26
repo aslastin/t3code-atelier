@@ -1547,7 +1547,7 @@ const make = Effect.gen(function* () {
           }
           // A live thread's next turn brings its checkout back, which needs the plugin's help.
           if (!deleted && !first.recreates)
-            return keep(`${first.label} cannot bring back a removed worktree`);
+            return keep(`${first.label} could not recreate it for the thread's next turn`);
           if (first.changes !== null) return keep(first.changes);
           const blocked = yield* blockedSinceCheck();
           if (blocked !== null) return keep(blocked);

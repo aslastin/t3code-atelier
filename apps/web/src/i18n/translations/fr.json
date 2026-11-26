@@ -4376,8 +4376,9 @@
   "405a3e88ee6e62b3": "Impossible de lister les modifications de ce tour dans ce dépôt.",
   "f6958f38dc87c712": "Créer un fork depuis cette réponse",
   "72f8e14b1246d224": "Répondre à cette réponse",
-  "a9cd2bb09991f9d4": [
-    "Les modifications de ce tour ne peuvent pas être affichées : ",
+  "33802dfa98c07ca7": [
+    "Les modifications de ce tour ne peuvent pas être affichées :",
+    " ",
     {
       "i": 1,
       "k": "_gt_value_1",

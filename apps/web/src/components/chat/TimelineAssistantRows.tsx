@@ -429,6 +429,23 @@ export function McpAppTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "
 }
 
 /** A VCS plugin left the turn without a checkpoint, so it has no diff or rollback. */
+/** A server reason with names in backticks, such as a checkpoint strategy, shown as code. */
+function ReasonText({ text }: { readonly text: string }) {
+  let offset = 0;
+  return text.split("`").map((part, index) => {
+    // The part's position in the text keys it; the same name can appear twice.
+    const key = offset;
+    offset += part.length + 1;
+    return index % 2 === 1 ? (
+      <code key={key} className="font-mono text-foreground/80">
+        {part}
+      </code>
+    ) : (
+      part
+    );
+  });
+}
+
 function CheckpointUnavailableNote({
   reason,
   restorable,
@@ -440,12 +457,17 @@ function CheckpointUnavailableNote({
     <p className="mt-2 text-xs text-muted-foreground">
       {restorable ? (
         <T>
-          This turn's changes cannot be shown: <Var>{reason}</Var>
+          This turn's changes cannot be shown:{" "}
+          <Var>
+            <ReasonText text={reason} />
+          </Var>
         </T>
       ) : (
         <T>
           No checkpoint for this turn, so its changes cannot be shown or rolled back:{" "}
-          <Var>{reason}</Var>
+          <Var>
+            <ReasonText text={reason} />
+          </Var>
         </T>
       )}
     </p>
