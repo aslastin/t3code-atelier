@@ -292,7 +292,12 @@ const make = Effect.gen(function* () {
     [...entries.values()],
     (entry) =>
       check(entry).pipe(
-        Effect.tap((checked) => Effect.sync(() => entries.set(entry.folder, checked))),
+        // A plugin turned off, removed or replaced meanwhile keeps that newer state.
+        Effect.tap((checked) =>
+          Effect.sync(() => {
+            if (entries.get(entry.folder) === entry) entries.set(entry.folder, checked);
+          }),
+        ),
         Effect.catchCause((cause) =>
           Effect.logWarning("VCS plugin check failed", { plugin: entry.folder, cause }),
         ),
@@ -376,6 +381,8 @@ const make = Effect.gen(function* () {
         yield* fs
           .copy(source, staging)
           .pipe(Effect.mapError((cause) => failure(operation, cause.message, id)));
+        // The source can change while it is copied; the limits hold for what will be installed.
+        yield* walkSource(staging).pipe(Effect.tapError(() => cleanupStaging));
         const disabled = yield* readDisabled;
         // Paths are checked again in the copy, which is what will run.
         const staged = yield* load(id, !disabled.has(id), staging);
@@ -389,7 +396,14 @@ const make = Effect.gen(function* () {
         const hadPrevious = yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false));
         yield* Effect.gen(function* () {
           if (hadPrevious) yield* fs.rename(target, previous);
-          yield* fs.rename(staging, target);
+          // A failed swap puts the installed copy back where it was.
+          yield* fs
+            .rename(staging, target)
+            .pipe(
+              Effect.tapError(() =>
+                hadPrevious ? fs.rename(previous, target).pipe(Effect.ignore) : Effect.void,
+              ),
+            );
         }).pipe(
           Effect.mapError((cause) => failure(operation, cause.message, id)),
           Effect.tapError(() => cleanupStaging),

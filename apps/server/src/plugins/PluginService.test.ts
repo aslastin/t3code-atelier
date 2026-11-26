@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Fixtures edit a fake repository directly.
 import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
@@ -60,6 +61,29 @@ const setup = Effect.fn("test.setup")(function* (options: FakeVcsPluginOptions =
 });
 
 const layer = NodeServices.layer;
+
+it.live("keeps a plugin turned off while its startup check was still running", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-plugins-home-" });
+    const installed = writeFakeVcsPlugin(`${home}/plugins/kite`);
+    NodeFS.writeFileSync(`${installed}/hold-check`, "");
+    const context = yield* Layer.build(
+      PluginService.layer.pipe(
+        Layer.provide(VcsProcess.layer),
+        Layer.provideMerge(SqlitePersistence.layerMemory),
+        Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
+        Layer.provide(ServerConfig.layerTest(home, home)),
+      ),
+    );
+    const plugins = Context.get(context, PluginService.PluginService);
+    yield* plugins.setEnabled("kite", false);
+    NodeFS.writeFileSync(`${installed}/release-check`, "");
+    yield* Context.get(context, VcsPluginDrivers).current;
+    const listed = yield* plugins.list;
+    assert.strictEqual(listed.plugins[0]?.status, "disabled");
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
 
 describe("PluginService", () => {
   it.live("imports a plugin, checks it, and serves its driver", () =>
@@ -122,6 +146,13 @@ describe("ManifestVcsDriver", () => {
       NodeFS.writeFileSync(`${repository}/new.txt`, "new\n");
       const identity = yield* driver!.detectRepository(`${repository}/sub`);
       assert.strictEqual(identity?.rootPath, repository);
+      // An alias whose own parents have no marker still finds the repository it points into.
+      const alias = `${NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-kite-alias-`)}/sub`;
+      NodeFS.symlinkSync(`${repository}/sub`, alias);
+      assert.strictEqual(
+        (yield* driver!.detectRepository(alias))?.rootPath,
+        NodeFS.realpathSync(repository),
+      );
       const status = yield* driver!.workflow!.status!({ cwd: `${repository}/sub` });
       assert.strictEqual(status.refName, "main");
       assert.deepStrictEqual(
@@ -175,6 +206,20 @@ describe("ManifestVcsDriver", () => {
       assert.strictEqual(worktree.refName, "t3code/feature");
       assert.strictEqual(worktree.projectPath, `${worktree.path}/sub`);
       assert.deepStrictEqual(yield* workflow.listWorktrees!({ cwd: repository }), [worktree.path]);
+      const refs = yield* workflow.listRefs!({ cwd: repository });
+      assert.strictEqual(
+        refs.refs.find((ref) => ref.name === "t3code/feature")?.worktreePath,
+        worktree.path,
+      );
+      // The repository itself, and a checkout holding the caller, are never removed.
+      for (const [cwd, target] of [
+        [`${repository}/sub`, repository],
+        [`${worktree.path}/sub`, worktree.path],
+      ] as const) {
+        const refused = yield* workflow.removeWorktree!({ cwd, path: target }).pipe(Effect.flip);
+        assert.include(refused.message, "not a worktree");
+      }
+      assert.isTrue(NodeFS.existsSync(worktree.path));
 
       // Callers pass the thread's folder, the subfolder; the whole checkout goes, as with Git.
       yield* workflow.removeWorktree!({ cwd: `${repository}/sub`, path: worktree.projectPath! });

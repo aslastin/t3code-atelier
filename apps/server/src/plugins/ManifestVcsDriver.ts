@@ -27,7 +27,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import * as VcsDriver from "../vcs/VcsDriver.ts";
-import { worktreeProjectFolder, worktreeRootForProject } from "../workspace/worktreeProjectPath.ts";
+import { worktreeProjectFolder } from "../workspace/worktreeProjectPath.ts";
 import { makePluginCheckpoints } from "./pluginCheckpoints.ts";
 import { makePluginCommandRunner, type PluginCommandRunner } from "./pluginCommandRunner.ts";
 import { checkpointStrategies, supportsWorktrees, usesPlaceholder } from "./pluginManifest.ts";
@@ -106,7 +106,15 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
     return ref;
   });
 
-  const detect = (cwd: string) => detectMarkerRoot(fs, path, manifest.detect.markers, cwd);
+  // A folder reached through a symlink has its marker above the physical path, not the alias.
+  const detect = Effect.fnUntraced(function* (cwd: string) {
+    const found = yield* detectMarkerRoot(fs, path, manifest.detect.markers, cwd);
+    if (found !== null) return found;
+    const real = yield* fs.realPath(cwd).pipe(Effect.orElseSucceed(() => path.resolve(cwd)));
+    return real === path.resolve(cwd)
+      ? null
+      : yield* detectMarkerRoot(fs, path, manifest.detect.markers, real);
+  });
 
   const repositoryRoot = Effect.fn("ManifestVcsDriver.repositoryRoot")(function* (cwd: string) {
     const found = yield* detect(cwd);
@@ -114,6 +122,14 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
       return yield* unsupported("repositoryRoot", `No ${manifest.label} repository at ${cwd}.`);
     return found.root;
   });
+
+  const listedWorktrees = Effect.fnUntraced(function* (cwd: string) {
+    if (!runner.has("worktreeList")) return [];
+    const out = yield* json("worktreeList", VcsPluginWorktreeListOutput, cwd);
+    return out.worktrees.filter((worktree) => path.isAbsolute(worktree.path));
+  });
+  const listWorktreePaths = (cwd: string) =>
+    listedWorktrees(cwd).pipe(Effect.map((worktrees) => worktrees.map((entry) => entry.path)));
 
   const json = <S extends Parameters<PluginCommandRunner["runJson"]>[1]>(
     command: Parameters<PluginCommandRunner["runJson"]>[0],
@@ -225,6 +241,13 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
     status: (request) => status(request.cwd),
     listRefs: Effect.fn("ManifestVcsDriver.listRefs")(function* (request) {
       const query = request.query?.toLowerCase();
+      // Where each branch is checked out, when the plugin's worktree list says.
+      const checkedOut = new Map(
+        (yield* listedWorktrees(request.cwd).pipe(Effect.orElseSucceed(() => []))).flatMap(
+          (worktree) =>
+            worktree.refName === undefined ? [] : [[worktree.refName, worktree.path] as const],
+        ),
+      );
       const refs: VcsRef[] = (yield* listRefNames(request.cwd))
         .filter((ref) => {
           if (request.refKind === "local" && ref.isRemote) return false;
@@ -235,7 +258,7 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
           name: ref.name,
           current: ref.current ?? false,
           isDefault: ref.isDefault ?? false,
-          worktreePath: null,
+          worktreePath: checkedOut.get(ref.name) ?? null,
           ...(ref.isRemote !== undefined ? { isRemote: ref.isRemote } : {}),
           ...(ref.remoteName !== undefined ? { remoteName: ref.remoteName } : {}),
         }));
@@ -367,23 +390,30 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
         const root = yield* repositoryRoot(request.cwd).pipe(
           Effect.mapError(toCommandError("worktreeRemove", request.cwd)),
         );
-        // As for Git: a thread in a project subfolder names the whole checkout.
-        const target = yield* worktreeRootForProject(
-          fs,
-          path,
-          path.resolve(request.cwd, request.path),
-          request.cwd,
-          undefined,
-          manifest.detect.markers,
-        );
-        if (target === root)
-          return yield* new GitCommandError({
+        // As for Git: a path inside a checkout, such as a project subfolder, names the whole
+        // checkout. A folder already gone is passed as given.
+        const requested = path.resolve(request.cwd, request.path);
+        const target = (yield* detect(requested))?.root ?? requested;
+        const refuse = (detail: string) =>
+          new GitCommandError({
             vcs: kind,
             operation: `${kind}.worktreeRemove`,
             command: "worktreeRemove",
             cwd: request.cwd,
-            detail: "The repository itself is not a worktree.",
+            detail,
           });
+        const inside = (parent: string, child: string) => {
+          const relative = path.relative(parent, child);
+          return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+        };
+        // Never the repository T3 Code works from, nor a checkout that holds the caller.
+        if (target === root || inside(target, path.resolve(request.cwd)))
+          return yield* refuse("The repository itself is not a worktree.");
+        if (runner.has("worktreeList")) {
+          const listed = yield* listWorktreePaths(request.cwd);
+          if (!listed.some((entry) => path.resolve(entry) === target))
+            return yield* refuse(`${manifest.label} does not list ${target} as a worktree.`);
+        }
         yield* runner
           .run("worktreeRemove", {
             cwd: request.cwd,
@@ -393,11 +423,7 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
       }),
     }),
     listWorktrees: Effect.fn("ManifestVcsDriver.listWorktrees")(function* (request) {
-      if (!runner.has("worktreeList")) return [];
-      const out = yield* json("worktreeList", VcsPluginWorktreeListOutput, request.cwd);
-      return out.worktrees
-        .map((worktree) => worktree.path)
-        .filter((entry) => path.isAbsolute(entry));
+      return yield* listWorktreePaths(request.cwd);
     }),
   };
 

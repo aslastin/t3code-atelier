@@ -102,6 +102,11 @@ const readList = () => {
 
 switch (command) {
   case "check": {
+    // A test can hold the check until it writes "release-check" next to "hold-check".
+    const dir = process.env.T3_PLUGIN_DIR ?? "";
+    if (fs.existsSync(path.join(dir, "hold-check")))
+      while (!fs.existsSync(path.join(dir, "release-check")))
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
     const problemsFile = path.join(process.env.T3_PLUGIN_DIR ?? "", "problems.txt");
     const problems = fs.existsSync(problemsFile) ? [fs.readFileSync(problemsFile, "utf8").trim()] : [];
     out({ version: "1.2.3", problems });
@@ -154,7 +159,14 @@ switch (command) {
     break;
   }
   case "worktree-list":
-    out({ worktrees: readList().map((p) => ({ path: p })) });
+    out({
+      worktrees: readList().map((p) => {
+        const head = path.join(p, ".kite", "HEAD");
+        return fs.existsSync(head)
+          ? { path: p, refName: fs.readFileSync(head, "utf8").trim() }
+          : { path: p };
+      }),
+    });
     break;
   case "snapshot": {
     const dir = path.join(kite, "snapshots");

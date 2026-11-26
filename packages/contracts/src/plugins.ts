@@ -155,7 +155,13 @@ export const VcsPluginWorktreeCreateOutput = Schema.Struct({
 });
 
 export const VcsPluginWorktreeListOutput = Schema.Struct({
-  worktrees: Schema.Array(Schema.Struct({ path: PluginPath })),
+  worktrees: Schema.Array(
+    Schema.Struct({
+      path: PluginPath,
+      /** The ref checked out there, so its branch can name the worktree. */
+      refName: Schema.optionalKey(TrimmedNonEmptyString),
+    }),
+  ),
 });
 
 export const VcsPluginCheckpointCaptureOutput = Schema.Struct({
