@@ -817,7 +817,8 @@ export function NewTaskFlowProvider(
       return null;
     }
     const workspaceSelection = resolveWorkspaceSelection(draft.workspaceSelection);
-    const mode = workspaceSelection.mode;
+    // A saved or default worktree mode the repository's VCS cannot run sends as local, as shown.
+    const mode = offersWorktrees ? workspaceSelection.mode : "local";
     return {
       environmentId: selectedProject.environmentId,
       threadId: ThreadId.make(metadata.threadId),
