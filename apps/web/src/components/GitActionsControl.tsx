@@ -289,6 +289,7 @@ const COMMIT_DIALOG_TITLE = msg("Commit changes");
 const COMMIT_DIALOG_DESCRIPTION = msg(
   "Review and confirm your commit. Leave the message blank to auto-generate one.",
 );
+const COMMIT_DIALOG_DESCRIPTION_TYPED = msg("Review your commit and write its message.");
 
 function GitActionItemIcon({
   icon,
@@ -1828,7 +1829,13 @@ function CheckoutGitActionsControl({
         <DialogPopup>
           <DialogHeader>
             <DialogTitle>{messages(COMMIT_DIALOG_TITLE)}</DialogTitle>
-            <DialogDescription>{messages(COMMIT_DIALOG_DESCRIPTION)}</DialogDescription>
+            <DialogDescription>
+              {messages(
+                generatesCommitMessage
+                  ? COMMIT_DIALOG_DESCRIPTION
+                  : COMMIT_DIALOG_DESCRIPTION_TYPED,
+              )}
+            </DialogDescription>
           </DialogHeader>
           <DialogPanel>
             <div className="space-y-3 rounded-xl bg-zinc-25 p-3 text-sm ring-1 ring-black/5 dark:bg-white/[0.035] dark:ring-white/5">

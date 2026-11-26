@@ -2088,6 +2088,7 @@
   "4cc8b8150c559ddf": "{provider} não está autenticado. Abra Configurações -> Controle de versão e issues para ver as instruções de configuração.",
   "3724ff240986c6da": "Fazer commit das alterações",
   "a0c6333a5f373fb9": "Revise e confirme o commit. Deixe a mensagem em branco para gerá-la automaticamente.",
+  "2ac90bfc4c851e8b": "Revise seu commit e escreva a mensagem.",
   "441bfc4afe4b5760": "Provedor",
   "706084d25f85dd5a": "Repositório",
   "53e52c00d141ca90": "Resumo",

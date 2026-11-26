@@ -2088,6 +2088,7 @@
   "4cc8b8150c559ddf": "{provider} is not authenticated. Open Settings -> Source control & issues for setup guidance.",
   "3724ff240986c6da": "Commit changes",
   "a0c6333a5f373fb9": "Review and confirm your commit. Leave the message blank to auto-generate one.",
+  "2ac90bfc4c851e8b": "Review your commit and write its message.",
   "441bfc4afe4b5760": "Provider",
   "706084d25f85dd5a": "Repository",
   "53e52c00d141ca90": "Summary",
