@@ -1655,6 +1655,7 @@
   "f5729e3a9c756694": "No se pudo cambiar de ref.",
   "7ea8def86795f863": "No se pudo crear la ref y cambiar a ella.",
   "282c2a1c64ead62d": "{term, select, mr {Hacer checkout de la merge request} cr {Hacer checkout de la solicitud de cambios} other {Hacer checkout de la pull request}}",
+  "214867791642360d": "Rama de {vcs}: {branch}",
   "bc81dfd7ade60791": "Rama: {branch}",
   "459e639b9a89964f": [
     "Crear la ref \"",

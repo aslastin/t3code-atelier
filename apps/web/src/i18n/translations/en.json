@@ -1655,6 +1655,7 @@
   "f5729e3a9c756694": "Failed to switch ref.",
   "7ea8def86795f863": "Failed to create and switch ref.",
   "282c2a1c64ead62d": "Checkout {term, select, mr {merge request} cr {change request} other {pull request}}",
+  "214867791642360d": "{vcs} branch: {branch}",
   "bc81dfd7ade60791": "Branch: {branch}",
   "459e639b9a89964f": [
     "Create new ref \"",

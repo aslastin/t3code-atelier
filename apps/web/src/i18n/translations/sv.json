@@ -1655,6 +1655,7 @@
   "f5729e3a9c756694": "Det gick inte att byta ref.",
   "7ea8def86795f863": "Det gick inte att skapa och byta ref.",
   "282c2a1c64ead62d": "Checka ut {term, select, mr {merge request} cr {ändringsbegäran} other {pull request}}",
+  "214867791642360d": "{vcs}-gren: {branch}",
   "bc81dfd7ade60791": "Gren: {branch}",
   "459e639b9a89964f": [
     "Skapa ny ref ”",

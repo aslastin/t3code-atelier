@@ -1655,6 +1655,7 @@
   "f5729e3a9c756694": "切换引用失败。",
   "7ea8def86795f863": "创建并切换引用失败。",
   "282c2a1c64ead62d": "检出 {term, select, mr {MR} cr {change request} other {PR}}",
+  "214867791642360d": "{vcs} 分支：{branch}",
   "bc81dfd7ade60791": "分支：{branch}",
   "459e639b9a89964f": [
     "创建新引用“",

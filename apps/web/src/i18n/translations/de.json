@@ -1654,6 +1654,7 @@
   "f5729e3a9c756694": "Ref konnte nicht gewechselt werden.",
   "7ea8def86795f863": "Ref konnte nicht erstellt und gewechselt werden.",
   "282c2a1c64ead62d": "{term, select, mr {Merge Request auschecken} cr {Änderungsanfrage auschecken} other {Pull Request auschecken}}",
+  "214867791642360d": "{vcs}-Branch: {branch}",
   "bc81dfd7ade60791": "Branch: {branch}",
   "459e639b9a89964f": [
     "Neue Ref „",

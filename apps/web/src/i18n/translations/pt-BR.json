@@ -1655,6 +1655,7 @@
   "f5729e3a9c756694": "Falha ao trocar de ref.",
   "7ea8def86795f863": "Falha ao criar e trocar de ref.",
   "282c2a1c64ead62d": "Fazer checkout {term, select, mr {do merge request} cr {da solicitação de alteração} other {do pull request}}",
+  "214867791642360d": "Branch do {vcs}: {branch}",
   "bc81dfd7ade60791": "Branch: {branch}",
   "459e639b9a89964f": [
     "Criar nova ref \"",

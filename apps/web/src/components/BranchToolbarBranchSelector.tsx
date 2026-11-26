@@ -1,5 +1,6 @@
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import { ComposerContextLabel } from "./ComposerContextLabel";
+import { useVcsPlugin, VcsKindIcon } from "./VcsKindIcon";
 import { useRightPanelStore } from "../rightPanelStore";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
@@ -15,7 +16,6 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
-import { GitBranchIcon } from "lucide-react";
 import {
   useEffect,
   useEffectEvent,
@@ -265,6 +265,7 @@ export function BranchToolbarBranchSelector({
       ? null
       : vcsEnvironment.status({ environmentId, input: { cwd: activeProjectCwd } }),
   );
+  const vcsPlugin = useVcsPlugin(environmentId, branchStatusQuery.data?.capabilities?.kind);
   const activeCheckoutRoot = branchStatusQuery.data?.workingTree.rootPath;
   const activeProjectCheckoutRoot = projectStatusQuery.data?.workingTree.rootPath;
   const trimmedBranchQuery = branchQuery.trim();
@@ -890,13 +891,15 @@ export function BranchToolbarBranchSelector({
             className="min-w-0 max-w-full active:scale-100"
             disabled={isInitialBranchesLoadPending || isBranchActionPending}
             // NVDA browse mode re-reads a combobox when its attributes change, not when its text does.
-            aria-label={gt("Branch: {branch}", { branch: triggerLabel })}
+            aria-label={
+              vcsPlugin
+                ? gt("{vcs} branch: {branch}", { vcs: vcsPlugin.label, branch: triggerLabel })
+                : gt("Branch: {branch}", { branch: triggerLabel })
+            }
           >
-            <GitBranchIcon
-              className={cn(
-                "size-3 shrink-0",
-                displayMode === "panel" && THREAD_DETAILS_PANEL_ICON_CLASS,
-              )}
+            <VcsKindIcon
+              plugin={vcsPlugin}
+              {...(displayMode === "panel" ? { className: THREAD_DETAILS_PANEL_ICON_CLASS } : {})}
             />
             <ComposerContextLabel displayMode={displayMode}>
               <MiddleTruncate

@@ -1655,6 +1655,7 @@
   "f5729e3a9c756694": "Échec du changement de ref.",
   "7ea8def86795f863": "Échec de la création de la ref et du basculement.",
   "282c2a1c64ead62d": "Extraire la {term, select, mr {merge request} cr {demande de modification} other {pull request}}",
+  "214867791642360d": "Branche {vcs} : {branch}",
   "bc81dfd7ade60791": "Branche : {branch}",
   "459e639b9a89964f": [
     "Créer la ref « ",

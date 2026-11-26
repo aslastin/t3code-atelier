@@ -7,6 +7,7 @@ import type { AppBarMenu } from "../../components/ui/AppBar.types";
 import {
   AuthSourceControlWriteScope,
   EnvironmentId,
+  GIT_VCS_KIND,
   type GitRunStackedActionResult,
   type ProjectScript,
   ThreadId,
@@ -23,6 +24,8 @@ import { changeRequestTermKind } from "../../lib/changeRequestTerm";
 
 import { m, type MessageResolver } from "../../i18n/messages";
 import { useEnvironmentScope } from "../../state/session";
+import { pluginEnvironment } from "../../state/plugins";
+import { useEnvironmentQuery } from "../../state/query";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import {
   basename,
@@ -141,6 +144,17 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
   const { gitStatus, gitOperationLabel, onPull, onRunAction } = props;
 
   const currentBranchLabel = gitStatus?.refName ?? props.currentBranch ?? gt("Detached HEAD");
+  // Atelier fork: name the VCS plugin that owns the repository; Git stays unnamed.
+  const vcsKind = gitStatus?.capabilities?.kind;
+  const plugins = useEnvironmentQuery(
+    environmentId && vcsKind !== undefined && vcsKind !== GIT_VCS_KIND
+      ? pluginEnvironment.list({
+          environmentId: EnvironmentId.make(String(environmentId)),
+          input: {},
+        })
+      : null,
+  );
+  const vcsLabel = plugins.data?.plugins.find((plugin) => plugin.id === vcsKind)?.label ?? null;
   const busy = gitOperationLabel !== null;
   const isRepo = gitStatus?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
@@ -293,6 +307,7 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
 
   return {
     currentBranchLabel,
+    vcsLabel,
     isRepo,
     openGitInspector,
     openReview,
@@ -394,7 +409,9 @@ export function useThreadGitMenuDefinition(props: ThreadGitMenuProps): AppBarMen
               title: compactMenuBranchLabel(model.currentBranchLabel),
               icon: "point.topleft.down.curvedto.point.bottomright.up",
               disabled: true,
-              subtitle: compactMenuStatus(props.gitStatus, messages),
+              subtitle: model.vcsLabel
+                ? `${model.vcsLabel} · ${compactMenuStatus(props.gitStatus, messages)}`
+                : compactMenuStatus(props.gitStatus, messages),
               onPress: () => {},
             },
             {
