@@ -182,7 +182,7 @@ export function writeFakeVcsPlugin(directory: string, options: FakeVcsPluginOpti
   NodeFS.writeFileSync(cli, KITE_CLI, { mode: 0o755 });
   NodeFS.writeFileSync(
     NodePath.join(directory, "icon.svg"),
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#3b82f6"/></svg>',
   );
   if (options.problem)
     NodeFS.writeFileSync(NodePath.join(directory, "problems.txt"), options.problem);

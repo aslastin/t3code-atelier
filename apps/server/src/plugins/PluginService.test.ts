@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -38,7 +39,7 @@ const setup = Effect.fn("test.setup")(function* (options: FakeVcsPluginOptions =
   const context = yield* Layer.build(
     PluginService.layer.pipe(
       Layer.provide(VcsProcess.layer),
-      Layer.provide(SqlitePersistence.layerMemory),
+      Layer.provideMerge(SqlitePersistence.layerMemory),
       Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
       Layer.provide(ServerConfig.layerTest(home, home)),
     ),
@@ -47,7 +48,15 @@ const setup = Effect.fn("test.setup")(function* (options: FakeVcsPluginOptions =
   const drivers = Context.get(context, VcsPluginDrivers);
   const imported = yield* plugins.importFolder(source);
   const driver = (yield* drivers.current).get(KITE);
-  return { plugins, imported, driver, repository, home, source, path };
+  // The strategy each checkpoint was taken with, from the fork's table.
+  const strategies = Effect.gen(function* () {
+    const sql = Context.get(context, SqlClient.SqlClient);
+    const rows = yield* sql<{ readonly strategy: string }>`
+      SELECT strategy FROM atelier_vcs_plugin_checkpoints ORDER BY checkpoint_ref
+    `;
+    return rows.map((row) => row.strategy);
+  });
+  return { plugins, imported, driver, repository, home, source, path, strategies };
 });
 
 const layer = NodeServices.layer;
@@ -171,11 +180,24 @@ describe("ManifestVcsDriver", () => {
 
   it.live("never uses a strategy the plugin does not list", () =>
     Effect.gen(function* () {
-      const { driver, repository } = yield* setup({ checkpoints: ["changed-files"] });
+      // No `checkpoints` field: only changed-files, never native and never full.
+      const { driver, repository, strategies } = yield* setup();
       yield* driver!.checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
       const calls = fakeCalls(repository);
       assert.isFalse(calls.some((call) => call.startsWith("snapshot")));
       assert.isTrue(calls.includes("changed"));
+      assert.deepStrictEqual(yield* strategies, ["changed-files"]);
+
+      // A failing listed strategy does not fall back to full either.
+      const nativeOnly = yield* setup({ checkpoints: ["native"] });
+      NodeFS.writeFileSync(`${nativeOnly.repository}/.kite/broken-snapshots`, "");
+      yield* nativeOnly
+        .driver!.checkpoints.captureCheckpoint({
+          cwd: nativeOnly.repository,
+          checkpointRef: ref("0"),
+        })
+        .pipe(Effect.flip);
+      assert.deepStrictEqual(yield* nativeOnly.strategies, []);
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 

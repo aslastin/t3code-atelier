@@ -59,7 +59,9 @@ one closer to the project folder wins.
 - Commands are argument lists. No shell runs them. The first item is either `./` and a file in
   the plugin folder, or a bare name looked up on the server's `PATH`. Absolute paths are refused,
   and so is a `./` path that a symbolic link points outside the folder. The icon must also be an
-  `.svg` file in the folder.
+  `.svg` file in the folder, at most 64 KB. It is shown as an image, so it does not take the
+  theme's text color: give shapes an explicit `fill` or `stroke` and check the icon on both light
+  and dark backgrounds.
 - A placeholder such as `{path}` is replaced inside an argument and never splits it into more
   arguments. Each command may use only its own placeholders, listed below, and `{repositoryRoot}`.
 - `detect.markers` are paths inside the repository's own metadata folder. Pick a specific one:
