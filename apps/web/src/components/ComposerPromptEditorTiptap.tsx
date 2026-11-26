@@ -154,6 +154,9 @@ import {
 } from "./composerAttachmentInsertion";
 import type { ComposerDraftContextRecords } from "./composerContextPresentation";
 
+/** The key name the editor reports for the line's back arrow, `←` or, right to left, `→`. */
+export const COMPOSER_MENU_BACK_KEY = "ComposerMenuBack";
+
 export interface ComposerPromptEditorHandle {
   focus: () => void;
   focusAt: (cursor: number) => void;
@@ -1244,14 +1247,17 @@ function ComposerPromptEditorTiptapInner(
           },
         },
         handleKeyDown: (view, event) => {
-          // A menu step, like the `@` menu's effort levels, takes Left before caret moves.
-          if (event.key === "ArrowLeft" && readCallbacks().onCommandKeyDown?.(event.key, event)) {
+          // In a right-to-left line the start is on the right.
+          const backArrow = caretLineDirection(view.state) === "rtl" ? "ArrowRight" : "ArrowLeft";
+          // A menu step, like the `@` menu's effort levels, takes Back before the caret moves.
+          if (
+            event.key === backArrow &&
+            readCallbacks().onCommandKeyDown?.(COMPOSER_MENU_BACK_KEY, event)
+          ) {
             event.preventDefault();
             event.stopPropagation();
             return true;
           }
-          // In a right-to-left line the start is on the right.
-          const backArrow = caretLineDirection(view.state) === "rtl" ? "ArrowRight" : "ArrowLeft";
           const boundary = event.metaKey
             ? event.key === "ArrowLeft" || event.key === "ArrowRight"
               ? "lineboundary"

@@ -2,7 +2,7 @@ import type { ProviderOptionDescriptor, SelectProviderOptionDescriptor } from "@
 import { DEFAULT_VARIANT_CHOICE_ID } from "@t3tools/shared/model";
 
 import { rankModelPickerSearch, type ModelPickerSearchableModel } from "./modelSearch.ts";
-import { REASONING_EFFORT_OPTION_IDS } from "./state/threadExecution.ts";
+import { isReasoningSelect } from "./state/threadExecution.ts";
 
 const COMPOSER_MODEL_MENTION_LIMIT = 8;
 
@@ -86,22 +86,11 @@ function encodeMentionPart(part: string, keep = ""): string {
 const WORD_CHAR = /^[\p{L}\p{N}]$/u;
 const percentEncode = (char: string) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`;
 
-// Pi names its reasoning select `thinking`; Claude's `thinking` is a boolean and never matches.
-const EFFORT_SELECT_IDS = [...REASONING_EFFORT_OPTION_IDS, "thinking"];
-
 /** The model's reasoning effort select, which a mention may set, or null when it has none. */
 export function modelMentionEffortDescriptor(
   descriptors: ReadonlyArray<ProviderOptionDescriptor> | undefined,
 ): SelectProviderOptionDescriptor | null {
-  const selects = (descriptors ?? []).filter(
-    (descriptor): descriptor is SelectProviderOptionDescriptor => descriptor.type === "select",
-  );
-  const descriptor =
-    selects.find((candidate) => candidate.role === "reasoning") ??
-    EFFORT_SELECT_IDS.map((id) => selects.find((candidate) => candidate.id === id)).find(
-      (candidate) => candidate !== undefined,
-    );
-  return descriptor ?? null;
+  return (descriptors ?? []).find(isReasoningSelect) ?? null;
 }
 
 // Choices that send no effort, as the menu's own Default does. Claude spells it `default`; for

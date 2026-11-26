@@ -1,6 +1,7 @@
 import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import {
+  modelMentionEffortChoices,
   modelMentionEffortDescriptor,
   type ComposerModelMentionEffort,
 } from "@t3tools/client-runtime/composer-model-mentions";
@@ -12,6 +13,8 @@ import { brandProviderInstanceEntries, deriveProviderInstanceEntries } from "~/p
 import { serverEnvironment } from "~/state/server";
 import { contextChipAccentWithHueOf } from "~/themePalette";
 import { ContextChipPopover } from "../contextChipParts";
+import { Button } from "../ui/button";
+import { PopoverClose } from "../ui/popover";
 import { ProviderInstanceIcon, providerLogoColor } from "./ProviderInstanceIcon";
 import { getDisplayModelName } from "./providerIconUtils";
 
@@ -23,6 +26,8 @@ interface ModelMentionPresentation {
   readonly acpRegistryAgentId: string | undefined;
   readonly acpRegistryIconUrl: string | undefined;
   readonly effortLabel: string | null;
+  /** Whether the model lists levels a mention could set. */
+  readonly effortConfigurable: boolean;
 }
 
 function presentationsEqual(left: ModelMentionPresentation, right: ModelMentionPresentation) {
@@ -33,7 +38,8 @@ function presentationsEqual(left: ModelMentionPresentation, right: ModelMentionP
     left.providerDisplayName === right.providerDisplayName &&
     left.acpRegistryAgentId === right.acpRegistryAgentId &&
     left.acpRegistryIconUrl === right.acpRegistryIconUrl &&
-    left.effortLabel === right.effortLabel
+    left.effortLabel === right.effortLabel &&
+    left.effortConfigurable === right.effortConfigurable
   );
 }
 
@@ -58,9 +64,7 @@ const modelMentionPresentationAtom = Atom.family((key: string) =>
       config.settings,
     );
     if (!entry) return null;
-    const effortDescriptor = effortValue
-      ? modelMentionEffortDescriptor(option.capabilities?.optionDescriptors)
-      : null;
+    const effortDescriptor = modelMentionEffortDescriptor(option.capabilities?.optionDescriptors);
     const next: ModelMentionPresentation = {
       label: getDisplayModelName(option),
       providerLabel: option.subProvider ?? entry.displayName,
@@ -74,6 +78,9 @@ const modelMentionPresentationAtom = Atom.family((key: string) =>
             ? effortDescriptor.options.find((choice) => choice.id === effortValue)?.label
             : undefined) ?? effortValue)
         : null,
+      effortConfigurable:
+        effortDescriptor !== null &&
+        modelMentionEffortChoices(effortDescriptor, entry.driverKind).length > 0,
     };
     const previous = Option.getOrNull(get.self<ModelMentionPresentation | null>());
     return previous && presentationsEqual(previous, next) ? previous : next;
@@ -131,6 +138,9 @@ export function ModelMentionChip(props: {
   );
   if (!presentation) return props.source;
   const accent = modelMentionAccent(presentation.driverKind);
+  const { effortLabel } = presentation;
+  const canChooseEffort =
+    !effortLabel && props.onEditEffort !== undefined && presentation.effortConfigurable;
   const chip = (
     <ContextChipPopover
       kind="neutral"
@@ -148,15 +158,24 @@ export function ModelMentionChip(props: {
       label={presentation.label}
       accessibleLabel={gt("Model {label}", { label: presentation.label })}
       copyMarkdown={props.source}
+      // Choosing an effort moves focus into the editor, whose keys drive the menu.
+      finalFocus={canChooseEffort ? false : undefined}
     >
       <div className="space-y-1 p-2 text-sm">
         <p className="font-medium">{presentation.label}</p>
         <p className="text-muted-foreground">{presentation.providerLabel}</p>
         <p className="font-mono text-xs text-muted-foreground">{props.source}</p>
+        {canChooseEffort ? (
+          <PopoverClose
+            render={<Button size="xs" variant="outline" />}
+            onClick={props.onEditEffort}
+          >
+            {gt("Choose reasoning effort")}
+          </PopoverClose>
+        ) : null}
       </div>
     </ContextChipPopover>
   );
-  const { effortLabel } = presentation;
   if (!effortLabel) return chip;
   return (
     <span className="inline-flex max-w-full items-baseline gap-1" data-markdown-copy={props.source}>

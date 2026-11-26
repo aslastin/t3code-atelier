@@ -241,6 +241,27 @@ export const REASONING_EFFORT_OPTION_IDS: ReadonlyArray<string> = [
   "thought_level",
 ];
 
+// Pi names its reasoning select `thinking`; Claude's `thinking` is a boolean, not a select.
+const REASONING_CONTROL_IDS: ReadonlySet<string> = new Set([
+  ...REASONING_EFFORT_OPTION_IDS,
+  "thinking",
+]);
+
+/** The model's reasoning control: a known effort id, or a select its agent marked as reasoning. */
+export function isReasoningControl(descriptor: ProviderOptionDescriptor): boolean {
+  return (
+    (descriptor.type === "select" && descriptor.role === "reasoning") ||
+    REASONING_CONTROL_IDS.has(descriptor.id)
+  );
+}
+
+/** One rule for every surface: the traits picker, the thread's effort label, and model mentions. */
+export function isReasoningSelect(
+  descriptor: ProviderOptionDescriptor,
+): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> {
+  return descriptor.type === "select" && isReasoningControl(descriptor);
+}
+
 export function formatModelSelectionEffort(
   selection: ModelSelection,
   models: ReadonlyArray<ServerProviderModel> = [],
@@ -250,19 +271,7 @@ export function formatModelSelectionEffort(
   if (!caps) return null;
   const options = withLegacyUltracodeEffort(caps.optionDescriptors, selection.options);
   const current = options ? { ...selection, options } : selection;
-  const selectDescriptors = (caps.optionDescriptors ?? []).filter(
-    (candidate) => candidate.type === "select",
-  );
-  const reasoningDescriptors = [
-    ...selectDescriptors.filter((candidate) => candidate.role === "reasoning"),
-    ...REASONING_EFFORT_OPTION_IDS.flatMap((id) => {
-      const descriptor = selectDescriptors.find(
-        (candidate) => candidate.id === id && candidate.role !== "reasoning",
-      );
-      return descriptor ? [descriptor] : [];
-    }),
-  ];
-  for (const descriptor of reasoningDescriptors) {
+  for (const descriptor of (caps.optionDescriptors ?? []).filter(isReasoningSelect)) {
     const value = getProviderOptionStatedValue(descriptor.id, current, reportedSelection);
     if (value === undefined && descriptor.id !== "variant") continue;
     if (typeof value === "boolean") continue;

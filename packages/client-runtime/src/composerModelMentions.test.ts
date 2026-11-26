@@ -180,10 +180,10 @@ describe("modelMentionEffortDescriptor", () => {
     ...(role ? { role } : {}),
   });
 
-  it("prefers the select an agent marks as reasoning over a known effort id", () => {
+  it("takes the model's first reasoning select, as the traits picker does", () => {
     expect(
       modelMentionEffortDescriptor([select("effort"), select("thought_level", "reasoning")])?.id,
-    ).toBe("thought_level");
+    ).toBe("effort");
     expect(modelMentionEffortDescriptor([select("speed"), select("reasoningEffort")])?.id).toBe(
       "reasoningEffort",
     );

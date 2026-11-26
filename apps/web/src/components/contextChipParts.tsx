@@ -70,6 +70,8 @@ export function ContextChipPopover(props: {
   accessibleLabel: string;
   /** Overrides the kind's accent color. */
   accent?: string | undefined;
+  /** Where focus goes on close; false leaves it where an action inside the popover put it. */
+  finalFocus?: ComponentProps<typeof PopoverPopup>["finalFocus"];
   children: ReactNode;
 }) {
   const gt = useGT();
@@ -93,7 +95,7 @@ export function ContextChipPopover(props: {
         {props.icon}
         <ContextChipLabel>{props.label}</ContextChipLabel>
       </PopoverTrigger>
-      <PopoverPopup side="top" width="lg" padding="compact">
+      <PopoverPopup side="top" width="lg" padding="compact" finalFocus={props.finalFocus}>
         <PopoverTitle className="sr-only">{props.accessibleLabel}</PopoverTitle>
         {props.children}
       </PopoverPopup>
