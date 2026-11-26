@@ -258,7 +258,10 @@ describe("ManifestVcsDriver", () => {
         .captureCheckpoint({ cwd: repository, checkpointRef: ref("0") })
         .pipe(Effect.flip);
       assert.strictEqual(error._tag, "VcsUnsupportedOperationError");
-      assert.include(error._tag === "VcsUnsupportedOperationError" ? error.detail : "", "native:");
+      const detail = error._tag === "VcsUnsupportedOperationError" ? error.detail : "";
+      // The turn shows this note; paths and process details stay in the server log.
+      assert.include(detail, "native: checkpointDiff exited with code 1.");
+      assert.notInclude(detail, repository);
       assert.isFalse(
         yield* driver!.checkpoints.hasCheckpointRef({ cwd: repository, checkpointRef: ref("0") }),
       );
