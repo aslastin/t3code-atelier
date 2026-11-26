@@ -144,7 +144,7 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
   const { gitStatus, gitOperationLabel, onPull, onRunAction } = props;
 
   const currentBranchLabel = gitStatus?.refName ?? props.currentBranch ?? gt("Detached HEAD");
-  // Atelier fork: name the VCS plugin that owns the repository; Git stays unnamed.
+  // Atelier fork: name the VCS that owns the repository, Git or a plugin.
   const vcsKind = gitStatus?.capabilities?.kind;
   const plugins = useEnvironmentQuery(
     environmentId && vcsKind !== undefined && vcsKind !== GIT_VCS_KIND
@@ -154,7 +154,9 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
         })
       : null,
   );
-  const vcsLabel = plugins.data?.plugins.find((plugin) => plugin.id === vcsKind)?.label ?? null;
+  const vcsLabel =
+    plugins.data?.plugins.find((plugin) => plugin.id === vcsKind)?.label ??
+    (vcsKind === GIT_VCS_KIND ? "Git" : null);
   const busy = gitOperationLabel !== null;
   const isRepo = gitStatus?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;

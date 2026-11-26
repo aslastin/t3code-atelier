@@ -12,6 +12,7 @@ import {
   AuthSourceControlWriteScope,
   type ContextMenuItem,
   type EnvironmentId,
+  GIT_VCS_KIND,
   type VcsRef,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -265,7 +266,9 @@ export function BranchToolbarBranchSelector({
       ? null
       : vcsEnvironment.status({ environmentId, input: { cwd: activeProjectCwd } }),
   );
-  const vcsPlugin = useVcsPlugin(environmentId, branchStatusQuery.data?.capabilities?.kind);
+  const vcsKind = branchStatusQuery.data?.capabilities?.kind;
+  const vcsPlugin = useVcsPlugin(environmentId, vcsKind);
+  const vcsLabel = vcsPlugin?.label ?? (vcsKind === GIT_VCS_KIND ? "Git" : null);
   const activeCheckoutRoot = branchStatusQuery.data?.workingTree.rootPath;
   const activeProjectCheckoutRoot = projectStatusQuery.data?.workingTree.rootPath;
   const trimmedBranchQuery = branchQuery.trim();
@@ -892,8 +895,8 @@ export function BranchToolbarBranchSelector({
             disabled={isInitialBranchesLoadPending || isBranchActionPending}
             // NVDA browse mode re-reads a combobox when its attributes change, not when its text does.
             aria-label={
-              vcsPlugin
-                ? gt("{vcs} branch: {branch}", { vcs: vcsPlugin.label, branch: triggerLabel })
+              vcsLabel
+                ? gt("{vcs} branch: {branch}", { vcs: vcsLabel, branch: triggerLabel })
                 : gt("Branch: {branch}", { branch: triggerLabel })
             }
           >
