@@ -239,6 +239,23 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           { index, literal: true, stdin: `${paths.join("\0")}\0` },
         ).pipe(Effect.asVoid);
 
+  const unstagePaths = (location: Location, index: string, paths: ReadonlyArray<string>) =>
+    paths.length === 0
+      ? Effect.void
+      : git(
+          location,
+          [
+            "rm",
+            "--cached",
+            "-r",
+            "-q",
+            "--ignore-unmatch",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+          ],
+          { index, literal: true, stdin: `${paths.join("\0")}\0` },
+        ).pipe(Effect.asVoid);
+
   const commitIndex = Effect.fn("pluginCheckpoints.commitIndex")(function* (
     location: Location,
     index: string,
@@ -376,7 +393,15 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       location: Location,
       cwd: string,
       checkpointRef: CheckpointRef,
+      excludes: ReadonlyArray<string>,
     ) {
+      // The plugin snapshots and restores the whole folder; a nested scope needs a strategy that
+      // can leave it out.
+      if (excludes.length > 0)
+        return yield* unsupported(
+          "captureCheckpoint",
+          "A native snapshot cannot leave out a nested folder with its own checkpoints.",
+        );
       const { revision } = yield* runner.runJson(
         "checkpointCapture",
         VcsPluginCheckpointCaptureOutput,
@@ -414,7 +439,11 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           location,
           index,
           files.filter((file) => file.status !== "deleted").map((file) => file.path),
-        ).pipe(Effect.andThen(commitIndex(location, index))),
+        ).pipe(
+          // A listed folder can hold a nested scope; its files stay out.
+          Effect.andThen(unstagePaths(location, index, excludes)),
+          Effect.andThen(commitIndex(location, index)),
+        ),
       );
       yield* git(location, ["update-ref", checkpointRef, commit]);
       return {
@@ -453,7 +482,9 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         "--all",
         "--",
         location.scope === "" ? ":(top)" : `:(top,literal)${location.scope}`,
-        ...[...context.metadataFolders, ...excludes].map((exclude) => `:(top,exclude)${exclude}`),
+        ...[...context.metadataFolders, ...excludes].map(
+          (exclude) => `:(top,literal,exclude)${exclude}`,
+        ),
       ],
       { index },
     ).pipe(Effect.asVoid);
@@ -569,8 +600,12 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           unsupported("diffCheckpoints", `${runner.label} could not read one of these snapshots.`),
         ),
       );
-      const filtered = input.filePaths ? filterPatch(patch, new Set(input.filePaths)) : patch;
-      return input.format === "numstat" ? patchToNumstat(filtered) : filtered;
+      const excludes = repositoryExcludes(location, input.excludePaths);
+      const kept = excludePatch(
+        input.filePaths ? filterPatch(patch, new Set(input.filePaths)) : patch,
+        excludes,
+      );
+      return input.format === "numstat" ? patchToNumstat(kept) : kept;
     }
     let fromTree = from.revision;
     let toTree = to.revision;
@@ -596,11 +631,12 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
         fromTree,
         toTree,
-        ...(input.filePaths
-          ? ["--", ...input.filePaths.map((file) => `:(top,literal)${file}`)]
-          : []),
+        ...diffPathspecs(input.filePaths ?? [], repositoryExcludes(location, input.excludePaths)),
       ],
       { maxOutputBytes: input.maxOutputBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES, truncate: true },
+    ).pipe(
+      // Said in the turn's note rather than shown as a turn that changed nothing.
+      Effect.catch(() => unsupported("diffCheckpoints", "These snapshots could not be compared.")),
     );
   });
 
@@ -661,6 +697,12 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     if (target === null) return false;
     const excludes = repositoryExcludes(location, input.excludePaths);
     if (target.strategy === "native") {
+      // The plugin restores the whole folder, nested scopes included.
+      if (excludes.length > 0)
+        return yield* unsupported(
+          "restoreCheckpoint",
+          "A native snapshot cannot be restored around a nested folder with its own checkpoints.",
+        );
       yield* runner.run("checkpointRestore", {
         cwd: input.cwd,
         values: { repositoryRoot: location.root, revision: target.revision },
@@ -705,7 +747,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     const targetFiles = (target.files ?? []).filter((file) => kept(file.path));
     const targetPaths = new Set(targetFiles.map((file) => file.path));
     for (const file of targetFiles) {
-      if (file.status === "deleted") yield* removePath(location, file.path);
+      if (file.status === "deleted") yield* removeKeeping(location, file.path, excludes);
     }
     for (const file of current.files) {
       if (targetPaths.has(file.path)) {
@@ -739,14 +781,22 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       yield* fs.makeDirectory(path.dirname(destination), { recursive: true }).pipe(
         Effect.andThen(fs.writeFile(destination, bytes)),
         Effect.andThen(
-          Option.isSome(previous) && !isLink && previous.value.type === "File"
-            ? fs.chmod(destination, previous.value.mode)
-            : // A file gone from disk keeps the mode its VCS recorded.
-              file.executable === true
-              ? fs
-                  .stat(destination)
-                  .pipe(Effect.flatMap((info) => fs.chmod(destination, info.mode | 0o111)))
-              : Effect.void,
+          fs.stat(destination).pipe(
+            Effect.flatMap((info) => {
+              // The mode the VCS recorded wins; without one, the file keeps the mode it had.
+              const kept =
+                Option.isSome(previous) && !isLink && previous.value.type === "File"
+                  ? previous.value.mode
+                  : info.mode;
+              const mode =
+                file.executable === true
+                  ? kept | 0o111
+                  : file.executable === false
+                    ? kept & ~0o111
+                    : kept;
+              return mode === info.mode ? Effect.void : fs.chmod(destination, mode);
+            }),
+          ),
         ),
         Effect.mapError(storageError("pluginCheckpoints.restore", location.root)),
       );
@@ -799,14 +849,30 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         Effect.as(true),
         Effect.orElseSucceed(() => false),
       );
-    const stored = yield* git(location, ["cat-file", "-e", `${record.revision}^{commit}`]).pipe(
+    // Every object the snapshot needs, not only its commit.
+    const stored = yield* git(location, [
+      "rev-list",
+      "--objects",
+      "--missing=error",
+      record.revision,
+    ]).pipe(
       Effect.as(true),
       Effect.orElseSucceed(() => false),
     );
     if (!stored || record.strategy === "full") return stored;
-    // Changed-files files restore only onto the base revision they were taken from.
+    // Changed-files files restore only onto the base revision they were taken from, and the
+    // paths left at their base must still read back from the plugin.
     const current = yield* changedFiles(location, input.cwd, []).pipe(Effect.option);
-    return Option.isSome(current) && current.value.revision === record.baseRevision;
+    if (Option.isNone(current) || current.value.revision !== record.baseRevision) return false;
+    const recorded = new Set((record.files ?? []).map((file) => file.path));
+    for (const file of current.value.files) {
+      if (recorded.has(file.path) || file.status === "added") continue;
+      const bytes = yield* readBaseFile(location, input.cwd, record.baseRevision!, file.path).pipe(
+        Effect.orElseSucceed(() => null),
+      );
+      if (bytes === null) return false;
+    }
+    return true;
   });
 
   const deleteCheckpointRefs: VcsCheckpointOps["deleteCheckpointRefs"] = Effect.fn(
@@ -888,6 +954,28 @@ function diffHeaderPaths(section: string): readonly [string, string] | null {
   const from = header[1] !== undefined ? unquoteGitPath(header[1]) : header[2]!;
   const to = header[3] !== undefined ? unquoteGitPath(header[3]) : header[4]!;
   return [from, to];
+}
+
+/** Git pathspecs for a diff limited to `files` and leaving out `excludes`, all literal. */
+function diffPathspecs(files: ReadonlyArray<string>, excludes: ReadonlyArray<string>) {
+  if (files.length === 0 && excludes.length === 0) return [];
+  return [
+    "--",
+    ...(files.length === 0 ? [":(top)"] : files.map((file) => `:(top,literal)${file}`)),
+    ...excludes.map((exclude) => `:(top,literal,exclude)${exclude}`),
+  ];
+}
+
+/** Drops the sections of a Git patch inside an excluded folder. */
+function excludePatch(patch: string, excludes: ReadonlyArray<string>): string {
+  if (excludes.length === 0) return patch;
+  return patch
+    .split(/(?=^diff --git )/m)
+    .filter((section) => {
+      const header = diffHeaderPaths(section);
+      return header === null || header.some((file) => inScope(file, "", excludes));
+    })
+    .join("");
 }
 
 /** Keeps the sections of a Git patch whose old or new path is in `paths`. */

@@ -357,6 +357,16 @@ describe("ManifestVcsDriver", () => {
       );
       assert.strictEqual(NodeFS.readFileSync(`${repository}/a.txt`, "utf8"), "one\n");
 
+      // The plugin snapshots the whole folder, so a nested scope cannot be left out.
+      const nested = yield* checkpoints
+        .captureCheckpoint({ cwd: repository, checkpointRef: ref("n"), excludePaths: ["sub"] })
+        .pipe(Effect.flip);
+      assert.strictEqual(nested._tag, "VcsUnsupportedOperationError");
+      const aroundNested = yield* checkpoints
+        .restoreCheckpoint({ cwd: repository, checkpointRef: ref("0"), excludePaths: ["sub"] })
+        .pipe(Effect.flip);
+      assert.strictEqual(aroundNested._tag, "VcsUnsupportedOperationError");
+
       // A snapshot the plugin can no longer read still exists, so a turn start keeps its ref,
       // but it cannot be restored, and its diff says why instead of showing nothing.
       NodeFS.rmSync(`${repository}/.kite/snapshots`, { recursive: true });
@@ -532,6 +542,9 @@ describe("ManifestVcsDriver", () => {
       // A modified file existed at its base: a failed read stops the restore, nothing is deleted.
       NodeFS.writeFileSync(`${repository}/a.txt`, "edited\n");
       NodeFS.writeFileSync(`${repository}/.kite/broken-show`, "");
+      assert.isFalse(
+        yield* checkpoints.verifyRestorable!({ cwd: repository, checkpointRef: ref("0") }),
+      );
       yield* checkpoints
         .restoreCheckpoint({ cwd: repository, checkpointRef: ref("0") })
         .pipe(Effect.flip);
@@ -606,6 +619,31 @@ describe("ManifestVcsDriver", () => {
       NodeFS.rmSync(`${repository}/run.sh`);
       yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("3") });
       assert.notStrictEqual(NodeFS.statSync(`${repository}/run.sh`).mode & 0o111, 0);
+      // A modified file returns to the mode its VCS recorded, not the one it has now.
+      NodeFS.writeFileSync(`${repository}/run.sh`, "#!/bin/sh\necho changed\n");
+      NodeFS.chmodSync(`${repository}/run.sh`, 0o644);
+      yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("3") });
+      assert.notStrictEqual(NodeFS.statSync(`${repository}/run.sh`).mode & 0o111, 0);
+
+      // A listed new folder holding a nested scope is captured without that scope's files.
+      NodeFS.mkdirSync(`${repository}/made/child`, { recursive: true });
+      NodeFS.writeFileSync(`${repository}/made/own.txt`, "own\n");
+      NodeFS.writeFileSync(`${repository}/made/child/theirs.txt`, "theirs\n");
+      yield* checkpoints.captureCheckpoint({
+        cwd: repository,
+        checkpointRef: ref("4"),
+        excludePaths: ["made/child"],
+      });
+      const madePatch = yield* checkpoints.diffCheckpoints({
+        cwd: repository,
+        fromCheckpointRef: ref("3"),
+        toCheckpointRef: ref("4"),
+        ignoreWhitespace: false,
+        excludePaths: ["made/child"],
+      });
+      assert.include(madePatch, "made/own.txt");
+      assert.notInclude(madePatch, "theirs.txt");
+      NodeFS.rmSync(`${repository}/made`, { recursive: true });
 
       // Files of a moved base cannot be restored, and a rollback learns that up front.
       NodeFS.writeFileSync(`${repository}/.kite/revision`, "base-2");
@@ -647,6 +685,28 @@ describe("ManifestVcsDriver", () => {
       yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("0") });
       assert.strictEqual(NodeFS.readFileSync(`${repository}/a.txt`, "utf8"), "one\n");
       assert.isFalse(NodeFS.existsSync(`${repository}/new.txt`));
+
+      // Excluded names are literal: "[ab]" is not a pattern that also matches "a".
+      NodeFS.mkdirSync(`${repository}/[ab]`);
+      NodeFS.mkdirSync(`${repository}/a`);
+      NodeFS.writeFileSync(`${repository}/[ab]/x.txt`, "x\n");
+      NodeFS.writeFileSync(`${repository}/a/y.txt`, "y\n");
+      yield* checkpoints.captureCheckpoint({
+        cwd: repository,
+        checkpointRef: ref("2"),
+        excludePaths: ["[ab]"],
+      });
+      const literal = yield* checkpoints.diffCheckpoints({
+        cwd: repository,
+        fromCheckpointRef: ref("0"),
+        toCheckpointRef: ref("2"),
+        ignoreWhitespace: false,
+        excludePaths: ["[ab]"],
+      });
+      assert.include(literal, "a/y.txt");
+      assert.notInclude(literal, "[ab]/x.txt");
+      NodeFS.rmSync(`${repository}/[ab]`, { recursive: true });
+      NodeFS.rmSync(`${repository}/a`, { recursive: true });
 
       // A folder that has its own checkpoints now keeps its files, though this snapshot has them.
       NodeFS.writeFileSync(`${repository}/sub/b.txt`, "changed\n");
