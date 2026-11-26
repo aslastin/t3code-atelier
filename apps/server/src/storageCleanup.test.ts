@@ -339,6 +339,8 @@ const cleanupFixture = (
     worktreeOnDelete: true,
   },
   sqlOverride?: SqlClient.SqlClient,
+  /** A Kite plugin worktree, read and removed through the plugin instead of Git. */
+  plugin?: { readonly recreates: boolean },
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -357,6 +359,12 @@ const cleanupFixture = (
     yield* fs.makeDirectory(config.worktreesDir, { recursive: true });
     const worktree = `${config.worktreesDir}/feature`;
     yield* command(repo, ["worktree", "add", "-b", "feature", worktree]);
+    const pluginWorktree = `${config.worktreesDir}/kite-feature`;
+    let pluginStatus = { refName: "feature", files: [] as string[] };
+    if (plugin) {
+      yield* fs.makeDirectory(`${pluginWorktree}/.kite`, { recursive: true });
+      yield* fs.writeFileString(`${pluginWorktree}/.kite/HEAD`, "feature\n");
+    }
     let settings: import("@t3tools/contracts").ServerSettings = {
       ...DEFAULT_SERVER_SETTINGS,
       storageCleanup,
@@ -475,11 +483,26 @@ const cleanupFixture = (
           command(cwd, ["branch", "--show-current"]).pipe(
             Effect.map((result) => result.stdout.trim() || null),
           ),
+        ...(plugin && {
+          listWorktrees: () => Effect.succeed([pluginWorktree]),
+          localStatus: () =>
+            Effect.sync(() => ({
+              refName: pluginStatus.refName,
+              capabilities: { kind: "kite" },
+              workingTree: { files: pluginStatus.files.map((path) => ({ path })) },
+            })),
+          removeWorktree: (input: { readonly path: string }) =>
+            fs.remove(input.path, { recursive: true }).pipe(Effect.orDie),
+        }),
       } as unknown as GitWorkflowService.GitWorkflowService["Service"]),
-      // A plugin marker no Git fixture has; listings still come from Git.
+      // A plugin marker no Git fixture has; without `plugin`, listings still come from Git.
       Effect.provideService(VcsPluginDrivers, {
-        hasAny: () => false,
+        hasAny: () => plugin !== undefined,
         markers: () => [".kite/HEAD"],
+        describe: (kind: string) =>
+          plugin && kind === "kite"
+            ? { label: "Kite", recreatesWorktrees: plugin.recreates }
+            : undefined,
       } as unknown as VcsPluginDrivers["Service"]),
       Effect.provideService(ProviderSessionManager.ProviderSessionManagerV2, {
         isLive: () =>
@@ -566,6 +589,10 @@ const cleanupFixture = (
       },
       fs,
       worktree,
+      pluginWorktree,
+      setPluginStatus: (next: typeof pluginStatus) => {
+        pluginStatus = next;
+      },
       config,
       command,
       enableFiles: () => {
@@ -2151,6 +2178,45 @@ describe("deleted thread worktrees", () => {
         reason: "Settled moments ago",
       });
       expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+});
+
+describe("VCS plugin worktrees", () => {
+  it.effect.each([
+    { name: "a deleted thread's clean worktree", deleted: true, recreates: false, files: [] },
+    { name: "an old thread's clean worktree", deleted: false, recreates: true, files: [] },
+    { name: "a worktree with changes", deleted: true, recreates: true, files: ["a.txt"] },
+    {
+      name: "an old thread's worktree it cannot bring back",
+      deleted: false,
+      recreates: false,
+      files: [],
+    },
+  ])("removes or keeps $name through the plugin", ({ deleted, recreates, files }) =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, { recreates });
+      const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      fixture.setThreads(deleted ? [] : [thread]);
+      fixture.setDeletedThreads(deleted ? [thread] : []);
+      fixture.setPluginStatus({ refName: "feature", files });
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      const removed = files.length === 0 && (deleted || recreates);
+      expect(entry).toMatchObject({
+        path: fixture.pluginWorktree,
+        outcome: removed ? "removed" : "kept",
+        reason: removed
+          ? deleted
+            ? "Thread was deleted"
+            : "Inactive for 30 days"
+          : files.length > 0
+            ? "Has uncommitted changes (1 file)"
+            : "Kite cannot bring back a removed worktree",
+      });
+      expect(yield* fixture.fs.exists(fixture.pluginWorktree)).toBe(!removed);
     }).pipe(Effect.provide(cleanupTestLayer)),
   );
 });

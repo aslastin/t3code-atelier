@@ -710,8 +710,11 @@ export const make = Effect.gen(function* () {
       );
     }),
     pruneWorktrees: Effect.fn("GitWorkflowService.pruneWorktrees")(function (input) {
-      return routeCommand("GitWorkflowService.pruneWorktrees", input.cwd, () =>
-        git.pruneWorktrees(input),
+      return routeCommand(
+        "GitWorkflowService.pruneWorktrees",
+        input.cwd,
+        () => git.pruneWorktrees(input),
+        (ops) => ops.pruneWorktrees?.(input),
       );
     }),
     deleteLocalBranch: Effect.fn("GitWorkflowService.deleteLocalBranch")(function (input) {

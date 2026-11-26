@@ -80,6 +80,30 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
         cause: error,
       });
 
+  const attachWorktree = Effect.fn("ManifestVcsDriver.attachWorktree")(function* (
+    cwd: string,
+    root: string,
+    worktreePath: string,
+    ref: string,
+  ) {
+    if (manifest.commands.worktreeAttach === undefined)
+      return yield* new GitCommandError({
+        vcs: kind,
+        operation: `${kind}.worktreeAttach`,
+        command: "worktreeAttach",
+        cwd,
+        detail: `${manifest.label} cannot check out an existing branch into a new worktree.`,
+      });
+    yield* runner
+      .run("worktreeAttach", {
+        cwd,
+        values: { repositoryRoot: root, path: worktreePath, ref },
+        timeoutMs: null,
+      })
+      .pipe(Effect.mapError(toCommandError("worktreeAttach", cwd)));
+    return ref;
+  });
+
   const detect = (cwd: string) => detectMarkerRoot(fs, path, manifest.detect.markers, cwd);
 
   const repositoryRoot = Effect.fn("ManifestVcsDriver.repositoryRoot")(function* (cwd: string) {
@@ -289,19 +313,25 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
         yield* fs
           .makeDirectory(path.dirname(worktreePath), { recursive: true })
           .pipe(Effect.ignore);
-        const out = yield* json(
-          "worktreeCreate",
-          VcsPluginWorktreeCreateOutput,
-          request.cwd,
-          { path: worktreePath, newRef, baseRef: request.baseRefName ?? request.refName },
-          // Large checkouts can run for many minutes, as `git worktree add` does.
-          null,
-        );
+        // Without a new ref, as `git worktree add <path> <branch>`: check out the ref that exists.
+        const refName =
+          request.newRefName === undefined
+            ? yield* attachWorktree(request.cwd, root, worktreePath, request.refName)
+            : (yield* json(
+                "worktreeCreate",
+                VcsPluginWorktreeCreateOutput,
+                request.cwd,
+                { path: worktreePath, newRef, baseRef: request.baseRefName ?? request.refName },
+                // Large checkouts can run for many minutes, as `git worktree add` does.
+                null,
+              )).refName;
         // A project in a subfolder works in the same subfolder of the new checkout (#12).
         const relative = path.relative(root, path.resolve(request.cwd));
         const projectPath = yield* worktreeProjectFolder(fs, path, relative, worktreePath);
-        return { worktree: { path: worktreePath, projectPath, refName: out.refName } };
+        return { worktree: { path: worktreePath, projectPath, refName } };
       }),
+      // The plugin keeps its own worktree list; T3 Code has nothing of its own to forget.
+      pruneWorktrees: () => Effect.void,
       removeWorktree: Effect.fn("ManifestVcsDriver.removeWorktree")(function* (request) {
         const root = yield* repositoryRoot(request.cwd).pipe(
           Effect.mapError(toCommandError("worktreeRemove", request.cwd)),

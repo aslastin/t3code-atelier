@@ -15,6 +15,10 @@ export class VcsPluginDrivers extends Context.Service<
     readonly hasAny: () => boolean;
     /** Marker paths of every available plugin, for walks that look for a checkout root. */
     readonly markers: () => ReadonlyArray<string>;
+    /** An available plugin's name, and whether it can bring back a worktree cleanup removed. */
+    readonly describe: (
+      kind: string,
+    ) => { readonly label: string; readonly recreatesWorktrees: boolean } | undefined;
     /** Emits after a plugin is checked, imported, turned on or off, or removed. */
     readonly changes: Stream.Stream<void>;
   }

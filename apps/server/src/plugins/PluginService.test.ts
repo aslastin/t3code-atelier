@@ -163,6 +163,20 @@ describe("ManifestVcsDriver", () => {
       yield* workflow.removeWorktree!({ cwd: `${repository}/sub`, path: worktree.projectPath! });
       assert.isFalse(NodeFS.existsSync(worktree.path));
       assert.deepStrictEqual(yield* workflow.listWorktrees!({ cwd: repository }), []);
+
+      // Brought back on the branch it had, as T3 Code does after cleanup removed a worktree.
+      yield* workflow.pruneWorktrees!({ cwd: `${repository}/sub` });
+      const restored = yield* workflow.createWorktree!({
+        cwd: `${repository}/sub`,
+        refName: "t3code/feature",
+        path: worktree.path,
+      });
+      assert.strictEqual(restored.worktree.refName, "t3code/feature");
+      assert.strictEqual(
+        NodeFS.readFileSync(`${worktree.path}/.kite/HEAD`, "utf8").trim(),
+        "t3code/feature",
+      );
+      assert.include(fakeCalls(repository), `worktree-attach ${worktree.path} t3code/feature`);
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 

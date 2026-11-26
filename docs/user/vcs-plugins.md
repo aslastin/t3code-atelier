@@ -44,6 +44,7 @@ one closer to the project folder wins.
     "commit": ["myvcs", "commit", "--all", "--file", "{messageFile}"],
     "worktreeCreate": ["./bin/worktree-add.mjs", "{path}", "{newRef}", "{baseRef}"],
     "worktreeRemove": ["./bin/worktree-remove.mjs", "{path}"],
+    "worktreeAttach": ["./bin/worktree-attach.mjs", "{path}", "{ref}"],
     "worktreeList": ["./bin/worktree-list.mjs"],
     "checkpointCapture": ["./bin/snapshot.mjs"],
     "checkpointDiff": ["./bin/snapshot-diff.mjs", "{fromRevision}", "{toRevision}"],
@@ -90,6 +91,7 @@ Every command except `readFile` prints one JSON object on stdout. Optional field
 | `pull`              |                                   | `{ "status": "pulled" \| "skipped_up_to_date", "refName", "upstreamRef"? }`                                                                                               |
 | `worktreeCreate`    | `{path}`, `{newRef}`, `{baseRef}` | `{ "refName" }`. Create the checkout at `{path}`; T3 Code chooses it, as it does for Git.                                                                                 |
 | `worktreeRemove`    | `{path}`                          | Anything.                                                                                                                                                                 |
+| `worktreeAttach`    | `{path}`, `{ref}`                 | Anything. Check out the existing `{ref}` at `{path}`. Optional.                                                                                                           |
 | `worktreeList`      |                                   | `{ "worktrees": [{ "path" }] }` with absolute paths.                                                                                                                      |
 | `checkpointCapture` | `{checkpointRef}`                 | `{ "revision" }`                                                                                                                                                          |
 | `checkpointDiff`    | `{fromRevision}`, `{toRevision}`  | `{ "patch" }`, a Git-format patch. Must fail when either revision cannot be read.                                                                                         |
@@ -105,6 +107,12 @@ the branch comparison, and sparse checkouts stay Git-only.
 
 When a project is a subfolder of the repository, a new worktree's thread works in the same
 subfolder of the new checkout.
+
+Storage cleanup removes a plugin's worktrees as it does Git's, when their thread is deleted,
+inactive or settled. The merged and unchanged rules need Git history, so they do not apply, and
+any file `status` lists keeps a worktree. A thread's next turn brings a removed worktree back with
+`worktreeAttach`, after `listRefs` shows its branch is still there. Without both commands,
+cleanup removes only a deleted thread's worktree.
 
 ### Checkpoints
 

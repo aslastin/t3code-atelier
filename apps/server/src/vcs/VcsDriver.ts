@@ -119,6 +119,8 @@ export interface VcsWorkflowOps {
   readonly createWorktree?: WorkflowOperation<VcsCreateWorktreeInput, VcsCreateWorktreeResult>;
   readonly removeWorktree?: WorkflowOperation<VcsRemoveWorktreeInput, void>;
   readonly listWorktrees?: WorkflowOperation<VcsStatusInput, ReadonlyArray<string>>;
+  /** Forgets worktrees whose folder is gone, before one is created at the same path again. */
+  readonly pruneWorktrees?: WorkflowOperation<{ readonly cwd: string }, void>;
   readonly commit?: WorkflowOperation<
     Pick<GitRunStackedActionInput, "cwd" | "filePaths" | "commitMessage">,
     GitRunStackedActionResult["commit"]

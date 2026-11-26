@@ -91,6 +91,10 @@ const patch = (fromDir, toDir) => {
   return text;
 };
 const snapshotDir = (revision) => path.join(kite, "snapshots", revision);
+const readRefs = () => {
+  const file = path.join(kite, "refs.json");
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : [];
+};
 const readList = () => {
   const file = path.join(kite, "worktrees.json");
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : [];
@@ -118,13 +122,29 @@ switch (command) {
     fs.writeFileSync(path.join(target, ".kite", "HEAD"), newRef + "\n");
     copyTree(path.join(kite, "base"), path.join(target, ".kite", "base"));
     fs.writeFileSync(path.join(kite, "worktrees.json"), JSON.stringify([...readList(), target]));
+    fs.writeFileSync(path.join(kite, "refs.json"), JSON.stringify([...readRefs(), newRef]));
     out({ refName: newRef });
+    break;
+  }
+  case "worktree-attach": {
+    const [target, ref] = args;
+    copyTree(path.join(kite, "base"), target);
+    fs.mkdirSync(path.join(target, ".kite"), { recursive: true });
+    fs.writeFileSync(path.join(target, ".kite", "HEAD"), ref + "\n");
+    copyTree(path.join(kite, "base"), path.join(target, ".kite", "base"));
+    fs.writeFileSync(path.join(kite, "worktrees.json"), JSON.stringify([...readList().filter((p) => p !== target), target]));
     break;
   }
   case "worktree-remove": {
     const [target] = args;
     fs.rmSync(target, { recursive: true, force: true });
     fs.writeFileSync(path.join(kite, "worktrees.json"), JSON.stringify(readList().filter((p) => p !== target)));
+    break;
+  }
+  case "refs": {
+    const head = fs.readFileSync(path.join(kite, "HEAD"), "utf8").trim();
+    const names = [...new Set(["main", ...readRefs()])];
+    out({ refs: names.map((name) => ({ name, current: name === head, isDefault: name === "main" })) });
     break;
   }
   case "worktree-list":
@@ -224,9 +244,11 @@ export function writeFakeVcsPlugin(directory: string, options: FakeVcsPluginOpti
         ...(options.checkpoints ? { checkpoints: options.checkpoints } : {}),
         commands: {
           status: [kite, options.statusCommand ?? "status"],
+          listRefs: [kite, "refs"],
           commit: [kite, "commit", "{messageFile}", "{pathsFile}"],
           worktreeCreate: [kite, "worktree-add", "{path}", "{newRef}", "{baseRef}"],
           worktreeRemove: [kite, "worktree-remove", "{path}"],
+          worktreeAttach: [kite, "worktree-attach", "{path}", "{ref}"],
           worktreeList: [kite, "worktree-list"],
           checkpointCapture: [kite, "snapshot"],
           checkpointDiff: [kite, "snapshot-diff", "{fromRevision}", "{toRevision}"],

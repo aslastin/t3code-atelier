@@ -487,7 +487,11 @@ it.effect.each([
             }),
             layerNoTaskFolders,
             Layer.mock(GitWorkflow.GitWorkflowService)({}),
-            Layer.mock(VcsPluginDrivers)({ hasAny: () => true, markers: () => [".kite/HEAD"] }),
+            Layer.mock(VcsPluginDrivers)({
+              hasAny: () => true,
+              markers: () => [".kite/HEAD"],
+              describe: () => undefined,
+            }),
             Layer.mock(CheckpointService.CheckpointServiceV2)({
               discardRepositorySnapshots: () => Effect.void,
               restore: () =>

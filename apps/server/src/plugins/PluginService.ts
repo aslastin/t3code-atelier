@@ -475,6 +475,20 @@ const make = Effect.gen(function* () {
       }),
     ),
     hasAny: () => [...entries.values()].some((entry) => entry.manifest !== null && entry.enabled),
+    describe: (kind) => {
+      for (const { driver, manifest } of entries.values()) {
+        if (driver && manifest?.id === kind)
+          return {
+            label: manifest.label,
+            // Recovery checks the branch is still there before checking it out again.
+            recreatesWorktrees:
+              supportsWorktrees(manifest) &&
+              manifest.commands.worktreeAttach !== undefined &&
+              manifest.commands.listRefs !== undefined,
+          };
+      }
+      return undefined;
+    },
     changes: Stream.fromPubSub(changes),
     markers: () =>
       [...entries.values()].flatMap((entry) =>

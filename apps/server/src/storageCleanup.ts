@@ -375,6 +375,35 @@ const make = Effect.gen(function* () {
       !path.isAbsolute(relative)
     );
   };
+  // A VCS plugin's worktree: its project's plugin lists it, as Git lists a linked worktree.
+  const isListedPluginWorktree = Effect.fnUntraced(function* (
+    worktreePath: string,
+    projectRoot: string,
+  ) {
+    if (!gitWorkflowHasPlugins()) return false;
+    const listed = yield* gitWorkflow
+      .listWorktrees(projectRoot)
+      .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+    return listed.some((entry) => pathKey(entry) === pathKey(worktreePath));
+  });
+  // What the plugin's status says about one of its worktrees, read fresh for each check.
+  const pluginWorktreeState = Effect.fnUntraced(function* (
+    worktreePath: string,
+    branch: string | null,
+  ) {
+    const status = yield* gitWorkflow.localStatus({ cwd: worktreePath });
+    const plugin = plugins?.describe(status.capabilities?.kind ?? "");
+    const files = status.workingTree.files.length;
+    return {
+      label: plugin?.label ?? "Its VCS plugin",
+      recreates: plugin?.recreatesWorktrees === true,
+      branchChanged: status.refName !== branch,
+      // A plugin's status does not tell tracked files from untracked or ignored ones, so any
+      // file it lists keeps the worktree, whichever keep rule is set.
+      changes:
+        files > 0 ? `has uncommitted changes (${files} ${files === 1 ? "file" : "files"})` : null,
+    };
+  });
   const worktreePathsForCheck = () => {
     // Threads may store one checkout through different symlinked spellings; compare real paths.
     // Keys are only compared, never opened, so they take pathKey's Windows case folding.
@@ -1505,6 +1534,51 @@ const make = Effect.gen(function* () {
               });
             }),
             guardedPath,
+          );
+        }
+        // Atelier fork: a VCS plugin's worktree goes through the plugin. Only age, settling and
+        // deletion apply; the merge and unchanged rules read Git history a plugin does not expose.
+        if (yield* isListedPluginWorktree(worktreePath, project.workspaceRoot)) {
+          if (!eligible) return keep(notDueReason);
+          const first = yield* pluginWorktreeState(worktreePath, thread.branch);
+          if (first.branchChanged) {
+            if (!deleted) yield* followBranch(thread.worktreePath!);
+            return keep("repository or branch changed");
+          }
+          // A live thread's next turn brings its checkout back, which needs the plugin's help.
+          if (!deleted && !first.recreates)
+            return keep(`${first.label} cannot bring back a removed worktree`);
+          if (first.changes !== null) return keep(first.changes);
+          const blocked = yield* blockedSinceCheck();
+          if (blocked !== null) return keep(blocked);
+          const inspection = yield* measureWorktree(worktreePath);
+          if (inspection.reason !== null) return keep(inspection.reason);
+          return yield* withCleanupLease(
+            worktreePath,
+            Effect.gen(function* () {
+              const blockedWhileMeasuring = yield* blockedSinceCheck();
+              if (blockedWhileMeasuring !== null) return keep(blockedWhileMeasuring);
+              const last = yield* pluginWorktreeState(worktreePath, thread.branch);
+              if (last.branchChanged) return keep("repository or branch changed since check");
+              if (last.changes !== null) return keep(last.changes);
+              if (yield* settingsChangedSinceCheck) return keep("settings changed since check");
+              yield* gitWorkflow.removeWorktree({
+                cwd: project.workspaceRoot,
+                path: worktreePath,
+                force: true,
+              });
+              entries.push({
+                ...entry,
+                outcome: "removed",
+                reason: sentence(removalReason),
+                bytes: inspection.bytes,
+              });
+              yield* gitManager.invalidateStatus(project.workspaceRoot);
+              // The stored branch and path let the next turn bring the checkout back.
+              yield* Effect.logInfo("storage cleanup removed VCS plugin worktree", {
+                threadId: thread.id,
+              });
+            }),
           );
         }
         const pathReason = yield* worktreePathReason(worktreePath);

@@ -903,7 +903,12 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ThreadSearch.ThreadSearch)({}),
   Layer.mock(TopicService.TopicService)({}),
   Layer.mock(PluginService.PluginService)({}),
-  Layer.mock(VcsPluginDrivers)({ hasAny: () => false, markers: () => [], changes: Stream.empty }),
+  Layer.mock(VcsPluginDrivers)({
+    hasAny: () => false,
+    markers: () => [],
+    describe: () => undefined,
+    changes: Stream.empty,
+  }),
   Layer.mock(UsageService.UsageService)({}),
   Layer.mock(VcsProvisioningService.VcsProvisioningService)({}),
   Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({}),

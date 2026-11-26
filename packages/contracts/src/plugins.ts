@@ -30,6 +30,8 @@ export const VcsPluginCommands = Schema.Struct({
   pull: Schema.optionalKey(PluginArgv),
   worktreeCreate: Schema.optionalKey(PluginArgv),
   worktreeRemove: Schema.optionalKey(PluginArgv),
+  /** Checks an existing ref out into a new worktree, to bring back one that was removed. */
+  worktreeAttach: Schema.optionalKey(PluginArgv),
   worktreeList: Schema.optionalKey(PluginArgv),
   checkpointCapture: Schema.optionalKey(PluginArgv),
   checkpointDiff: Schema.optionalKey(PluginArgv),
