@@ -245,3 +245,39 @@ it("runs right panel commands from inside a side chat pane, but not thread comma
 
   expect(ran).toEqual(["toggle", "close", "toggle"]);
 });
+
+function ChatWithLinkField(props: { ran: string[] }) {
+  useChatShortcuts({
+    enabled: true,
+    keybindings: [ctrlShift("enter", "thread.steerQueuedMessage")],
+    scriptKeybindings: [],
+    getShortcutContext: () => shortcutContext,
+    threadFindActive: false,
+    composerRef: { current: null },
+    branchToolbarRef: { current: null },
+    closeThreadFind: () => {},
+    commands: { "thread.steerQueuedMessage": () => void props.ran.push("steer") },
+    fallback: () => undefined,
+  });
+  return (
+    <>
+      <div data-composer-link-editor="true">
+        <textarea aria-label="Link URL" />
+      </div>
+      <textarea aria-label="Other field" />
+    </>
+  );
+}
+
+it("leaves keys typed into the Insert Link URL field to the field", async () => {
+  const ran: string[] = [];
+  await using screen = await render(<ChatWithLinkField ran={ran} />, options);
+
+  await userEvent.click(screen.getByLabelText("Link URL"));
+  await userEvent.keyboard("{Control>}{Shift>}{Enter}{/Shift}{/Control}");
+  expect(ran).toEqual([]);
+
+  await userEvent.click(screen.getByLabelText("Other field"));
+  await userEvent.keyboard("{Control>}{Shift>}{Enter}{/Shift}{/Control}");
+  expect(ran).toEqual(["steer"]);
+});

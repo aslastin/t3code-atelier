@@ -23,8 +23,12 @@ interface SourcePiece {
 }
 
 // The composer styles only web links: one level of balanced parentheses, as in Wikipedia URLs.
-const LINK_LABEL = String.raw`(?:\\.|[^\\\[\]\n])+`;
-const LINK_DESTINATION = String.raw`https?:\/\/(?:[^\s()<>]|\([^\s()<>]*\))+`;
+// A blank label would serialize as bare spaces and lose its destination.
+const LINK_LABEL = String.raw`(?!\s*\])(?:\\.|[^\\\[\]\n])+`;
+// Backslash escapes are left out rather than unescaped. U+FFFC and the private use area
+// stand in for chips while parsing, so a chip cannot hide inside a destination.
+const URL_CHAR = String.raw`[^\s()<>\\\uFFFC\uE000-\uF8FF]`;
+const LINK_DESTINATION = String.raw`https?:\/\/(?:${URL_CHAR}|\(${URL_CHAR}*\))+`;
 // Sticky, so matching at each `[` does not copy the rest of the text.
 const LINK_AT = new RegExp(String.raw`\[(${LINK_LABEL})\]\((${LINK_DESTINATION})\)`, "iy");
 /** A Markdown link ending the text, for the rule that styles one as its `)` is typed. */
@@ -115,6 +119,7 @@ function parseInlineMarkdownPieces(text: string): SourcePiece[] {
     }
   };
   let index = 0;
+  let escapeEnd = -1;
   while (index < text.length) {
     const char = text[index]!;
     if (link && index >= link.labelEnd) {
@@ -130,9 +135,11 @@ function parseInlineMarkdownPieces(text: string): SourcePiece[] {
     if (char === "\\") {
       push(index, Math.min(index + 2, text.length));
       index += 2;
+      escapeEnd = index;
       continue;
     }
-    if (char === "[" && !link && text[index - 1] !== "!") {
+    // `![label](url)` is an image, unless the `!` is escaped.
+    if (char === "[" && !link && (text[index - 1] !== "!" || escapeEnd === index)) {
       LINK_AT.lastIndex = index;
       const match = LINK_AT.exec(text);
       if (match) {

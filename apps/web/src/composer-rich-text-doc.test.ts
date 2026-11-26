@@ -6,6 +6,8 @@ import { EditorState, TextSelection } from "@tiptap/pm/state";
 import { splitBlockKeepMarks } from "@tiptap/pm/commands";
 import { describe, expect, it, onTestFinished } from "vite-plus/test";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
+import { formatComposerContextReference } from "@t3tools/shared/composerContextReferences";
+import { ComposerContextId } from "@t3tools/contracts";
 
 import {
   collapseExpandedComposerCursor,
@@ -333,6 +335,9 @@ describe("composer rich text document model", () => {
     "[@README.md](https://t3.codes)",
     "[w](https://en.wikipedia.org/wiki/Foo_(bar))",
     "![image](https://t3.codes/a.png) stays literal",
+    "[ spaced label ](https://t3.codes)",
+    "[   ](https://t3.codes)",
+    `[open](https://t3.codes/?src=${formatComposerContextReference({ kind: "file", contextId: ComposerContextId.make("file_f1"), label: "r" })}) then ${formatComposerContextReference({ kind: "file", contextId: ComposerContextId.make("file_f2"), label: "doc" })}`,
     "[relative](./a.ts) stays literal",
   ])("round-trips %s through a real ProseMirror document", (value) => {
     expect(roundTrip(value).value).toBe(value);
@@ -346,6 +351,7 @@ describe("composer rich text document model", () => {
     "- [ ] parent\n  - [ ] child\n- [ ]",
     "para\n- [ ] task\npara",
     "**before @README.md after**",
+    "[abc](https://t3.codes) after",
   ])("maps editable positions in %s", (value) => {
     const doc = ProseMirrorNode.fromJSON(
       schema,
@@ -408,6 +414,9 @@ describe("composer rich text document model", () => {
       ]),
     ]);
     expect(serializeEditorDoc(adjacent).value).toBe("see [a](https://t3.codes)[b](https://x.dev)");
+    // A caret before a link is outside it, so it maps before the `[`.
+    const map = serializeEditorDoc(adjacent);
+    expect(flatToMarkdown(map, "see ".length)).toBe("see ".length);
   });
 
   it("applies a shared mark to text on both sides of a chip", () => {

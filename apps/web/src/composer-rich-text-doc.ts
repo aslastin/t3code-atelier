@@ -355,21 +355,27 @@ export function surroundSelectionWithMark(
   });
   if (crossesLine) return null;
   const tr = state.tr.addMark(from, to, markType.create());
-  // Nearby delimiters can change how the saved span parses. Atoms are opaque
-  // to inline markdown, so use a placeholder instead of parsing their sources.
+  // Nearby delimiters can change how the saved span parses.
+  return inlineMarkdownRoundTrips(tr.doc.resolve(from).parent) ? tr : null;
+}
+
+/** Whether `block`'s inline content parses back to itself once written as Markdown. */
+export function inlineMarkdownRoundTrips(block: ProseMirrorNode): boolean {
+  const { schema } = block.type;
+  // Atoms are opaque to inline markdown, so use a placeholder instead of parsing their sources.
   const children: ProseMirrorNode[] = [];
-  tr.doc.resolve(from).parent.forEach((node) => {
+  block.forEach((node) => {
     children.push(
       node.isAtom && !node.isText && node.type.name !== "hardBreak"
-        ? state.schema.text("\uFFFC", node.marks)
+        ? schema.text("\uFFFC", node.marks)
         : node,
     );
   });
-  const paragraph = state.schema.nodes.paragraph!.create(null, children);
-  const markdown = serializeEditorDoc(state.doc.type.create(null, paragraph)).value;
+  const paragraph = schema.nodes.paragraph!.create(null, children);
+  const markdown = serializeEditorDoc(schema.topNodeType.create(null, paragraph)).value;
   const rebuilt = buildTiptapContent(markdown, () => null, { blocks: false });
-  const restored = state.schema.nodeFromJSON({ type: "doc", content: rebuilt });
-  return paragraph.content.eq(restored.firstChild!.content) ? tr : null;
+  const restored = schema.nodeFromJSON({ type: "doc", content: rebuilt });
+  return paragraph.content.eq(restored.firstChild!.content);
 }
 
 /**
@@ -1368,8 +1374,9 @@ function appendInlineRuns(
       offset = boundary;
     }
   });
+  // Emphasis cannot open or close beside a space, but a link label can hold one.
   for (const mark of MARK_NESTING_ORDER) {
-    if (mark === "code") continue;
+    if (mark === "code" || mark === "link") continue;
     for (const direction of [1, -1]) {
       let hasContent = false;
       for (
@@ -1901,6 +1908,10 @@ export function flatToMarkdown(map: RichDocMap, flatOffset: number): number {
   for (const run of map.runs) {
     if (runOwnsOffset(run, bounded)) {
       if (run.kind === "text" || run.kind === "token") {
+        // A caret before a link stays outside it, so it sits before the `[`.
+        if (bounded === run.flatStart && map.value[run.mdStart] === "[" && run.openLen > 0) {
+          return run.mdStart;
+        }
         return run.mdStart + run.openLen + (bounded - run.flatStart);
       }
       return run.mdStart + (bounded - run.flatStart);

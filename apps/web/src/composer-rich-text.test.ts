@@ -144,6 +144,11 @@ describe("composer rich text markdown", () => {
       { text: "*a ", marks: [] },
       { text: "b* c", marks: ["link"], href },
     ]);
+    expect(parseInlineMarkdown(`\\![a](${href})`)).toEqual([
+      { text: "\\!", marks: [] },
+      { text: "a", marks: ["link"], href },
+    ]);
+    expect(parseInlineMarkdown(`[ a ](${href})`)).toEqual([{ text: " a ", marks: ["link"], href }]);
     expect(parseInlineMarkdown(`[a \`b](${href}) c\``)).toEqual([
       { text: "a `b", marks: ["link"], href },
       { text: " c`", marks: [] },
@@ -159,6 +164,9 @@ describe("composer rich text markdown", () => {
     "[](https://t3.codes)",
     "[label] (https://t3.codes)",
     "`[code](https://t3.codes)`",
+    "[   ](https://t3.codes)",
+    "[x](https://t3.codes/?tag=foo\\))",
+    "[x](https://t3.codes/?src=\uFFFC)",
   ])("keeps %s literal", (text) => {
     expect(parseInlineMarkdown(text).some((span) => span.marks.includes("link"))).toBe(false);
   });

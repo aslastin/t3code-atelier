@@ -7,6 +7,11 @@ import { normalizeComposerLinkHref } from "~/composer-link";
 import { Popover, PopoverPopup } from "../ui/popover";
 import { Textarea } from "../ui/textarea";
 
+/** Chat shortcuts stand down while the user types a URL here. */
+export function isInComposerLinkEditor(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest("[data-composer-link-editor]") !== null;
+}
+
 /** The URL field Insert Link opens under the selected text. */
 export function ComposerLinkEditor({
   anchor,

@@ -130,6 +130,7 @@ import { SkillChipPopover, skillPopoverDescription } from "./chat/SkillInlineTex
 import { ComposerLinkEditor } from "./chat/ComposerLinkEditor";
 import {
   applyComposerLink,
+  canLinkSelection,
   ComposerLinkExtension,
   linkableRange,
   setPendingLink,
@@ -1865,9 +1866,8 @@ function ComposerPromptEditorTiptapInner(
       readSnapshot,
       openLinkEditor: () => {
         if (!editor || !richText || !editor.isEditable) return false;
-        const range = linkableRange(editor.state.doc, editor.state.selection);
-        if (!range) return false;
-        setPendingLink(editor, range);
+        if (!canLinkSelection(editor.state)) return false;
+        setPendingLink(editor, linkableRange(editor.state.doc, editor.state.selection));
         setLinkEditorOpen(true);
         return true;
       },

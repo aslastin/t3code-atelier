@@ -1328,6 +1328,109 @@ describe("Markdown links", () => {
     expect(serializeEditorDoc(editor.state.doc).value).toBe("see project website");
   });
 
+  it.each([
+    { name: "a label after `!`, which would send an image", value: "see !docs", select: "docs" },
+    { name: "a label holding brackets", value: "fix arr[i] now", select: "arr[i]" },
+    { name: "a label ending in a backslash", value: "see path\\ now", select: "path\\" },
+    { name: "part of inline code", value: "run `code` now", select: "od" },
+    { name: "a label ending in a chip", value: "see @README.md now", select: "see ￼" },
+    { name: "only spaces", value: "a   b", select: "   " },
+  ])("does not open the URL field for $name", async ({ value, select }) => {
+    const editorRef = createRef<ComposerPromptEditorHandle>();
+    await using screen = await render(
+      <Composer value={value} richTextEnabled skills={[]} editorRef={editorRef} />,
+    );
+    const editor = editorIn(screen.container);
+    await focusAt(editor, "end");
+    const text = editor.state.doc.textBetween(0, editor.state.doc.content.size, undefined, "￼");
+    const start = text.indexOf(select);
+    expect(start).toBeGreaterThanOrEqual(0);
+    await act(async () => {
+      editor.commands.setTextSelection({ from: start + 1, to: start + 1 + select.length });
+    });
+    expect(editorRef.current?.openLinkEditor()).toBe(false);
+    expect(serializeEditorDoc(editor.state.doc).value).toBe(value);
+  });
+
+  it("does not open the URL field for a link's revealed address", async () => {
+    const editorRef = createRef<ComposerPromptEditorHandle>();
+    const value = "[docs](https://old.test) after";
+    await using screen = await render(
+      <Composer value={value} richTextEnabled skills={[]} editorRef={editorRef} />,
+    );
+    const editor = editorIn(screen.container);
+    await focusAt(editor, 3);
+    expect(editor.state.doc.textContent).toBe(value);
+    const start = value.indexOf("old.test");
+    await act(async () => {
+      editor.commands.setTextSelection({ from: start + 1, to: start + 1 + "old.test".length });
+    });
+    expect(editorRef.current?.openLinkEditor()).toBe(false);
+  });
+
+  it("links the words of a selection without the spaces around them", async () => {
+    const editorRef = createRef<ComposerPromptEditorHandle>();
+    await using screen = await render(
+      <Composer value="see the docs now" richTextEnabled skills={[]} editorRef={editorRef} />,
+    );
+    const editor = editorIn(screen.container);
+    await focusAt(editor, "end");
+    await act(async () => {
+      editor.commands.setTextSelection({ from: "see".length + 1, to: "see the docs ".length + 1 });
+      editorRef.current?.openLinkEditor();
+    });
+    await expect.element(page.getByRole("textbox", { name: "Link URL" })).toHaveFocus();
+    await userEvent.keyboard("t3.codes{Enter}");
+    await vi.waitFor(() =>
+      expect(serializeEditorDoc(editor.state.doc).value).toBe(`see [the docs](${href}) now`),
+    );
+  });
+
+  it("styles a typed link whose label holds inline code", async () => {
+    await using screen = await mountEditor("");
+    const { editor } = screen;
+    await focusAt(editor, "end");
+    await userEvent.keyboard(`[[a \`code\` b](${href}) `);
+    await vi.waitFor(() =>
+      expect(serializeEditorDoc(editor.state.doc).value).toBe(`[a \`code\` b](${href}) `),
+    );
+    expect(textWithMark(editor, "link")).toEqual(["a ", "code", " b"]);
+    expect(textWithMark(editor, "code")).toEqual(["code"]);
+  });
+
+  it("styles a revealed link again after its `)` is retyped over itself", async () => {
+    const value = `[abc](${href}) after`;
+    await using screen = await mountEditor(value);
+    const { editor } = screen;
+    await focusAt(editor, 3);
+    expect(editor.state.doc.textContent).toBe(value);
+    const close = value.indexOf(") after");
+    await act(async () => {
+      editor.commands.setTextSelection({ from: close + 1, to: close + 2 });
+    });
+    await userEvent.keyboard("){End}");
+    await vi.waitFor(() => expect(editor.state.doc.textContent).toBe("abc after"));
+    expect(textWithMark(editor, "link")).toEqual(["abc"]);
+  });
+
+  it("keeps a link's favicon when undo restores its source and the caret leaves", async () => {
+    await using screen = await mountEditor(`[abc](${href}) after`);
+    const { editor } = screen;
+    await focusAt(editor, 3);
+    await userEvent.keyboard("X{End}");
+    await vi.waitFor(() => expect(editor.state.doc.textContent).toBe("abXc after"));
+    await act(async () => {
+      editor.commands.undo();
+    });
+    await act(async () => {
+      editor.commands.setTextSelection(editor.state.doc.content.size - 1);
+    });
+    expect(serializeEditorDoc(editor.state.doc).value).toBe(`[abc](${href}) after`);
+    await vi.waitFor(() =>
+      expect(editor.view.dom.querySelectorAll(".composer-link-favicon")).toHaveLength(1),
+    );
+  });
+
   it("does not open the URL field for a selection across lines", async () => {
     const editorRef = createRef<ComposerPromptEditorHandle>();
     await using screen = await render(

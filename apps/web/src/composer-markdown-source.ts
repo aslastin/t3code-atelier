@@ -484,6 +484,29 @@ function previewDecorations(
   return DecorationSet.create(doc, decorations);
 }
 
+/**
+ * Links inside source that undo or redo restored and the caret has left. The
+ * source stays text until the next edit, so only its decorations show the link.
+ */
+export function hiddenSourceLinkStarts(state: EditorState): { pos: number; href: string }[] {
+  const type = state.schema.marks[MARKDOWN_SOURCE_MARK];
+  if (!type || !markdownSourceKey.getState(state)?.detached) return [];
+  const starts: { pos: number; href: string }[] = [];
+  for (const region of sourceRegions(state.doc, type)) {
+    if (touchesSource(state.selection, state.doc, region)) continue;
+    const { text, units, hrefs } = regionUnits(state.doc, region);
+    forEachUnitRun(units, (start, _end, marks) => {
+      const href = hrefs[start];
+      if (!marks?.includes("link") || !href) return;
+      // A label starts after its `[`; styles inside it start later runs of the same link.
+      let before = start - 1;
+      while (before >= 0 && units[before] === null && text[before] !== "[") before -= 1;
+      if (before >= 0 && units[before] === null) starts.push({ pos: region.from + start, href });
+    });
+  }
+  return starts;
+}
+
 type MarkdownSourceState = {
   decorations: DecorationSet;
   /** From an undo or redo until the next recorded edit; see `normalizeDetached`. */
