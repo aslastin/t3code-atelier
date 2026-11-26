@@ -21,9 +21,13 @@ export class VcsPluginDrivers extends Context.Service<
      */
     readonly installedMarkers: () => ReadonlyArray<string>;
     /** An available plugin's name, and whether it can bring back a worktree cleanup removed. */
-    readonly describe: (
-      kind: string,
-    ) => { readonly label: string; readonly recreatesWorktrees: boolean } | undefined;
+    readonly describe: (kind: string) =>
+      | {
+          readonly label: string;
+          readonly recreatesWorktrees: boolean;
+          readonly markers: ReadonlyArray<string>;
+        }
+      | undefined;
     /** Emits after a plugin is checked, imported, turned on or off, or removed. */
     readonly changes: Stream.Stream<void>;
   }

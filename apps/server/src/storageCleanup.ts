@@ -376,24 +376,49 @@ const make = Effect.gen(function* () {
     );
   };
   // A VCS plugin's worktree: its project's plugin lists it, as Git lists a linked worktree.
-  const isListedPluginWorktree = Effect.fnUntraced(function* (
+  // A VCS plugin's worktree: the plugin that owns the project lists it, and the folder carries
+  // that plugin's marker, not `.git`. Its kind, or null for anything else.
+  const pluginWorktreeKind = Effect.fnUntraced(function* (
     worktreePath: string,
     projectRoot: string,
   ) {
-    if (!gitWorkflowHasPlugins()) return false;
-    // Git's own worktrees go through Git: a plugin checkout carries its marker, not `.git`.
+    if (!gitWorkflowHasPlugins()) return null;
     if (yield* fs.exists(path.join(worktreePath, ".git")).pipe(Effect.orElseSucceed(() => true)))
-      return false;
+      return null;
+    const project = yield* gitWorkflow
+      .localStatus({ cwd: projectRoot })
+      .pipe(Effect.orElseSucceed(() => null));
+    const kind = project?.capabilities?.kind;
+    const plugin = kind === undefined ? undefined : plugins?.describe(kind);
+    if (kind === undefined || plugin === undefined) return null;
     let marked = false;
-    for (const marker of plugins?.markers() ?? []) {
+    for (const marker of plugin.markers) {
       if (yield* fs.exists(path.join(worktreePath, marker)).pipe(Effect.orElseSucceed(() => false)))
         marked = true;
     }
-    if (!marked) return false;
+    if (!marked) return null;
     const listed = yield* gitWorkflow
       .listWorktrees(projectRoot)
       .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-    return listed.some((entry) => pathKey(entry) === pathKey(worktreePath));
+    return listed.some((entry) => pathKey(entry) === pathKey(worktreePath)) ? kind : null;
+  });
+  // The checkout around `target` for a plugin's worktree, found by any installed plugin's marker,
+  // as the plugin's own removal resolves it; null inside the project's repository itself.
+  const pluginCheckoutAround = Effect.fnUntraced(function* (target: string, projectCwd: string) {
+    const markers = plugins?.installedMarkers() ?? [];
+    if (markers.length === 0) return null;
+    let folder = path.resolve(target);
+    while (true) {
+      for (const marker of markers) {
+        if (yield* fs.exists(path.join(folder, marker)).pipe(Effect.orElseSucceed(() => false)))
+          return inside(folder, path.resolve(projectCwd)) || pathKey(folder) === pathKey(projectCwd)
+            ? null
+            : folder;
+      }
+      const parent = path.dirname(folder);
+      if (parent === folder) return null;
+      folder = parent;
+    }
   });
   // What the plugin's status says about one of its worktrees, read fresh for each check.
   const pluginWorktreeState = Effect.fnUntraced(function* (
@@ -409,6 +434,7 @@ const make = Effect.gen(function* () {
       (file) => rules.worktreeKeepWhen !== "tracked-changes" || file.untracked !== true,
     ).length;
     return {
+      kind: status.capabilities?.kind,
       label: plugin?.label ?? "Its VCS plugin",
       recreates: plugin?.recreatesWorktrees === true,
       branchChanged: status.refName !== branch,
@@ -454,8 +480,12 @@ const make = Effect.gen(function* () {
   ) {
     const target = path.resolve(projectCwd ?? "", folder);
     const taskFolder = yield* taskFolders.find(target);
+    // A plugin removes the whole checkout around any path in it, so its checks cover all of it.
+    const pluginCheckout =
+      projectCwd === undefined ? null : yield* pluginCheckoutAround(target, projectCwd);
     return (
       taskFolder?.root ??
+      pluginCheckout ??
       (projectCwd === undefined
         ? ((yield* gitWorkflow.repositoryRoot(target)) ?? target)
         : yield* worktreeRootForProject(
@@ -1558,11 +1588,14 @@ const make = Effect.gen(function* () {
         }
         // Atelier fork: a VCS plugin's worktree goes through the plugin. Only age, settling and
         // deletion apply; the merge and unchanged rules read Git history a plugin does not expose.
-        if (yield* isListedPluginWorktree(worktreePath, project.workspaceRoot)) {
+        const pluginKind = yield* pluginWorktreeKind(worktreePath, project.workspaceRoot);
+        if (pluginKind !== null) {
           if (!eligible) return keep(notDueReason);
           const pluginPathReason = yield* worktreePathReason(worktreePath, false);
           if (pluginPathReason !== null) return keep(pluginPathReason);
           const first = yield* pluginWorktreeState(worktreePath, thread.branch, settings);
+          // The folder answers for another VCS than the project's plugin.
+          if (first.kind !== pluginKind) return keep("repository or branch changed");
           if (first.branchChanged) {
             if (!deleted) yield* followBranch(thread.worktreePath!);
             return keep("repository or branch changed");
@@ -1581,7 +1614,8 @@ const make = Effect.gen(function* () {
           if (first.changes !== null) return keep(first.changes);
           const blocked = yield* blockedSinceCheck();
           if (blocked !== null) return keep(blocked);
-          const inspection = yield* measureWorktree(worktreePath);
+          // As for Git: a repository nested inside, with work of its own, keeps the folder.
+          const inspection = yield* measureWorktree(worktreePath, true);
           if (inspection.reason !== null) return keep(inspection.reason);
           return yield* withCleanupLease(
             worktreePath,
@@ -1591,7 +1625,12 @@ const make = Effect.gen(function* () {
               const lastPathReason = yield* worktreePathReason(worktreePath, false);
               if (lastPathReason !== null) return keep(lastPathReason);
               const last = yield* pluginWorktreeState(worktreePath, thread.branch, settings);
-              if (last.branchChanged) return keep("repository or branch changed since check");
+              if (
+                last.kind !== pluginKind ||
+                (yield* pluginWorktreeKind(worktreePath, project.workspaceRoot)) !== pluginKind ||
+                last.branchChanged
+              )
+                return keep("repository or branch changed since check");
               if (yield* unrecoverable(last.recreates)) return keep(cannotRecreate);
               if (last.changes !== null) return keep(last.changes);
               if (yield* settingsChangedSinceCheck) return keep("settings changed since check");

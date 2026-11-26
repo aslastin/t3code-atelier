@@ -521,6 +521,7 @@ const make = Effect.gen(function* () {
         if (driver && manifest?.id === kind)
           return {
             label: manifest.label,
+            markers: manifest.detect.markers,
             // Recovery checks the branch is still there before checking it out again.
             recreatesWorktrees:
               supportsWorktrees(manifest) &&
