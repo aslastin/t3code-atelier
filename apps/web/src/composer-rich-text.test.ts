@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { inlineMarkdownUnitMarks, parseInlineMarkdown } from "./composer-rich-text";
+import { inlineMarkdownUnits, parseInlineMarkdown } from "./composer-rich-text";
 
 describe("composer rich text markdown", () => {
   it("preserves unmatched markers, escaped markers, and identifiers", () => {
@@ -114,9 +114,62 @@ describe("composer rich text markdown", () => {
     ]);
   });
 
+  it("parses web links, with styles inside their labels", () => {
+    const href = "https://t3.codes";
+    expect(parseInlineMarkdown(`see [project website](${href}).`)).toEqual([
+      { text: "see ", marks: [] },
+      { text: "project website", marks: ["link"], href },
+      { text: ".", marks: [] },
+    ]);
+    expect(parseInlineMarkdown(`[a **b** \`c\`](${href})`)).toEqual([
+      { text: "a ", marks: ["link"], href },
+      { text: "b", marks: ["link", "bold"], href },
+      { text: " ", marks: ["link"], href },
+      { text: "c", marks: ["link", "code"], href },
+    ]);
+    expect(parseInlineMarkdown(`**see [docs](${href})**`)).toEqual([
+      { text: "see ", marks: ["bold"] },
+      { text: "docs", marks: ["bold", "link"], href },
+    ]);
+    expect(parseInlineMarkdown(`[a](${href})[b](https://x.dev)`)).toEqual([
+      { text: "a", marks: ["link"], href },
+      { text: "b", marks: ["link"], href: "https://x.dev" },
+    ]);
+    const wiki = "https://en.wikipedia.org/wiki/Foo_(bar)";
+    expect(parseInlineMarkdown(`[w](${wiki})`)).toEqual([
+      { text: "w", marks: ["link"], href: wiki },
+    ]);
+    // A label ends at its `]`: emphasis opened outside cannot close inside it.
+    expect(parseInlineMarkdown(`*a [b* c](${href})`)).toEqual([
+      { text: "*a ", marks: [] },
+      { text: "b* c", marks: ["link"], href },
+    ]);
+    expect(parseInlineMarkdown(`[a \`b](${href}) c\``)).toEqual([
+      { text: "a `b", marks: ["link"], href },
+      { text: " c`", marks: [] },
+    ]);
+  });
+
+  it.each([
+    "![image](https://t3.codes/a.png)",
+    "\\[label](https://t3.codes)",
+    "[relative](./src/a.ts)",
+    "[mail](mailto:a@b.c)",
+    "[spaced](https://t3.codes/a b)",
+    "[](https://t3.codes)",
+    "[label] (https://t3.codes)",
+    "`[code](https://t3.codes)`",
+  ])("keeps %s literal", (text) => {
+    expect(parseInlineMarkdown(text).some((span) => span.marks.includes("link"))).toBe(false);
+  });
+
   it("maps each source character to its marks, or null for a dropped delimiter", () => {
     const bold = ["bold"];
-    expect(inlineMarkdownUnitMarks("**`*` w** \\*")).toEqual([
+    expect(inlineMarkdownUnits("[a](https://x.y)")).toEqual({
+      marks: [null, ["link"], ...Array.from({ length: 14 }, () => null)],
+      hrefs: [undefined, "https://x.y", ...Array.from({ length: 14 }, () => undefined)],
+    });
+    expect(inlineMarkdownUnits("**`*` w** \\*").marks).toEqual([
       null,
       null,
       null,

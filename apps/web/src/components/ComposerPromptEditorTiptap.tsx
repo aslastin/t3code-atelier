@@ -127,6 +127,13 @@ import { basenameOfPath } from "~/pierre-icons";
 import { WorkspaceEntryTooltip } from "./chat/WorkspaceEntryIcon";
 import { FileTagChipContent } from "./chat/FileTagChip";
 import { SkillChipPopover, skillPopoverDescription } from "./chat/SkillInlineText";
+import { ComposerLinkEditor } from "./chat/ComposerLinkEditor";
+import {
+  applyComposerLink,
+  ComposerLinkExtension,
+  linkableRange,
+  setPendingLink,
+} from "~/composer-link";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
 import { ModelMentionChip, modelMentionKey, modelMentionKeysAtom } from "./chat/ModelMentionChip";
 import { getTimelinePageScrollKey } from "./chat/pageScrollController";
@@ -167,6 +174,8 @@ export interface ComposerPromptEditorHandle {
     contextIds: string[];
   };
   isCaretOnVisualEdge: (edge: "start" | "end") => boolean;
+  /** Opens the URL field under the selection. False in plain text or where a link cannot go. */
+  openLinkEditor: () => boolean;
 }
 
 export interface ComposerPromptEditorProps {
@@ -888,6 +897,7 @@ function createComposerExtensions(richText: boolean) {
     ...(richText
       ? [
           ComposerMarkdownSourceExtension,
+          ComposerLinkExtension,
           ComposerItalicExtension,
           ComposerBoldExtension,
           ComposerStrikeExtension,
@@ -1045,6 +1055,7 @@ function ComposerPromptEditorTiptapInner(
   const [openCitation, setOpenCitation] = useState<OpenCitationComment | null>(null);
   const citationDraftRef = useRef<{ key: string; comment: string } | null>(null);
   const [isEmpty, setIsEmpty] = useState(value.length === 0);
+  const [linkEditorOpen, setLinkEditorOpen] = useState(false);
 
   const citationCommentActions = {
     openComment: openCitation,
@@ -1852,6 +1863,14 @@ function ComposerPromptEditorTiptapInner(
         }
       },
       readSnapshot,
+      openLinkEditor: () => {
+        if (!editor || !richText || !editor.isEditable) return false;
+        const range = linkableRange(editor.state.doc, editor.state.selection);
+        if (!range) return false;
+        setPendingLink(editor, range);
+        setLinkEditorOpen(true);
+        return true;
+      },
       isCaretOnVisualEdge: (edge) => {
         const snapshot = readSnapshot();
         if (snapshot.value.length === 0) return true;
@@ -1883,8 +1902,28 @@ function ComposerPromptEditorTiptapInner(
           : edgeRect.bottom - caretRect.bottom < threshold;
       },
     }),
-    [editor, focusAt, literalText, readSnapshot],
+    [editor, focusAt, literalText, readSnapshot, richText],
   );
+
+  const closeLinkEditor = (restoreSelection: boolean) => {
+    setLinkEditorOpen(false);
+    if (!editor || editor.isDestroyed) return;
+    setPendingLink(editor, null);
+    if (restoreSelection) editor.view.focus();
+  };
+  // Read when the field positions itself, so it follows the text as the editor scrolls.
+  const linkEditorAnchor = editor
+    ? {
+        contextElement: editor.view.dom,
+        getBoundingClientRect: () => {
+          const { from, to } = editor.state.selection;
+          const start = editor.view.coordsAtPos(from, 1);
+          const end = editor.view.coordsAtPos(to, -1);
+          const width = start.top === end.top ? Math.max(0, end.left - start.left) : 0;
+          return new DOMRect(start.left, start.top, width, end.bottom - start.top);
+        },
+      }
+    : null;
 
   const handleCopyCut = (event: React.ClipboardEvent, cut: boolean) => {
     const build = buildContextClipboardFragment;
@@ -1967,6 +2006,17 @@ function ComposerPromptEditorTiptapInner(
               onCopyCapture={(event) => handleCopyCut(event, false)}
               onCutCapture={(event) => handleCopyCut(event, true)}
             />
+            {linkEditorOpen && editor && linkEditorAnchor ? (
+              <ComposerLinkEditor
+                anchor={linkEditorAnchor}
+                onApply={(href) => {
+                  if (!applyComposerLink(editor, href)) return false;
+                  closeLinkEditor(false);
+                  return true;
+                }}
+                onClose={closeLinkEditor}
+              />
+            ) : null}
             {isEmpty && contextRecords.size === 0 && placeholder ? (
               <div
                 className={cn(

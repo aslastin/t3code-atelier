@@ -280,12 +280,33 @@ export function groupKeybindingRows(
   });
 }
 
+function whenRequires(node: KeybindingWhenNode | undefined, identifier: string): boolean {
+  if (!node) return false;
+  if (node.type === "identifier") return node.name === identifier;
+  if (node.type === "and") {
+    return whenRequires(node.left, identifier) || whenRequires(node.right, identifier);
+  }
+  return false;
+}
+
+/** A macOS-only default is not a shortcut elsewhere, so its command stays unbound there. */
+function isOtherPlatformDefault(binding: ResolvedKeybindingRule, platform: string): boolean {
+  return (
+    !isMacPlatform(platform) &&
+    whenRequires(binding.whenAst, "isMac") &&
+    sourceForBinding(binding) === "Default"
+  );
+}
+
 export function buildKeybindingRows(
-  keybindings: ResolvedKeybindingsConfig,
+  allKeybindings: ResolvedKeybindingsConfig,
   platform = navigator.platform,
   sendShortcut: ClientSettings["sendShortcut"] = "enter",
   resolve: MessageResolver = m,
 ): ReadonlyArray<KeybindingRow> {
+  const keybindings = allKeybindings.filter(
+    (binding) => !isOtherPlatformDefault(binding, platform),
+  );
   // Multiline sending can use either shortcut; settings have no active composer prompt.
   const modifierModes =
     sendShortcut === "mod-enter-multiline" ? [false, true] : [sendShortcut === "mod-enter"];
@@ -480,6 +501,7 @@ const COMMAND_LABELS: Partial<Record<KeybindingCommand, string>> = {
   "composer.workspace": msg("Composer: Workspace"),
   "composer.previousWorktree": msg("Composer: Previous Worktree"),
   "composer.branch": msg("Composer: Branch"),
+  "composer.insertLink": msg("Composer: Insert Link"),
   "chat.new": msg("Chat: New"),
   "chat.newLocal": msg("Chat: New Local"),
   "chat.newWithoutProject": msg("Chat: New Without Project"),

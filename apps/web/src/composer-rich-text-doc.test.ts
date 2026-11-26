@@ -36,6 +36,7 @@ import {
   stepCaretAcrossStyledEdge,
   surroundSelectionWithMark,
 } from "./composer-rich-text-doc";
+import { ComposerLinkExtension } from "./composer-link";
 
 function stubAtom(name: string, attrs: Record<string, { default: unknown }>) {
   return Node.create({
@@ -61,8 +62,10 @@ const schema = getSchemaByResolvedExtensions(
       gapcursor: false,
       trailingNode: false,
       code: false,
+      link: false,
     }),
     ComposerCodeExtension,
+    ComposerLinkExtension,
     stubAtom("composer-mention", { path: { default: "" }, source: { default: "" } }),
     stubAtom("composer-skill", {
       skillName: { default: "" },
@@ -323,6 +326,14 @@ describe("composer rich text document model", () => {
     "snake_case stays literal",
     "unmatched ** stays literal",
     "**bold** then @README.md then *italic*",
+    "see [project website](https://t3.codes) now",
+    "**see [docs](https://t3.codes)**",
+    "[**a** `b` c](https://t3.codes)",
+    "[a](https://t3.codes)[b](https://x.dev)",
+    "[@README.md](https://t3.codes)",
+    "[w](https://en.wikipedia.org/wiki/Foo_(bar))",
+    "![image](https://t3.codes/a.png) stays literal",
+    "[relative](./a.ts) stays literal",
   ])("round-trips %s through a real ProseMirror document", (value) => {
     expect(roundTrip(value).value).toBe(value);
   });
@@ -370,6 +381,33 @@ describe("composer rich text document model", () => {
     expect(list.childCount).toBe(2);
     expect(list.child(0).childCount).toBe(1);
     expect(list.child(1).child(1).firstChild!.textContent).toBe("child");
+  });
+
+  it("keeps a link's destination on its label and writes it back", () => {
+    const doc = ProseMirrorNode.fromJSON(
+      schema,
+      buildDocJson("see **[docs](https://t3.codes)**", (name) => ({
+        label: name,
+        description: null,
+      })),
+    );
+    expect(doc.textContent).toBe("see docs");
+    const label = doc.firstChild!.lastChild!;
+    expect(label.marks.map((mark) => [mark.type.name, mark.attrs.href ?? null])).toEqual([
+      ["link", "https://t3.codes"],
+      ["bold", null],
+    ]);
+    const plain = schema.text("see ");
+    const linked = (text: string, href: string) =>
+      schema.text(text, [schema.marks.link!.create({ href })]);
+    const adjacent = schema.node("doc", null, [
+      schema.node("paragraph", null, [
+        plain,
+        linked("a", "https://t3.codes"),
+        linked("b", "https://x.dev"),
+      ]),
+    ]);
+    expect(serializeEditorDoc(adjacent).value).toBe("see [a](https://t3.codes)[b](https://x.dev)");
   });
 
   it("applies a shared mark to text on both sides of a chip", () => {

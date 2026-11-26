@@ -66,6 +66,12 @@ Some styled text containing or touching literal Markdown characters, such as a
 bold `path\` or `2*3`, keeps its styling without showing markers. Use formatting
 shortcuts or turn off rich text to edit the formatting of those ranges.
 
+Type `[label](https://…)` to add a link: it shows as the label with the site's icon,
+and its Markdown shows while your cursor is inside it. To link text you already
+wrote, select it and press `⌃⌘K` on macOS, then type or paste the address and press
+Enter; Esc cancels. On Windows and Linux, bind **Composer: Insert Link** in
+**Settings → Keybindings** first. Only `http` and `https` addresses become links.
+
 Enter sends. In a list or quote, **Shift+Enter** continues it, and Shift+Enter
 on an empty line moves out one level, then leaves it; **Tab** nests a list item
 under the one above and **Shift+Tab** moves it back out. In a code block, Enter

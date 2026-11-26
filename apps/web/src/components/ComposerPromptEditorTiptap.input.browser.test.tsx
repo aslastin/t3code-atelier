@@ -21,9 +21,9 @@ import { formatComposerContextReference } from "@t3tools/shared/composerContextR
 import type { Editor } from "@tiptap/core";
 import { redoDepth, undoDepth } from "@tiptap/pm/history";
 import { NodeSelection } from "@tiptap/pm/state";
-import { createElement, createRef, useEffect, useState } from "react";
+import { createElement, createRef, type RefObject, useEffect, useState } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { cdp, userEvent } from "vite-plus/test/browser";
+import { cdp, page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 import { act, fakeTimers, render } from "../../test/render";
@@ -68,6 +68,7 @@ function Composer({
   importContextFragment,
   literalText = false,
   disabled = false,
+  editorRef = createRef<ComposerPromptEditorHandle>(),
 }: {
   value: string;
   richTextEnabled: boolean;
@@ -77,11 +78,12 @@ function Composer({
   importContextFragment?: ComposerPromptEditorProps["importContextFragment"];
   literalText?: boolean;
   disabled?: boolean;
+  editorRef?: RefObject<ComposerPromptEditorHandle | null>;
 }) {
   const [prompt, setPrompt] = useState({ value, cursor: value.length });
   return (
     <ComposerPromptEditor
-      editorRef={createRef<ComposerPromptEditorHandle>()}
+      editorRef={editorRef}
       value={prompt.value}
       cursor={prompt.cursor}
       richTextEnabled={richTextEnabled}
@@ -1202,3 +1204,135 @@ it.each(["other field", "document body"])(
     );
   },
 );
+
+describe("Markdown links", () => {
+  const href = "https://t3.codes";
+
+  it("shows a typed link as its label with a favicon, and its Markdown while the caret is inside", async () => {
+    await using screen = await mountEditor("see ");
+    const { editor } = screen;
+    await focusAt(editor, "end");
+    await userEvent.keyboard(`[[project website](${href}`);
+    await userEvent.keyboard(")");
+    await userEvent.keyboard(" now");
+    const value = () => serializeEditorDoc(editor.state.doc).value;
+    await vi.waitFor(() => expect(value()).toBe(`see [project website](${href}) now`));
+    expect(editor.state.doc.textContent).toBe("see project website now");
+    const link = editor.view.dom.querySelector("a.composer-link");
+    expect(link?.textContent).toBe("project website");
+    expect(link?.getAttribute("href")).toBe(href);
+    expect(link?.querySelector(".composer-link-favicon img")?.getAttribute("src")).toContain(
+      "t3.codes",
+    );
+
+    await act(async () => {
+      editor.commands.setTextSelection("see proj".length + 1);
+    });
+    expect(textWithMark(editor, "markdownSource")).toEqual([`[project website](${href})`]);
+    expect(editor.view.dom.querySelector("a.composer-link")).toBeNull();
+    // The caret beside the link stays outside it.
+    await act(async () => {
+      editor.commands.setTextSelection("see ".length + 1);
+    });
+    expect(editor.state.doc.textContent).toBe("see project website now");
+    expect(value()).toBe(`see [project website](${href}) now`);
+  });
+
+  it("restores a draft's links with their favicons", async () => {
+    await using screen = await mountEditor(`see [docs](${href}) and [more](https://x.dev)`);
+    const links = screen.container.querySelectorAll("a.composer-link");
+    expect(Array.from(links, (link) => link.textContent)).toEqual(["docs", "more"]);
+    expect(screen.container.querySelectorAll(".composer-link-favicon")).toHaveLength(2);
+  });
+
+  it.each([
+    { keys: `[[**bold** label](${href})`, value: `[**bold** label](${href})`, bold: ["bold"] },
+    { keys: `![[image](${href})`, value: `![image](${href})`, bold: [] },
+    { keys: `\`[[code](${href})\``, value: `\`[code](${href})\``, bold: [] },
+  ])("types $value", async ({ keys, value, bold }) => {
+    await using screen = await mountEditor("");
+    const { editor } = screen;
+    await focusAt(editor, "end");
+    await userEvent.keyboard(keys);
+    await userEvent.keyboard(" ");
+    await vi.waitFor(() => expect(serializeEditorDoc(editor.state.doc).value).toBe(`${value} `));
+    expect(textWithMark(editor, "bold")).toEqual(bold);
+    expect(textWithMark(editor, "link").length > 0).toBe(
+      !value.startsWith("!") && !value.startsWith("`"),
+    );
+  });
+
+  it("links selected text from the URL field and returns to the draft", async () => {
+    const editorRef = createRef<ComposerPromptEditorHandle>();
+    const onCommandKeyDown = vi.fn(() => false);
+    await using screen = await render(
+      <Composer
+        value="see project website now"
+        richTextEnabled
+        skills={[]}
+        editorRef={editorRef}
+        onCommandKeyDown={onCommandKeyDown}
+      />,
+    );
+    const editor = editorIn(screen.container);
+    await focusAt(editor, "end");
+    const selection = { from: "see ".length + 1, to: "see project website".length + 1 };
+    await act(async () => {
+      editor.commands.setTextSelection(selection);
+    });
+    await act(async () => {
+      expect(editorRef.current?.openLinkEditor()).toBe(true);
+    });
+    // The field is portaled outside the composer.
+    const field = page.getByRole("textbox", { name: "Link URL" });
+    await expect.element(field).toHaveFocus();
+    await userEvent.keyboard("t3.codes{Enter}");
+    await vi.waitFor(() =>
+      expect(serializeEditorDoc(editor.state.doc).value).toBe(`see [project website](${href}) now`),
+    );
+    await expect.element(field).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(editor.view.dom);
+    expect(editor.state.selection.from).toBe(selection.to);
+    // Enter applied the link without reaching the composer's send handling.
+    expect(onCommandKeyDown).not.toHaveBeenCalledWith(
+      "Enter",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("closes the URL field on Escape and restores the selection", async () => {
+    const editorRef = createRef<ComposerPromptEditorHandle>();
+    await using screen = await render(
+      <Composer value="see project website" richTextEnabled skills={[]} editorRef={editorRef} />,
+    );
+    const editor = editorIn(screen.container);
+    await focusAt(editor, "end");
+    const selection = { from: "see ".length + 1, to: "see project website".length + 1 };
+    await act(async () => {
+      editor.commands.setTextSelection(selection);
+      editorRef.current?.openLinkEditor();
+    });
+    // The field is portaled outside the composer.
+    const field = page.getByRole("textbox", { name: "Link URL" });
+    await expect.element(field).toHaveFocus();
+    await userEvent.keyboard("t3.co{Escape}");
+    await expect.element(field).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(editor.view.dom);
+    expect(editor.state.selection).toMatchObject(selection);
+    expect(serializeEditorDoc(editor.state.doc).value).toBe("see project website");
+  });
+
+  it("does not open the URL field for a selection across lines", async () => {
+    const editorRef = createRef<ComposerPromptEditorHandle>();
+    await using screen = await render(
+      <Composer value={"one\ntwo"} richTextEnabled skills={[]} editorRef={editorRef} />,
+    );
+    const editor = editorIn(screen.container);
+    await focusAt(editor, "end");
+    await act(async () => {
+      editor.commands.selectAll();
+    });
+    expect(editorRef.current?.openLinkEditor()).toBe(false);
+  });
+});

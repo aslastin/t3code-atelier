@@ -12514,5 +12514,8 @@
   "27d76249d09eb69f": "Review guide ready",
   "faa3bb26abb39c93": "Review guide failed",
   "b7df38b7d8792d78": "Open guide",
-  "9e91e9a77b664e4e": "Could not start a review guide"
+  "9e91e9a77b664e4e": "Could not start a review guide",
+  "37a429403eb2ce81": "Paste or type a link",
+  "e2a6de936b3851b1": "Link URL",
+  "a3dbdd8512f068e5": "Composer: Insert Link"
 }

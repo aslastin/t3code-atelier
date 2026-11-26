@@ -451,6 +451,26 @@ describe("chat/editor shortcuts", () => {
     }
   });
 
+  it("binds Insert Link to Control+Command+K in the composer on macOS only", () => {
+    const input = (platform: string) =>
+      event({ key: "k", ctrlKey: true, metaKey: platform === "MacIntel" });
+    for (const platform of ["MacIntel", "Win32", "Linux"]) {
+      assert.strictEqual(
+        resolveShortcutCommand(input(platform), DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform,
+          context: { composerFocus: true },
+        }),
+        platform === "MacIntel" ? "composer.insertLink" : "commandPalette.toggle",
+      );
+    }
+    assert.isNull(
+      resolveShortcutCommand(input("MacIntel"), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { composerFocus: false },
+      }),
+    );
+  });
+
   it("preserves a user-configured thread panel shortcut instead of its default", () => {
     const bindings = mergeWithDefaultKeybindings(
       compile([

@@ -325,6 +325,8 @@ export interface ChatComposerHandle {
   openControl: (command: KeybindingCommand) => void;
   isModelPickerOpen: () => boolean;
   isCaretAtStart: () => boolean;
+  /** Opens the URL field for the selected text. False when the editor cannot link it. */
+  insertLink: () => boolean;
   compactContext: () => void;
   readSnapshot: () => {
     value: string;
@@ -3271,6 +3273,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       },
       compactContext: compactThreadContextStable,
       isModelPickerOpen: () => isComposerModelPickerOpen,
+      insertLink: () => composerEditorRef.current?.openLinkEditor() ?? false,
       isCaretAtStart: () => {
         const range = composerEditorRef.current?.readSelectionRange();
         return range !== undefined && range.start === 0 && range.end === 0;

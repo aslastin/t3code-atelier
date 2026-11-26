@@ -21,11 +21,7 @@ import {
 import { type Mapping, StepMap } from "@tiptap/pm/transform";
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 
-import {
-  inlineMarkdownUnitMarks,
-  MARKDOWN_SOURCE_MARK,
-  type RichTextMark,
-} from "~/composer-rich-text";
+import { inlineMarkdownUnits, MARKDOWN_SOURCE_MARK, type RichTextMark } from "~/composer-rich-text";
 import { caretTakesMarksBefore, serializeEditorDoc } from "~/composer-rich-text-doc";
 
 // Styled text the selection touches becomes source text with the source mark,
@@ -33,8 +29,8 @@ import { caretTakesMarksBefore, serializeEditorDoc } from "~/composer-rich-text-
 // they were recorded in, so the history records both rewrites. Recording would
 // clear redo after undo or redo, so until the next edit see `normalizeDetached`.
 
-const STYLE_MARKS: RichTextMark[] = ["bold", "italic", "strike", "code"];
-const PREVIEW_TAGS: Record<Exclude<RichTextMark, "code">, string> = {
+const STYLE_MARKS: RichTextMark[] = ["bold", "italic", "strike", "code", "link"];
+const PREVIEW_TAGS: Record<Exclude<RichTextMark, "code" | "link">, string> = {
   bold: "strong",
   italic: "em",
   strike: "s",
@@ -53,7 +49,7 @@ function collectStyledRanges(doc: ProseMirrorNode): StyledRange[] {
   const ranges: StyledRange[] = [];
   const map = serializeEditorDoc(doc);
   let range: StyledRange | null = null;
-  let openLength = 0;
+  let openStyles = 0;
   for (const run of map.runs) {
     if (run.nodeName === "codeBlock") continue;
     if (run.openLen > 0) {
@@ -81,8 +77,8 @@ function collectStyledRanges(doc: ProseMirrorNode): StyledRange[] {
         text: map.value.slice(end - run.closeLen, end),
       });
     }
-    openLength += run.openLen - run.closeLen;
-    if (openLength === 0) {
+    openStyles += (run.opens ?? 0) - (run.closes ?? 0);
+    if (openStyles === 0) {
       ranges.push(range);
       range = null;
     }
@@ -121,13 +117,54 @@ function revealsFaithfully(doc: ProseMirrorNode, range: StyledRange): boolean {
     return false;
   });
   addMarkers(range.to);
-  return inlineMarkdownUnitMarks(text).every((marks, index) => sameMarks(marks, expected[index]!));
+  return inlineMarkdownUnits(text).marks.every((marks, index) =>
+    sameMarks(marks, expected[index]!),
+  );
 }
 
-function touches(selection: Selection, { from, to }: TextRange): boolean {
-  return selection.empty
-    ? selection.from >= from && selection.from <= to
-    : selection.from < to && selection.to > from;
+/** Which ends of a range are a link's own brackets, rather than another style's markers. */
+type LinkEdges = { start: boolean; end: boolean };
+
+const NO_LINK_EDGES: LinkEdges = { start: false, end: false };
+
+/**
+ * A caret at the outer edge of a link stays beside it, so typing a link's
+ * closing `)` shows it as a link at once. Other styles show their markers there.
+ */
+function touches(
+  selection: Selection,
+  { from, to }: TextRange,
+  link: LinkEdges = NO_LINK_EDGES,
+): boolean {
+  if (!selection.empty) return selection.from < to && selection.to > from;
+  return (
+    (link.start ? selection.from > from : selection.from >= from) &&
+    (link.end ? selection.from < to : selection.from <= to)
+  );
+}
+
+function styledRangeLinkEdges(range: StyledRange): LinkEdges {
+  return {
+    start: range.markers.some(
+      ({ at, closing, text }) => !closing && at === range.from && text.startsWith("["),
+    ),
+    end: range.markers.some(
+      ({ at, closing, text }) => closing && at === range.to && text.endsWith(")"),
+    ),
+  };
+}
+
+/** Only a link drops brackets and parentheses when parsed. */
+function sourceLinkEdges(doc: ProseMirrorNode, region: TextRange): LinkEdges {
+  const { text, units } = regionUnits(doc, region);
+  return {
+    start: text.startsWith("[") && units[0] === null,
+    end: text.endsWith(")") && units.at(-1) === null,
+  };
+}
+
+function touchesSource(selection: Selection, doc: ProseMirrorNode, region: TextRange): boolean {
+  return touches(selection, region, sourceLinkEdges(doc, region));
 }
 
 function sourceRegions(doc: ProseMirrorNode, type: MarkType): TextRange[] {
@@ -197,17 +234,20 @@ function forEachUnitRun(
 
 function regionUnits(doc: ProseMirrorNode, { from, to }: TextRange) {
   const text = doc.textBetween(from, to, undefined, ATOM_TEXT);
-  return { text, units: inlineMarkdownUnitMarks(text) };
+  const { marks, hrefs } = inlineMarkdownUnits(text);
+  return { text, units: marks, hrefs };
 }
 
 function collapseRegion(tr: Transaction, region: TextRange, type: MarkType): void {
   const { schema } = tr.doc.type;
-  const { units } = regionUnits(tr.doc, region);
+  const { units, hrefs } = regionUnits(tr.doc, region);
   tr.removeMark(region.from, region.to, type);
   forEachUnitRun(units, (start, end, marks) => {
     for (const name of marks ?? []) {
       const markType = schema.marks[name];
-      if (markType) tr.addMark(region.from + start, region.from + end, markType.create());
+      // Runs split at every delimiter, so each link run has one destination.
+      const attrs = name === "link" ? { href: hrefs[start] } : null;
+      if (markType) tr.addMark(region.from + start, region.from + end, markType.create(attrs));
     }
   });
   const deletions: TextRange[] = [];
@@ -217,8 +257,14 @@ function collapseRegion(tr: Transaction, region: TextRange, type: MarkType): voi
   for (const { from, to } of deletions.toReversed()) tr.delete(from, to);
 }
 
+/** Parses the text in `region` as inline Markdown, in place, keeping the marks it has. */
+export function parseInlineMarkdownRange(tr: Transaction, region: TextRange): void {
+  const type = tr.doc.type.schema.marks[MARKDOWN_SOURCE_MARK];
+  if (type) collapseRegion(tr, region, type);
+}
+
 /** Parses source the selection does not touch back into marks, in place. */
-function collapseMarkdownSource(
+export function collapseMarkdownSource(
   tr: Transaction,
   keep: (region: TextRange) => boolean = () => false,
 ): TextRange[] {
@@ -269,7 +315,8 @@ function revealStyledText(tr: Transaction, type: MarkType, typed: boolean, takes
   const { schema } = tr.doc.type;
   const selection = tr.selection;
   const ranges = collectStyledRanges(tr.doc).filter(
-    (range) => touches(selection, range) && revealsFaithfully(tr.doc, range),
+    (range) =>
+      touches(selection, range, styledRangeLinkEdges(range)) && revealsFaithfully(tr.doc, range),
   );
   const revealed: { range: TextRange; step: number }[] = [];
   const insertions: { at: number; length: number; closing: boolean }[] = [];
@@ -314,7 +361,7 @@ function normalizeMarkdownSource(state: EditorState, typed: boolean): Transactio
   const type = state.schema.marks[MARKDOWN_SOURCE_MARK];
   if (!type) return null;
   const tr = state.tr;
-  collapseMarkdownSource(tr, (region) => touches(state.selection, region));
+  collapseMarkdownSource(tr, (region) => touchesSource(state.selection, tr.doc, region));
   revealStyledText(tr, type, typed, caretTakesMarksBefore(state));
   return tr.docChanged ? tr : null;
 }
@@ -331,7 +378,7 @@ function normalizeDetached(state: EditorState, revealed: TextRange[]): Transacti
   const tr = state.tr;
   const kept: TextRange[] = [];
   for (const region of revealed.toSorted((left, right) => right.from - left.from)) {
-    if (touches(state.selection, region)) kept.push(region);
+    if (touchesSource(state.selection, tr.doc, region)) kept.push(region);
     else collapseRegion(tr, region, type);
   }
   const added = revealStyledText(tr, type, false, caretTakesMarksBefore(state));
@@ -390,11 +437,19 @@ function previewDecorations(
 ): DecorationSet {
   const decorations: Decoration[] = [];
   for (const region of sourceRegions(doc, type)) {
-    const hide = hidden !== null && !touches(hidden, region);
+    const hide = hidden !== null && !touchesSource(hidden, doc, region);
     const { text, units } = regionUnits(doc, region);
     const codeTicks = new Set<number>();
     forEachUnitRun(units, (start, end, marks) => {
       for (const name of marks ?? []) {
+        if (name === "link") {
+          decorations.push(
+            Decoration.inline(region.from + start, region.from + end, {
+              class: "composer-link-source",
+            }),
+          );
+          continue;
+        }
         if (name !== "code") {
           decorations.push(
             Decoration.inline(region.from + start, region.from + end, {

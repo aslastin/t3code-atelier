@@ -2,6 +2,7 @@ import { assert, describe, expect, it } from "vite-plus/test";
 import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import {
   compileResolvedKeybindingsConfig,
+  DEFAULT_RESOLVED_KEYBINDINGS,
   parseKeybindingShortcut,
 } from "@t3tools/shared/keybindings";
 
@@ -19,6 +20,26 @@ import {
 } from "./KeybindingsSettings.logic";
 
 describe("KeybindingsSettings.logic", () => {
+  it("lists the macOS-only Insert Link default on macOS alone", () => {
+    const insertLink = (platform: string) =>
+      buildKeybindingRows(DEFAULT_RESOLVED_KEYBINDINGS, platform)
+        .filter((row) => row.command === "composer.insertLink")
+        .map(({ key, when, source }) => ({ key, when, source }));
+    expect(insertLink("MacIntel")).toEqual([
+      { key: "meta+ctrl+k", when: "composerFocus && isMac", source: "Default" },
+    ]);
+    expect(insertLink("Win32")).toEqual([]);
+    expect(insertLink("Linux x86_64")).toEqual([]);
+    const custom = compileResolvedKeybindingsConfig([
+      { command: "composer.insertLink", key: "mod+alt+k", when: "composerFocus" },
+    ]);
+    expect(
+      buildKeybindingRows([...DEFAULT_RESOLVED_KEYBINDINGS, ...custom], "Win32")
+        .filter((row) => row.command === "composer.insertLink")
+        .map((row) => row.key),
+    ).toEqual(["mod+alt+k"]);
+  });
+
   it("keeps sibling row identities when a saved binding moves to the end", () => {
     const bindings = compileResolvedKeybindingsConfig([
       { command: "chat.new", key: "mod+n" },
