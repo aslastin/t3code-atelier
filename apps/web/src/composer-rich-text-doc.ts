@@ -281,7 +281,7 @@ export const ComposerCodeExtension = Code.extend({
 });
 
 /** Counts backticks typed as plain text before `$pos` in its textblock; code text never pairs. */
-export function literalBackticksBefore($pos: ResolvedPos): number {
+function literalBackticksBefore($pos: ResolvedPos): number {
   let count = 0;
   $pos.parent.forEach((node, offset) => {
     if (offset >= $pos.parentOffset) return;

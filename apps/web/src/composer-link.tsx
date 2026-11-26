@@ -1,6 +1,7 @@
 import { type Editor, InputRule, Mark as TiptapMark } from "@tiptap/core";
-import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import type { Node as ProseMirrorNode, ResolvedPos } from "@tiptap/pm/model";
 import {
+  AllSelection,
   type EditorState,
   NodeSelection,
   Plugin,
@@ -20,8 +21,8 @@ import {
   hiddenSourceLinkStarts,
   parseInlineMarkdownRange,
 } from "~/composer-markdown-source";
-import { inlineMarkdownRoundTrips, literalBackticksBefore } from "~/composer-rich-text-doc";
-import { isComposerLinkHref, TYPED_LINK } from "~/composer-rich-text";
+import { inlineMarkdownRoundTrips } from "~/composer-rich-text-doc";
+import { isComposerLinkHref, MARKDOWN_SOURCE_MARK, TYPED_LINK } from "~/composer-rich-text";
 
 const URL_SCHEME = /^[a-z][a-z\d+.-]*:/i;
 // `localhost:3000` is a host and port, not a `localhost:` scheme; `mailto:1@a.b` is a scheme.
@@ -51,9 +52,10 @@ export function normalizeComposerLinkHref(input: string): string | null {
   }
   if ((url.protocol !== "http:" && url.protocol !== "https:") || !url.hostname) return null;
   if (isComposerLinkHref(withScheme)) return withScheme;
-  // Keep what the user wrote unless a character would end the Markdown destination.
-  const escaped = withScheme.replace(
-    /[()<>\\]/g,
+  // Otherwise take the browser's own spelling, where `\` is `/` and `<>` are escaped,
+  // and escape what would still end the Markdown destination.
+  const escaped = url.href.replace(
+    /[()]/g,
     (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
   );
   return isComposerLinkHref(escaped) ? escaped : null;
@@ -142,6 +144,22 @@ function inCode(state: EditorState, from: number, to: number): boolean {
   );
 }
 
+/** Backticks typed as plain text before `$pos` in its line, leaving out escaped ones. */
+function unescapedBackticksBefore($pos: ResolvedPos): number {
+  let count = 0;
+  $pos.parent.forEach((node, offset) => {
+    if (offset >= $pos.parentOffset) return;
+    if (!node.isText) {
+      count = 0;
+      return;
+    }
+    if (node.marks.some((mark) => mark.type.spec.code)) return;
+    const text = node.text!.slice(0, $pos.parentOffset - offset);
+    count += [...text.matchAll(/(?<!\\)(?:\\\\)*(?<!`)`(?!`)/g)].length;
+  });
+  return count;
+}
+
 function linksWholeRange(doc: ProseMirrorNode, from: number, to: number, href: string) {
   let linked = true;
   doc.nodesBetween(from, to, (node) => {
@@ -157,6 +175,9 @@ function typedLinkRule(): InputRule {
     find: TYPED_LINK,
     handler: ({ state, range, match }) => {
       const href = match[2]!;
+      // Only the closing `)` may be new: text inserted in one go, like a paste or an
+      // IME phrase, is not in the document yet, and it stays as typed.
+      if (range.to - range.from < match[0].length - 1) return null;
       const tail = `](${href}`;
       // Positions follow the match: the typed `)` may replace a selection or already be
       // in the document when an IME commits it. Labels hold no chips, so text lengths fit.
@@ -167,7 +188,7 @@ function typedLinkRule(): InputRule {
       // `![label](url)` is an image and `\[` a literal bracket, unless that backslash is escaped.
       if (
         (before.endsWith("!") ? backslashes.length % 2 === 0 : backslashes.length % 2 === 1) ||
-        literalBackticksBefore($from) % 2 === 1 ||
+        unescapedBackticksBefore($from) % 2 === 1 ||
         inCode(state, range.from, range.from + 1) ||
         inCode(state, tailStart, tailStart + tail.length)
       ) {
@@ -251,7 +272,8 @@ export function linkableRange(
   selection: Selection,
 ): { from: number; to: number } | null {
   if (selection instanceof NodeSelection && !selection.node.isInline) return null;
-  // Select All starts outside the text, so read the text it covers.
+  // Select All starts outside the text, so read the text it covers when it is one line.
+  if (selection instanceof AllSelection && doc.childCount !== 1) return null;
   const { from, to, $from, $to } = TextSelection.between(selection.$from, selection.$to);
   if (!$from.sameParent($to) || !$from.parent.inlineContent || $from.parent.type.spec.code) {
     return null;
@@ -273,6 +295,16 @@ function linkSelection(tr: Transaction, href: string): boolean {
   const type = tr.doc.type.schema.marks.link;
   if (!type) return false;
   const selected = !tr.selection.empty;
+  const source = tr.doc.type.schema.marks[MARKDOWN_SOURCE_MARK];
+  const { $from: $caret } = tr.selection;
+  // Parsing shown source moves a caret inside it, such as one in a link's address.
+  if (
+    !selected &&
+    source &&
+    [$caret.nodeBefore, $caret.nodeAfter].every((node) => node && source.isInSet(node.marks))
+  ) {
+    return false;
+  }
   collapseMarkdownSource(tr);
   const range = linkableRange(tr.doc, tr.selection);
   if (!range) return false;
@@ -282,18 +314,30 @@ function linkSelection(tr: Transaction, href: string): boolean {
   const from = range.from + text.length - text.trimStart().length;
   const to = Math.max(from, range.to - (text.length - text.trimEnd().length));
   if (selected && from === to) return false;
-  // A chip's source runs to the next space, so one ending a label would swallow `](`.
-  const last = tr.doc.resolve(to).nodeBefore;
-  if (from < to && last && !last.isText) return false;
+  // A chip's source would join the label's brackets: a mention needs a space before it,
+  // and a context reference is itself a link, which cannot nest.
+  let holdsChip = false;
+  tr.doc.nodesBetween(from, to, (node) => {
+    if (node.isInline && !node.isText) holdsChip = true;
+    return !holdsChip;
+  });
+  if (holdsChip) return false;
   const mark = type.create({ href });
   const probe = new Transform(tr.doc);
   if (from === to) probe.insert(from, tr.doc.type.schema.text(href, [mark]));
   else probe.removeMark(from, to, type).addMark(from, to, mark);
   // Text such as `!`, `[` or a partly linked code span would read back as something else.
+  // The link and its neighbours must read back even where other text in the line does not.
+  const $start = probe.doc.resolve(from);
+  const end = from === to ? from + href.length : to;
+  const nearby = probe.doc.slice(
+    Math.max($start.start(), from - 1),
+    Math.min($start.end(), end + 1),
+  ).content;
   const block = tr.doc.resolve(from).parent;
   if (
-    inlineMarkdownRoundTrips(block) &&
-    !inlineMarkdownRoundTrips(probe.doc.resolve(from).parent)
+    !inlineMarkdownRoundTrips(block.type.schema.nodes.paragraph!.create(null, nearby)) ||
+    (inlineMarkdownRoundTrips(block) && !inlineMarkdownRoundTrips($start.parent))
   ) {
     return false;
   }
@@ -309,7 +353,8 @@ export function canLinkSelection(state: EditorState): boolean {
 
 /** Links the selected text, or inserts the URL as its own label at a caret. */
 export function applyComposerLink(editor: Editor, href: string): boolean {
-  if (!canLinkSelection(editor.state)) return false;
+  // Check before focusing, so a refused link leaves focus in the URL field.
+  if (!linkSelection(editor.state.tr, href)) return false;
   return editor
     .chain()
     .focus()

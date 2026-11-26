@@ -89,8 +89,12 @@ function collectStyledRanges(doc: ProseMirrorNode): StyledRange[] {
 /** Whether the Markdown that reveal shows for `range` parses back to the same styles. */
 function revealsFaithfully(doc: ProseMirrorNode, range: StyledRange): boolean {
   if (range.escapedOpener) return false;
+  // A delimiter beside a link's brackets stays a literal character either way.
+  const edges = styledRangeLinkEdges(range);
   const adjacent = withAdjacentDelimiters(doc, range);
-  if (adjacent.from !== range.from || adjacent.to !== range.to) return false;
+  if (!(edges.start && edges.end) && (adjacent.from !== range.from || adjacent.to !== range.to)) {
+    return false;
+  }
   // Parsing keeps escapes as text, so styled `path\` or `2*3` stays styled, unshown.
   const markers = range.markers.toSorted(
     (left, right) => left.at - right.at || Number(right.closing) - Number(left.closing),
@@ -101,7 +105,8 @@ function revealsFaithfully(doc: ProseMirrorNode, range: StyledRange): boolean {
   const addMarkers = (pos: number) => {
     for (; next < markers.length && markers[next]!.at <= pos; next++) {
       text += markers[next]!.text;
-      expected.push(...markers[next]!.text.split("").map(() => null));
+      // A link's closing marker holds its whole address, too long to spread into arguments.
+      for (let index = 0; index < markers[next]!.text.length; index++) expected.push(null);
     }
   };
   doc.nodesBetween(range.from, range.to, (node, pos) => {
@@ -232,15 +237,32 @@ function forEachUnitRun(
   }
 }
 
-function regionUnits(doc: ProseMirrorNode, { from, to }: TextRange) {
+function regionUnits(doc: ProseMirrorNode, { from, to }: TextRange, literalCode = false) {
   const text = doc.textBetween(from, to, undefined, ATOM_TEXT);
-  const { marks, hrefs } = inlineMarkdownUnits(text);
+  let parsed = text;
+  if (literalCode) {
+    // Code keeps its characters, so mask them with plain placeholders before parsing.
+    const chars = parsed.split("");
+    doc.nodesBetween(from, to, (node, pos) => {
+      if (!node.isText || !node.marks.some((mark) => mark.type.spec.code)) return;
+      const start = Math.max(pos, from) - from;
+      const end = Math.min(pos + node.nodeSize, to) - from;
+      for (let index = start; index < end; index++) chars[index] = ATOM_TEXT;
+    });
+    parsed = chars.join("");
+  }
+  const { marks, hrefs } = inlineMarkdownUnits(parsed);
   return { text, units: marks, hrefs };
 }
 
-function collapseRegion(tr: Transaction, region: TextRange, type: MarkType): void {
+function collapseRegion(
+  tr: Transaction,
+  region: TextRange,
+  type: MarkType,
+  literalCode = false,
+): void {
   const { schema } = tr.doc.type;
-  const { units, hrefs } = regionUnits(tr.doc, region);
+  const { units, hrefs } = regionUnits(tr.doc, region, literalCode);
   tr.removeMark(region.from, region.to, type);
   forEachUnitRun(units, (start, end, marks) => {
     for (const name of marks ?? []) {
@@ -257,10 +279,13 @@ function collapseRegion(tr: Transaction, region: TextRange, type: MarkType): voi
   for (const { from, to } of deletions.toReversed()) tr.delete(from, to);
 }
 
-/** Parses the text in `region` as inline Markdown, in place, keeping the marks it has. */
+/**
+ * Parses the text in `region` as inline Markdown, in place, keeping the marks it has.
+ * Text already styled as code stays literal.
+ */
 export function parseInlineMarkdownRange(tr: Transaction, region: TextRange): void {
   const type = tr.doc.type.schema.marks[MARKDOWN_SOURCE_MARK];
-  if (type) collapseRegion(tr, region, type);
+  if (type) collapseRegion(tr, region, type, true);
 }
 
 /** Parses source the selection does not touch back into marks, in place. */

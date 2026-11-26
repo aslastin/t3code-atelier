@@ -1057,6 +1057,8 @@ function ComposerPromptEditorTiptapInner(
   const citationDraftRef = useRef<{ key: string; comment: string } | null>(null);
   const [isEmpty, setIsEmpty] = useState(value.length === 0);
   const [linkEditorOpen, setLinkEditorOpen] = useState(false);
+  // The draft the URL field was opened for; a replaced or read-only draft is not linked.
+  const linkEditorDocRef = useRef<TiptapEditor["state"]["doc"] | null>(null);
 
   const citationCommentActions = {
     openComment: openCitation,
@@ -1868,6 +1870,7 @@ function ComposerPromptEditorTiptapInner(
         if (!editor || !richText || !editor.isEditable) return false;
         if (!canLinkSelection(editor.state)) return false;
         setPendingLink(editor, linkableRange(editor.state.doc, editor.state.selection));
+        linkEditorDocRef.current = editor.state.doc;
         setLinkEditorOpen(true);
         return true;
       },
@@ -1907,6 +1910,7 @@ function ComposerPromptEditorTiptapInner(
 
   const closeLinkEditor = (restoreSelection: boolean) => {
     setLinkEditorOpen(false);
+    linkEditorDocRef.current = null;
     if (!editor || editor.isDestroyed) return;
     setPendingLink(editor, null);
     if (restoreSelection) editor.view.focus();
@@ -2010,6 +2014,10 @@ function ComposerPromptEditorTiptapInner(
               <ComposerLinkEditor
                 anchor={linkEditorAnchor}
                 onApply={(href) => {
+                  if (!editor.isEditable || editor.state.doc !== linkEditorDocRef.current) {
+                    closeLinkEditor(false);
+                    return true;
+                  }
                   if (!applyComposerLink(editor, href)) return false;
                   closeLinkEditor(false);
                   return true;
