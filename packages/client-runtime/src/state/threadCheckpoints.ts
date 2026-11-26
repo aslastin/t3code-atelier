@@ -37,6 +37,8 @@ export interface ThreadCheckpointSummary {
   readonly repositories?: ReadonlyArray<TurnRepositoryChanges>;
   readonly assistantMessageId: MessageId | null;
   readonly completedAt: string;
+  /** Atelier fork: why a VCS plugin left this turn without a checkpoint. */
+  readonly unavailableReason?: string;
 }
 
 export function deriveThreadCheckpointSummaries(
@@ -93,6 +95,9 @@ export function deriveThreadCheckpointSummaries(
         ...(repositories === undefined ? {} : { repositories }),
         assistantMessageId,
         completedAt: DateTime.formatIso(checkpoint.capturedAt),
+        ...(checkpoint.unavailableReason === undefined
+          ? {}
+          : { unavailableReason: checkpoint.unavailableReason }),
       },
     ];
   });

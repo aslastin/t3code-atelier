@@ -1,3 +1,8 @@
+import {
+  limitGitMenuItems,
+  limitGitQuickAction,
+  vcsAllows,
+} from "@t3tools/client-runtime/state/vcs-capabilities";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { sourceControlInstallHintText } from "@t3tools/client-runtime/contract-labels";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
@@ -1085,9 +1090,12 @@ function CheckoutGitActionsControl({
         gitStatusForActions.branchChanges?.deletions,
       ])
     : null;
+  // A VCS plugin's driver has no branch review diff; its turn diffs come from checkpoints.
+  const offersReviewDiff = vcsAllows(gitStatusForActions, "reviewDiff");
   const changesPreview = useEnvironmentQuery(
     showChanges &&
       isRepo &&
+      offersReviewDiff &&
       canReadFiles &&
       changesRevision !== null &&
       activeEnvironmentId !== null &&
@@ -1136,18 +1144,27 @@ function CheckoutGitActionsControl({
   );
   const isDefaultRef = gitStatusForActions?.isDefaultRef ?? false;
 
-  const gitActionMenuItems = buildMenuItems(
+  const gitActionMenuItems = limitGitMenuItems(
+    buildMenuItems(gitStatusForActions, isGitActionRunning, hasPrimaryRemote, messages),
     gitStatusForActions,
-    isGitActionRunning,
-    hasPrimaryRemote,
-    messages,
   );
-  const quickAction = resolveQuickAction(
+  const quickAction = limitGitQuickAction(
+    resolveQuickAction(
+      gitStatusForActions,
+      isGitActionRunning,
+      isDefaultRef,
+      hasPrimaryRemote,
+      messages,
+    ),
     gitStatusForActions,
-    isGitActionRunning,
-    isDefaultRef,
-    hasPrimaryRemote,
-    messages,
+    {
+      labels: {
+        commit: gt("Commit", { $context: "verb, git action" }),
+        push: gt("Push", { $context: "verb, git action" }),
+        commit_push: gt("Commit & push"),
+      },
+      unsupportedHint: gt("This repository's version control cannot do this from T3 Code."),
+    },
   );
   const quickActionDisabledReason = !canWriteSourceControl
     ? gt("This connection cannot change source control.")
@@ -1727,7 +1744,7 @@ function CheckoutGitActionsControl({
                 variant="ghost"
                 size="sm"
                 part="row"
-                disabled={!onOpenChanges}
+                disabled={!onOpenChanges || !offersReviewDiff}
                 onClick={onOpenChanges}
               />
             }

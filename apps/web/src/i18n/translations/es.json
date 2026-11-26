@@ -2100,6 +2100,7 @@
   "a16a5023fd3f7020": "{branch} ya está publicada en {provider}.",
   "b07e34ff280d5839": "El remoto \"{remote}\" está configurado. Haz un commit y un push para compartir tu código.",
   "8ea2c383ec1d8fc6": "vs. {ref}",
+  "d9bb0044d096a263": "El control de versiones de este repositorio no puede hacer esto desde T3 Code.",
   "79394c44f351f604": "Esta conexión no puede cambiar el control de versiones.",
   "ff07cd3aef5acd21": "Esta acción no está disponible en este momento.",
   "903637a2b57de16f": "Falló la acción",
@@ -4371,6 +4372,15 @@
   "405a3e88ee6e62b3": "No se pueden listar los cambios de este turno en este repositorio.",
   "f6958f38dc87c712": "Bifurcar desde esta respuesta",
   "72f8e14b1246d224": "Responder a esta respuesta",
+  "424ed60f06d29981": [
+    "Este turno no tiene punto de control, así que sus cambios no se pueden mostrar ni revertir:",
+    " ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
   "01d7728e893c281d": "Ir al mensaje: {text}",
   "e5428a0daffa236c": "Mensaje del usuario",
   "d18107d06a0eb562": "Turno anterior",
@@ -5473,9 +5483,11 @@
   "48d7d2bee4c40a5a": "Falló la captura de pantalla. Vuelve a intentarlo.",
   "d48deeb7c5f630c2": "Respuesta de plegado de Android inesperada.",
   "f32c20d2aab69630": "Falló el comando de plegado ({status}).",
+  "79ae43d8b6d1cce4": "Editar comentario",
   "c05ae9b20227f416": "Eliminar comentario",
   "e8c281b1a85ac547": "Añade un comentario…",
   "f2160b630793c7b4": "Comentar las líneas {rangeLabel}",
+  "8b348b5652106e12": "Guardar",
   "8d12e0769f6d5eb8": "Comentar",
   "40ef11933aa35e8e": "⌘/Ctrl Enter para enviar",
   "ee90d50efb2fe9fb": "Cargando el diff…",
@@ -5640,10 +5652,10 @@
   "a9abaaa4220eae21": "{error} Guárdala para abrirla en otra app.",
   "c508c9000d9656f8": "Vista previa de la fuente",
   "1c416d621d250be8": "El veloz murciélago hindú comía feliz cardillo y kiwi.",
+  "6ad6c8fbb630657d": "El archivo no está disponible.",
   "76ebb03de52c92d6": "El visor de texto se detuvo.",
   "f48162e8e8c12af7": "No se pudo cargar el visor de texto. Cierra el archivo y vuelve a intentarlo.",
   "bc4c5b13d38a5da7": "Vista previa cerrada.",
-  "6ad6c8fbb630657d": "El archivo no está disponible.",
   "9450d1827ef336a1": "Ya hay otra copia en curso.",
   "8f48999eb6d9e2e3": "{count, plural, one {{formatted} línea} other {{formatted} líneas}}",
   "13b14784f8707ddd": "0 bytes",
@@ -6947,7 +6959,6 @@
   "c0257180840458bc": "{count, plural, =1 {Conversación resuelta} other {{count} conversaciones resueltas}}",
   "9e65f6bc12538296": "Resuelta",
   "d74fc95719fe5478": "Abierta",
-  "79ae43d8b6d1cce4": "Editar comentario",
   "1eadc7b869a55c68": "Cargar más comentarios",
   "3f9bc820dffd099f": "Responder",
   "7975bd47236d8207": "Responder a esta conversación",
@@ -7388,7 +7399,6 @@
   "d13f02d85542f430": "Configurado",
   "9314145c13cdff15": "Obligatorio",
   "6169c607134e14aa": "Guardando",
-  "8b348b5652106e12": "Guardar",
   "e8f16922a5c815c3": "Protocolo de {provider}",
   "cbcade2587b035f6": "URL base de {provider}",
   "3f9b77555b7762e0": "JSON de encabezados de solo escritura de {provider}",
@@ -11481,6 +11491,40 @@
   "4cf6a373a7535324": "{name} · Deshabilitado",
   "1d1e9cda847bd398": "La clave de gestión del hub se elimina de este servidor. Sus cuentas salen de la vista Límites; el hub en sí no se toca. Vuelve a añadirlo con la URL y la clave para recuperarlas.",
   "c9bee4f93481b77a": "Quitar hub",
+  "44df3e89653558da": "Volver a comprobar {plugin}",
+  "f02ae55322366ddb": "Usar {plugin}",
+  "7fb18dbbbd0fc1a4": "/path/to/plugin",
+  "dc0187e50c99f34a": "Plugins de VCS",
+  "b5fb5281b58648c1": "Actualizar plugins de VCS",
+  "298ff7a5cf4e2568": "No disponible",
+  "f9d3262e4af5fe37": "Manifiesto no válido",
+  "1429bcf7bb4afc35": [
+    "Puntos de control: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "96fac19b641f3ecd": "Sin puntos de control: los turnos en sus repositorios no se pueden comparar ni revertir.",
+  "8a488bb98b2d5da2": [
+    "Último error en ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    ":",
+    " ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    }
+  ],
+  "8c87144bb1681580": "Importar una carpeta de plugin de este servidor",
+  "e30b840393c5dc4c": "Importar",
+  "954573ade31e4d7d": "Los plugins añaden un sistema de control de versiones que T3 Code no incluye. Consulta la guía de plugins para el formato del manifiesto.",
   "0424112d5a0ecd71": "Automático",
   "3f0e1b77e45d53a9": "Toca para alternar, mantén para hablar",
   "45928549c050a1b4": "Mantener",

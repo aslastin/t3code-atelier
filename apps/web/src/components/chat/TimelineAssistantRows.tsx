@@ -2,7 +2,7 @@ import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipel
 import { MessageId, type RunId, type TurnItemId } from "@t3tools/contracts";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import { agentWorkingDirectories } from "@t3tools/client-runtime/workspace-basename-lookup";
-import { T, useGT, useMessages } from "gt-react";
+import { T, useGT, useMessages, Var } from "gt-react";
 import { memo, use, useState } from "react";
 import { type ChatMessage, type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
@@ -428,6 +428,18 @@ export function McpAppTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "
   );
 }
 
+/** A VCS plugin left the turn without a checkpoint, so it has no diff or rollback. */
+function CheckpointUnavailableNote({ reason }: { readonly reason: string }) {
+  return (
+    <p className="mt-2 text-xs text-muted-foreground">
+      <T>
+        No checkpoint for this turn, so its changes cannot be shown or rolled back:{" "}
+        <Var>{reason}</Var>
+      </T>
+    </p>
+  );
+}
+
 /** Subscribes directly to the UI state store for expand/collapse state,
  *  so toggling re-renders only this component — not the entire list. */
 const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection({
@@ -444,7 +456,11 @@ const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection(
 }) {
   if (!turnSummary) return null;
   const checkpointFiles = turnSummary.files;
-  if (!turnHasChanges(turnSummary)) return null;
+  if (!turnHasChanges(turnSummary)) {
+    return turnSummary.unavailableReason === undefined ? null : (
+      <CheckpointUnavailableNote reason={turnSummary.unavailableReason} />
+    );
+  }
 
   return (
     <AssistantChangedFilesSectionInner

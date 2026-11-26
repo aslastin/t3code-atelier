@@ -2100,6 +2100,7 @@
   "a16a5023fd3f7020": "{branch} is now live on {provider}.",
   "b07e34ff280d5839": "Remote \"{remote}\" is set up. Make a commit and push it to share your code.",
   "8ea2c383ec1d8fc6": "vs {ref}",
+  "d9bb0044d096a263": "This repository's version control cannot do this from T3 Code.",
   "79394c44f351f604": "This connection cannot change source control.",
   "ff07cd3aef5acd21": "This action is currently unavailable.",
   "903637a2b57de16f": "Action failed",
@@ -4373,6 +4374,15 @@
   "405a3e88ee6e62b3": "This turn's changes in this repository cannot be listed.",
   "f6958f38dc87c712": "Fork from this response",
   "72f8e14b1246d224": "Reply to this response",
+  "424ed60f06d29981": [
+    "No checkpoint for this turn, so its changes cannot be shown or rolled back:",
+    " ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
   "01d7728e893c281d": "Jump to message: {text}",
   "e5428a0daffa236c": "User message",
   "d18107d06a0eb562": "Previous turn",
@@ -5475,9 +5485,11 @@
   "48d7d2bee4c40a5a": "Screenshot capture failed. Try again.",
   "d48deeb7c5f630c2": "Unexpected Android fold response.",
   "f32c20d2aab69630": "Fold command failed ({status}).",
+  "79ae43d8b6d1cce4": "Edit comment",
   "c05ae9b20227f416": "Delete comment",
   "e8c281b1a85ac547": "Add a comment…",
   "f2160b630793c7b4": "Comment on lines {rangeLabel}",
+  "8b348b5652106e12": "Save",
   "8d12e0769f6d5eb8": "Comment",
   "40ef11933aa35e8e": "⌘/Ctrl Enter to send",
   "ee90d50efb2fe9fb": "Loading diff…",
@@ -5642,10 +5654,10 @@
   "a9abaaa4220eae21": "{error} Save it to open in another app.",
   "c508c9000d9656f8": "Font preview",
   "1c416d621d250be8": "The quick brown fox jumps over the lazy dog.",
+  "6ad6c8fbb630657d": "The file is unavailable.",
   "76ebb03de52c92d6": "The text viewer stopped.",
   "f48162e8e8c12af7": "Could not load the text viewer. Close the file and try again.",
   "bc4c5b13d38a5da7": "Preview closed.",
-  "6ad6c8fbb630657d": "The file is unavailable.",
   "9450d1827ef336a1": "Another copy is in progress.",
   "8f48999eb6d9e2e3": "{count, plural, one {{formatted} line} other {{formatted} lines}}",
   "13b14784f8707ddd": "0 bytes",
@@ -6954,7 +6966,6 @@
   "c0257180840458bc": "{count, plural, =1 {Resolved conversation} other {{count} resolved conversations}}",
   "9e65f6bc12538296": "Resolved",
   "d74fc95719fe5478": "Open",
-  "79ae43d8b6d1cce4": "Edit comment",
   "1eadc7b869a55c68": "Load more comments",
   "3f9bc820dffd099f": "Reply",
   "7975bd47236d8207": "Reply to this conversation",
@@ -7395,7 +7406,6 @@
   "d13f02d85542f430": "Configured",
   "9314145c13cdff15": "Required",
   "6169c607134e14aa": "Saving",
-  "8b348b5652106e12": "Save",
   "e8f16922a5c815c3": "{provider} protocol",
   "cbcade2587b035f6": "{provider} base URL",
   "3f9b77555b7762e0": "{provider} write-only headers JSON",
@@ -11496,6 +11506,40 @@
   "4cf6a373a7535324": "{name} · Disabled",
   "1d1e9cda847bd398": "The hub's management key is deleted from this server. Its accounts leave the Limits view; the hub itself is untouched. Add it again with the URL and key to bring them back.",
   "c9bee4f93481b77a": "Remove hub",
+  "44df3e89653558da": "Re-check {plugin}",
+  "f02ae55322366ddb": "Use {plugin}",
+  "7fb18dbbbd0fc1a4": "/path/to/plugin",
+  "dc0187e50c99f34a": "VCS plugins",
+  "b5fb5281b58648c1": "Refresh VCS plugins",
+  "298ff7a5cf4e2568": "Unavailable",
+  "f9d3262e4af5fe37": "Invalid manifest",
+  "1429bcf7bb4afc35": [
+    "Checkpoints: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "96fac19b641f3ecd": "No checkpoints: turns in its repositories cannot be diffed or rolled back.",
+  "8a488bb98b2d5da2": [
+    "Last error in ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    ":",
+    " ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    }
+  ],
+  "8c87144bb1681580": "Import a plugin folder from this server",
+  "e30b840393c5dc4c": "Import",
+  "954573ade31e4d7d": "Plugins add a version control system T3 Code does not ship. See the plugin guide for the manifest format.",
   "0424112d5a0ecd71": "Auto",
   "3f0e1b77e45d53a9": "Tap to toggle, hold to talk",
   "45928549c050a1b4": "Hold",

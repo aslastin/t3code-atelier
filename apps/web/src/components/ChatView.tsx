@@ -1,3 +1,4 @@
+import { vcsAllows } from "@t3tools/client-runtime/state/vcs-capabilities";
 import { m } from "../i18n/messages";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { useGT, useMessages } from "gt-react";
@@ -2358,8 +2359,9 @@ export default function ChatView(props: ChatViewProps) {
       : false;
   const worktreeRepositoryChoices = useWorktreeRepositoryChoices(activeProject);
   const rememberedWorktreeRepositories = useRememberedWorktreeRepositories(activeProject ?? null);
+  const offersWorktrees = vcsAllows(gitStatusQuery.data, "worktree");
   const sendEnvMode = resolveSendEnvMode({
-    requestedEnvMode: envMode,
+    requestedEnvMode: offersWorktrees ? envMode : "local",
     isGitRepo,
     tracksGitRepositories: worktreeRepositoryChoices.tracksGitRepositories,
   });
@@ -4016,11 +4018,12 @@ export default function ChatView(props: ChatViewProps) {
                                     isGitRepo || worktreeRepositoryChoices.tracksGitRepositories
                                   }
                                   showBranchControls={isGitRepo}
+                                  offersWorktrees={offersWorktrees}
                                   {...(routeKind === "draft" && draftId ? { draftId } : {})}
                                   onEnvModeChange={onEnvModeChangeStable}
                                   startFromOrigin={startFromOrigin}
                                   onStartFromOriginChange={onStartFromOriginChange}
-                                  envMode={envMode}
+                                  envMode={offersWorktrees ? envMode : "local"}
                                   {...(canOverrideServerThreadEnvMode
                                     ? {
                                         activeThreadBranchOverride: activeThreadBranch,
@@ -4148,7 +4151,8 @@ export default function ChatView(props: ChatViewProps) {
                     ? { onEnvironmentChange: onEnvironmentChangeStable }
                     : {})}
                   onEnvModeChange={onEnvModeChangeStable}
-                  envMode={envMode}
+                  envMode={offersWorktrees ? envMode : "local"}
+                  offersWorktrees={offersWorktrees}
                   {...(canOverrideServerThreadEnvMode
                     ? {
                         activeThreadBranchOverride: activeThreadBranch,

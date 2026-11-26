@@ -1,3 +1,4 @@
+import { vcsAllows } from "@t3tools/client-runtime/state/vcs-capabilities";
 import { ActiveNewTaskContext } from "../../state/active-new-task";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { msg, useMessages } from "gt-react-native";
@@ -149,6 +150,8 @@ type NewTaskFlowContextValue = {
   readonly workspaceMode: WorkspaceMode;
   readonly isGitRepo: boolean;
   readonly isGitRepoKnown: boolean;
+  /** False when the project's VCS plugin cannot create worktrees. */
+  readonly offersWorktrees: boolean;
   /** The project tracks a Git folder, so a worktree is possible without a Git project folder. */
   readonly tracksGitRepositories: boolean;
   /** The project's tracked Git folders; null while they load. */
@@ -425,7 +428,8 @@ export function NewTaskFlowProvider(
       projectCwd: selectedProject?.workspaceRoot ?? null,
     });
   const workspaceSelection = resolveWorkspaceSelection(selectedProjectDraft.workspaceSelection);
-  const workspaceMode = workspaceSelection.mode;
+  const offersWorktrees = vcsAllows(projectGitStatus.data, "worktree");
+  const workspaceMode = offersWorktrees ? workspaceSelection.mode : "local";
   const selectedBranchName = workspaceSelection.branch;
   const selectedWorktreePath = workspaceSelection.worktreePath;
   // A new worktree does not exist yet, so the project root stands in for it.
@@ -923,6 +927,7 @@ export function NewTaskFlowProvider(
     workspaceMode,
     isGitRepo,
     isGitRepoKnown: knownIsGitRepo !== null,
+    offersWorktrees,
     tracksGitRepositories,
     worktreeRepositoryChoices,
     worktreeRepositorySelection,

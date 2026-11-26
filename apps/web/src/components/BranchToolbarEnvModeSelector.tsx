@@ -36,6 +36,8 @@ interface BranchToolbarEnvModeSelectorProps {
   previousWorktreeLabel?: string | null;
   previousWorktreeBranch?: string | null;
   onUsePreviousWorktree?: () => void;
+  /** False when the repository's VCS plugin cannot create worktrees. */
+  offersWorktree?: boolean;
 }
 
 export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSelector({
@@ -47,6 +49,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   previousWorktreeLabel,
   previousWorktreeBranch = null,
   onUsePreviousWorktree,
+  offersWorktree = true,
 }: BranchToolbarEnvModeSelectorProps) {
   const gt = useGT();
   const m = useMessages();
@@ -61,7 +64,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
       value: "local",
       label: resolveCurrentWorkspaceLabel(activeWorktreePath, m),
     },
-    { value: "worktree", label: resolveEnvModeLabel("worktree", m) },
+    ...(offersWorktree ? [{ value: "worktree", label: resolveEnvModeLabel("worktree", m) }] : []),
     ...(showPreviousWorktree && previousWorktreeLabel
       ? [{ value: PREVIOUS_WORKTREE_SELECT_VALUE, label: previousWorktreeLabel }]
       : []),

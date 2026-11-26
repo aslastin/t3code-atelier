@@ -1,3 +1,4 @@
+import { limitGitQuickAction } from "@t3tools/client-runtime/state/vcs-capabilities";
 import { msg, useGT, useMessages } from "gt-react-native";
 
 import * as Dialog from "../../components/ui/Dialog";
@@ -154,7 +155,18 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
         hint: gt("This workspace is not a git repository."),
       };
     }
-    const action = resolveQuickAction(gitStatus, busy, isDefaultRef, hasPrimaryRemote, messages);
+    const action = limitGitQuickAction(
+      resolveQuickAction(gitStatus, busy, isDefaultRef, hasPrimaryRemote, messages),
+      gitStatus,
+      {
+        labels: {
+          commit: gt("Commit", { $context: "verb, git action" }),
+          push: gt("Push", { $context: "verb, git action" }),
+          commit_push: gt("Commit & push"),
+        },
+        unsupportedHint: gt("This repository's version control cannot do this from T3 Code."),
+      },
+    );
     return !canWriteSourceControl && (action.kind === "run_pull" || action.kind === "run_action")
       ? {
           ...action,

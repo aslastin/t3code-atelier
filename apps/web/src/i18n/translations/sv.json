@@ -2100,6 +2100,7 @@
   "a16a5023fd3f7020": "{branch} är nu publicerad på {provider}.",
   "b07e34ff280d5839": "Remoten ”{remote}” är konfigurerad. Gör en commit och pusha den för att dela din kod.",
   "8ea2c383ec1d8fc6": "mot {ref}",
+  "d9bb0044d096a263": "Det här förrådets versionshantering kan inte göra detta från T3 Code.",
   "79394c44f351f604": "Den här anslutningen kan inte ändra versionshantering.",
   "ff07cd3aef5acd21": "Den här åtgärden är inte tillgänglig just nu.",
   "903637a2b57de16f": "Åtgärden misslyckades",
@@ -4372,6 +4373,15 @@
   "405a3e88ee6e62b3": "Den här omgångens ändringar i det här repot kan inte listas.",
   "f6958f38dc87c712": "Forka från det här svaret",
   "72f8e14b1246d224": "Svara på det här svaret",
+  "424ed60f06d29981": [
+    "Den här turen har ingen kontrollpunkt, så dess ändringar kan inte visas eller återställas:",
+    " ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
   "01d7728e893c281d": "Hoppa till meddelande: {text}",
   "e5428a0daffa236c": "Användarmeddelande",
   "d18107d06a0eb562": "Föregående omgång",
@@ -5474,9 +5484,11 @@
   "48d7d2bee4c40a5a": "Det gick inte att ta en skärmbild. Försök igen.",
   "d48deeb7c5f630c2": "Oväntat vikningssvar från Android.",
   "f32c20d2aab69630": "Vikkommandot misslyckades ({status}).",
+  "79ae43d8b6d1cce4": "Redigera kommentar",
   "c05ae9b20227f416": "Ta bort kommentar",
   "e8c281b1a85ac547": "Lägg till en kommentar…",
   "f2160b630793c7b4": "Kommentera raderna {rangeLabel}",
+  "8b348b5652106e12": "Spara",
   "8d12e0769f6d5eb8": "Kommentera",
   "40ef11933aa35e8e": "⌘/Ctrl Enter för att skicka",
   "ee90d50efb2fe9fb": "Läser in diff…",
@@ -5641,10 +5653,10 @@
   "a9abaaa4220eae21": "{error} Spara det för att öppna det i en annan app.",
   "c508c9000d9656f8": "Förhandsvisning av teckensnitt",
   "1c416d621d250be8": "Flygande bäckasiner söka hwila på mjuka tuvor.",
+  "6ad6c8fbb630657d": "Filen är inte tillgänglig.",
   "76ebb03de52c92d6": "Textvisaren stoppades.",
   "f48162e8e8c12af7": "Kunde inte läsa in textvisaren. Stäng filen och försök igen.",
   "bc4c5b13d38a5da7": "Förhandsvisningen stängdes.",
-  "6ad6c8fbb630657d": "Filen är inte tillgänglig.",
   "9450d1827ef336a1": "En annan kopiering pågår.",
   "8f48999eb6d9e2e3": "{count, plural, one {{formatted} rad} other {{formatted} rader}}",
   "13b14784f8707ddd": "0 byte",
@@ -6953,7 +6965,6 @@
   "c0257180840458bc": "{count, plural, =1 {Löst konversation} other {{count} lösta konversationer}}",
   "9e65f6bc12538296": "Löst",
   "d74fc95719fe5478": "Öppen",
-  "79ae43d8b6d1cce4": "Redigera kommentar",
   "1eadc7b869a55c68": "Läs in fler kommentarer",
   "3f9bc820dffd099f": "Svar",
   "7975bd47236d8207": "Svara i den här konversationen",
@@ -7394,7 +7405,6 @@
   "d13f02d85542f430": "Konfigurerad",
   "9314145c13cdff15": "Krävs",
   "6169c607134e14aa": "Sparar",
-  "8b348b5652106e12": "Spara",
   "e8f16922a5c815c3": "Protokoll för {provider}",
   "cbcade2587b035f6": "Bas-URL för {provider}",
   "3f9b77555b7762e0": "Headers-JSON (endast skrivning) för {provider}",
@@ -11494,6 +11504,40 @@
   "4cf6a373a7535324": "{name} · Inaktiverad",
   "1d1e9cda847bd398": "Hubbens hanteringsnyckel tas bort från den här servern. Dess konton försvinner från vyn Gränser; själva hubben påverkas inte. Lägg till den igen med URL och nyckel för att få tillbaka dem.",
   "c9bee4f93481b77a": "Ta bort hubb",
+  "44df3e89653558da": "Kontrollera {plugin} igen",
+  "f02ae55322366ddb": "Använd {plugin}",
+  "7fb18dbbbd0fc1a4": "/path/to/plugin",
+  "dc0187e50c99f34a": "VCS-plugin",
+  "b5fb5281b58648c1": "Uppdatera VCS-plugin",
+  "298ff7a5cf4e2568": "Inte tillgänglig",
+  "f9d3262e4af5fe37": "Ogiltigt manifest",
+  "1429bcf7bb4afc35": [
+    "Kontrollpunkter: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "96fac19b641f3ecd": "Inga kontrollpunkter: turer i dess förråd kan inte jämföras eller återställas.",
+  "8a488bb98b2d5da2": [
+    "Senaste felet i ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    ":",
+    " ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    }
+  ],
+  "8c87144bb1681580": "Importera en pluginmapp från den här servern",
+  "e30b840393c5dc4c": "Importera",
+  "954573ade31e4d7d": "Plugin lägger till ett versionshanteringssystem som T3 Code inte levereras med. Se pluginguiden för manifestformatet.",
   "0424112d5a0ecd71": "Auto",
   "3f0e1b77e45d53a9": "Tryck för att växla, håll ned för att prata",
   "45928549c050a1b4": "Håll ned",

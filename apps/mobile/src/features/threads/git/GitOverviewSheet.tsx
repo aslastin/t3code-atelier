@@ -1,3 +1,4 @@
+import { limitGitMenuItems } from "@t3tools/client-runtime/state/vcs-capabilities";
 import * as Dialog from "../../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../../native/useOpenPullRequest";
 import {
@@ -172,7 +173,9 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
   const hasPrimaryRemote = gitStatus.data?.hasPrimaryRemote ?? false;
   const isDefaultRef = gitStatus.data?.isDefaultRef ?? false;
 
-  const menuItems = isRepo ? buildMenuItems(gitStatus.data, busy, hasPrimaryRemote, m) : [];
+  const menuItems = isRepo
+    ? limitGitMenuItems(buildMenuItems(gitStatus.data, busy, hasPrimaryRemote, m), gitStatus.data)
+    : [];
 
   const sheetMenuItems = menuItems.map((item) => ({
     item: {
