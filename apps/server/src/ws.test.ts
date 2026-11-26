@@ -906,6 +906,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(VcsPluginDrivers)({
     hasAny: () => false,
     markers: () => [],
+    installedMarkers: () => [],
     describe: () => undefined,
     changes: Stream.empty,
   }),

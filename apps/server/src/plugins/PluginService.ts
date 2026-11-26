@@ -508,6 +508,8 @@ const make = Effect.gen(function* () {
       [...entries.values()].flatMap((entry) =>
         entry.driver && entry.manifest ? entry.manifest.detect.markers : [],
       ),
+    installedMarkers: () =>
+      [...entries.values()].flatMap((entry) => entry.manifest?.detect.markers ?? []),
   });
 
   const announced =

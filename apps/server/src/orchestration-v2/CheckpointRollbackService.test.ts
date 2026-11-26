@@ -500,7 +500,9 @@ it.effect.each([
             Layer.mock(GitWorkflow.GitWorkflowService)({}),
             Layer.mock(VcsPluginDrivers)({
               hasAny: () => true,
-              markers: () => [".kite/HEAD"],
+              // Kite is off: its marker is installed but not among the running plugins'.
+              markers: () => [],
+              installedMarkers: () => [".kite/HEAD"],
               describe: () => undefined,
             }),
             Layer.mock(CheckpointService.CheckpointServiceV2)({

@@ -105,6 +105,7 @@ function layerTestFor(state: {
             changes: state.pluginChanges,
             hasAny: () => true,
             markers: () => [],
+            installedMarkers: () => [],
             describe: () => undefined,
           })
         : Layer.empty,

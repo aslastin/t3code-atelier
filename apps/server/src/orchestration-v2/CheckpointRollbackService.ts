@@ -163,9 +163,10 @@ export const layer: Layer.Layer<
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
     const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
     const rootMarkers = () => plugins?.markers() ?? [];
-    // A VCS plugin's checkout carries its marker where a Git checkout carries `.git`.
+    // A VCS plugin's checkout carries its marker where a Git checkout carries `.git`, even
+    // while that plugin is off: its folder is never a leftover to set aside.
     const hasCheckout = Effect.fnUntraced(function* (folder: string) {
-      for (const marker of [".git", ...rootMarkers()]) {
+      for (const marker of [".git", ...(plugins?.installedMarkers() ?? [])]) {
         if (yield* fileSystem.exists(path.join(folder, marker))) return true;
       }
       return false;

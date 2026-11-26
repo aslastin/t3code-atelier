@@ -15,6 +15,11 @@ export class VcsPluginDrivers extends Context.Service<
     readonly hasAny: () => boolean;
     /** Marker paths of every available plugin, for walks that look for a checkout root. */
     readonly markers: () => ReadonlyArray<string>;
+    /**
+     * Marker paths of every installed plugin, off or unavailable too, for checks that must not
+     * mistake a plugin checkout for a stray folder.
+     */
+    readonly installedMarkers: () => ReadonlyArray<string>;
     /** An available plugin's name, and whether it can bring back a worktree cleanup removed. */
     readonly describe: (
       kind: string,
