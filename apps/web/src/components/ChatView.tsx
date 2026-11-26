@@ -3213,7 +3213,6 @@ export default function ChatView(props: ChatViewProps) {
     annotation: PreviewAnnotationPayload,
     image: ComposerImageAttachment | null,
   ) => {
-    composerRef.current?.commitPickedModelMention();
     void onSend(undefined, "auto", "foreground", { annotation, image });
   };
   const sendPreviewAnnotationStable = useStableCallback(sendPreviewAnnotation);
@@ -3281,7 +3280,6 @@ export default function ChatView(props: ChatViewProps) {
     ) : null;
   const resendAfterWorkLocally = () => {
     setWorkLocallyResendDraftId(null);
-    composerRef.current?.commitPickedModelMention();
     void onComposerSendStable();
   };
   const resendAfterWorkLocallyStable = useStableCallback(resendAfterWorkLocally);

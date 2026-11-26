@@ -116,10 +116,11 @@ describe("collectComposerModelMentions", () => {
     ["agent/effort", "agent:deep (max)"],
     ["agent effort?", "high"],
     ["_deep_", "_max_"],
+    ["thought_level", "high-_fast_-v2"],
   ])("round-trips option %s with value %s as one reference", (optionId, value) => {
     const source = formatComposerModelMention("acp", "agent", { optionId, value });
-    // An edge `_` would read as emphasis in a sent message's Markdown.
-    expect(source).not.toMatch(/[?=]_|_(?:=|$)/u);
+    // A `_` outside a word would read as emphasis in a sent message's Markdown.
+    expect(source).not.toMatch(/(?:^|[^\p{L}\p{N}])_|_(?:[^\p{L}\p{N}]|$)/u);
     expect(collectComposerModelMentions(`${source}. next`)).toEqual([
       expect.objectContaining({ source, model: "agent", effort: { optionId, value } }),
     ]);
@@ -169,6 +170,7 @@ describe("modelMentionEffortDescriptor", () => {
     type: "select" as const,
     options: [
       { id: "t3:default", label: "Default" },
+      { id: "default", label: "Default" },
       { id: "low", label: "Low" },
       { id: "high", label: "High", isDefault: true },
       { id: "ultrathink", label: "Ultrathink" },
@@ -200,7 +202,7 @@ describe("modelMentionEffortDescriptor", () => {
     expect(modelMentionEffortDescriptor(undefined)).toBeNull();
   });
 
-  it("offers levels without the default variant or prompt-injected levels", () => {
+  it("offers levels without the choices that send no effort or prompt-injected levels", () => {
     expect(modelMentionEffortChoices(select("effort")).map((choice) => choice.id)).toEqual([
       "low",
       "high",

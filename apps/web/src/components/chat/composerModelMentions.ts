@@ -73,9 +73,14 @@ export interface ComposerModelEffortStep {
   readonly draftKey: string;
   readonly target:
     | {
+        /** A just-picked model, whose plain mention is already in the prompt at `start`. */
         readonly kind: "insert";
-        /** The editor text the step opened on; any edit ends it. */
-        readonly prompt: string;
+        readonly start: number;
+        readonly source: string;
+        /** The caret after the insertion; moving it, or any edit, ends the step. */
+        readonly cursor: number;
+        /** The `@` search the mention replaced, which Back restores, and its menu key. */
+        readonly query: string;
         readonly modelSearchKey: string;
       }
     | {

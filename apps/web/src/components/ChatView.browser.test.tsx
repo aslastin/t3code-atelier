@@ -1103,18 +1103,13 @@ it("an @ model mention takes the reasoning effort picked in the menu and changes
   await userEvent.keyboard("{Enter}");
   await expect.element(efforts).toBeVisible();
   await expectHighlighted("Default");
+  // The plain mention is in while the levels show, so any send names the model.
+  await vi.waitFor(() => expect(prompt()).toBe("Ask model:codex/gpt-5.5 "));
 
   // Left returns to the models with the search and the highlighted model kept.
   await userEvent.keyboard("{ArrowLeft}");
   await expectHighlighted("GPT-5.5");
   expect(prompt()).toBe("Ask @gpt-5.5");
-
-  // Editing the search drops the levels for good, even once it reads the same again.
-  await userEvent.keyboard("{Enter}");
-  await expect.element(efforts).toBeVisible();
-  await insertText("z");
-  await userEvent.keyboard("{Backspace}");
-  await expectHighlighted("GPT-5.5");
 
   await userEvent.keyboard("{Enter}");
   await expect.element(efforts).toBeVisible();
@@ -1196,8 +1191,19 @@ it("an @ model mention takes the reasoning effort picked in the menu and changes
   await expect.element(effortButton("Medium")).toBeVisible();
   expect(prompt()).toMatch(/then model:codex\/gpt-5\.5\?reasoningEffort=medium$/);
 
+  // An edit drops the levels for good, even once the text reads the same again.
+  await insertText(" plus @gpt-5.5");
+  await expectHighlighted("GPT-5.5");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(efforts).toBeVisible();
+  await insertText("z");
+  await expect.element(efforts).not.toBeInTheDocument();
+  await userEvent.keyboard("{Backspace}");
+  await vi.waitFor(() => expect(prompt()).toMatch(/plus model:codex\/gpt-5\.5 $/));
+  await expect.element(efforts).not.toBeInTheDocument();
+
   // Sending while the levels show sends the picked model, not the `@` search.
-  await insertText(" last @gpt-5.5");
+  await insertText("last @gpt-5.5");
   await expectHighlighted("GPT-5.5");
   await userEvent.keyboard("{Enter}");
   await expect.element(efforts).toBeVisible();
@@ -1206,7 +1212,9 @@ it("an @ model mention takes the reasoning effort picked in the menu and changes
     expect(dispatchedCommands()).toContainEqual(
       expect.objectContaining({
         type: "message.dispatch",
-        text: expect.stringMatching(/reasoningEffort=medium last model:codex\/gpt-5\.5 ?$/),
+        text: expect.stringMatching(
+          /reasoningEffort=medium plus model:codex\/gpt-5\.5 last model:codex\/gpt-5\.5 ?$/,
+        ),
       }),
     ),
   );

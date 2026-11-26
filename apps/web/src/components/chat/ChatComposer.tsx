@@ -336,8 +336,6 @@ export interface ChatComposerHandle {
   toggleModelPicker: () => void;
   openControl: (command: KeybindingCommand) => void;
   isModelPickerOpen: () => boolean;
-  /** Puts in the model whose levels the `@` menu shows, without an effort, before a send. */
-  commitPickedModelMention: () => void;
   isCaretAtStart: () => boolean;
   compactContext: () => void;
   readSnapshot: () => {
@@ -1221,16 +1219,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     ? `${composerSuggestionListId}:${composerTrigger.kind}:${composerTrigger.query.trim().toLowerCase()}`
     : null;
   const composerEditorValue = activePendingProgress ? activePendingProgress.customAnswer : prompt;
-  // A picked model's levels last while its `@` search is unedited; a chip's while the chip is
-  // unchanged and the caret stays where the click put it.
+  // Levels last while their mention is intact and the caret stays where the pick or click put it.
   const activeModelEffortStep =
     modelEffortStep !== null &&
     !isLiteralPendingAnswer &&
     modelEffortStep.draftKey === composerDraftTargetKey &&
+    modelEffortStep.target.cursor === composerCursor &&
     (modelEffortStep.target.kind === "insert"
-      ? modelEffortStep.target.prompt === composerEditorValue &&
-        modelEffortStep.target.modelSearchKey === triggerMenuSearchKey
-      : modelEffortStep.target.cursor === composerCursor && modelEffortStep.target.isCurrent())
+      ? composerEditorValue.slice(
+          modelEffortStep.target.start,
+          modelEffortStep.target.start + modelEffortStep.target.source.length,
+        ) === modelEffortStep.target.source
+      : modelEffortStep.target.isCurrent())
       ? modelEffortStep
       : null;
   // A step left behind stays dropped, so typing back to its text does not reopen it.
@@ -2031,20 +2031,47 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     };
   };
 
-  const insertModelMention = (source: string): boolean => {
-    const { snapshot, trigger } = resolveActiveComposerTrigger();
-    if (trigger?.kind !== "path") return false;
+  const insertModelMention = (
+    source: string,
+    trigger: ComposerTrigger,
+    value: string,
+  ): { readonly cursor: number } | null => {
     const replacement = `${source} `;
     const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-      snapshot.value,
+      value,
       trigger.rangeEnd,
       replacement,
     );
     const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
-      expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+      expectedText: value.slice(trigger.rangeStart, replacementRangeEnd),
     });
-    if (applied) setComposerHighlightedItemId(null);
-    return applied;
+    if (!applied) return null;
+    setComposerHighlightedItemId(null);
+    return {
+      cursor: collapseExpandedComposerCursor(
+        promptRef.current,
+        trigger.rangeStart + replacement.length,
+        isLiteralPendingAnswer,
+      ),
+    };
+  };
+
+  // Rewrites the step's mention; `replacement` null puts its `@` search back instead.
+  const replaceStepMention = (
+    target: Extract<ComposerModelEffortStep["target"], { kind: "insert" }>,
+    replacement: string | null,
+  ): boolean => {
+    const end = target.start + target.source.length;
+    const spaced = promptRef.current[end] === " ";
+    if (replacement === null) {
+      return applyPromptReplacement(target.start, spaced ? end + 1 : end, target.query, {
+        expectedText: `${target.source}${spaced ? " " : ""}`,
+      });
+    }
+    return applyPromptReplacement(target.start, end, replacement, {
+      expectedText: target.source,
+      expandedCursorAfterReplace: target.start + replacement.length + (spaced ? 1 : 0),
+    });
   };
 
   const applyModelEffort = (
@@ -2053,11 +2080,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ) => {
     const source = formatComposerModelMention(step.model.instanceId, step.model.model, effort);
     const { target } = step;
-    if (target.kind === "insert") {
-      if (insertModelMention(source)) setModelEffortStep(null);
-      return;
-    }
-    if (target.apply(source, effort)) setModelEffortStep(null);
+    const applied =
+      target.kind === "insert" ? replaceStepMention(target, source) : target.apply(source, effort);
+    if (applied) setModelEffortStep(null);
   };
 
   const { onUsageLimitsCommand } = props;
@@ -2224,22 +2249,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     if (item.type === "model") {
       if (trigger.kind !== "path") return;
-      if (item.effort && triggerMenuSearchKey !== null) {
-        setModelEffortStep({
-          model: item,
-          draftKey: composerDraftTargetKey,
-          // The rendered text, not the editor's re-serialization, which can differ for a restored draft.
-          target: {
-            kind: "insert",
-            prompt: composerEditorValue,
-            modelSearchKey: triggerMenuSearchKey,
-          },
-        });
-        setComposerHighlightedItemId(composerModelEffortItemId(null));
-        setComposerHighlightedSearchKey(modelEffortSearchKey(item));
-        return;
-      }
-      insertModelMention(formatComposerModelMention(item.instanceId, item.model));
+      const source = formatComposerModelMention(item.instanceId, item.model);
+      // The plain mention goes in first, so any send while the levels show names the model.
+      const inserted = insertModelMention(source, trigger, snapshot.value);
+      if (!inserted || !item.effort || triggerMenuSearchKey === null) return;
+      setModelEffortStep({
+        model: item,
+        draftKey: composerDraftTargetKey,
+        target: {
+          kind: "insert",
+          start: trigger.rangeStart,
+          source,
+          cursor: inserted.cursor,
+          query: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+          modelSearchKey: triggerMenuSearchKey,
+        },
+      });
+      setComposerHighlightedItemId(composerModelEffortItemId(null));
+      setComposerHighlightedSearchKey(modelEffortSearchKey(item));
       return;
     }
     if (item.type === "environment") {
@@ -2265,33 +2292,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
   const onSelectComposerItemStable = useStableCallback(onSelectComposerItem);
 
-  // Escape on a new mention keeps the model without an effort; on a chip it keeps the old effort.
+  // Escape keeps the mention as it is: a new one without an effort, a chip with its old one.
   const dismissModelEffortStep = () => {
-    const step = activeModelEffortStep;
-    if (!step) return;
-    if (step.target.kind === "insert") {
-      applyModelEffort(step, null);
-      return;
-    }
     setModelEffortStep(null);
   };
 
   const returnToModelList = () => {
     const step = activeModelEffortStep;
-    if (step?.target.kind !== "insert") return;
+    if (step?.target.kind !== "insert" || !replaceStepMention(step.target, null)) return;
     setModelEffortStep(null);
     setComposerHighlightedItemId(step.model.id);
     setComposerHighlightedSearchKey(step.target.modelSearchKey);
   };
   const returnToModelListStable = useStableCallback(returnToModelList);
-
-  // Any send, in the form or not, names the picked model rather than its `@` search.
-  const commitPickedModelMention = () => {
-    if (activeModelEffortStep?.target.kind === "insert") {
-      applyModelEffort(activeModelEffortStep, null);
-    }
-  };
-  const commitPickedModelMentionStable = useStableCallback(commitPickedModelMention);
 
   // Extending a selection moves no caret and renders nothing, so it would leave a chip's menu up.
   const dropModelEffortEdit = () => {
@@ -2391,7 +2404,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       event?.preventDefault();
       return false;
     }
-    commitPickedModelMention();
     const modeCommand = promptRef.current.trim();
     if (
       planModesAvailable &&
@@ -3428,7 +3440,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       },
       compactContext: compactThreadContextStable,
       isModelPickerOpen: () => isComposerModelPickerOpen,
-      commitPickedModelMention: commitPickedModelMentionStable,
       isCaretAtStart: () => {
         const range = composerEditorRef.current?.readSelectionRange();
         return range !== undefined && range.start === 0 && range.end === 0;
@@ -3549,7 +3560,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activeThread,
       addComposerAttachments,
       addComposerFoldersStable,
-      commitPickedModelMentionStable,
       foldPastedText,
       composerDraftTarget,
       composerModelOptions,

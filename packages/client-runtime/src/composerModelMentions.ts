@@ -69,17 +69,22 @@ export function formatComposerModelMention(
     : mention;
 }
 
-// Also escapes what the parser reads as a reference's end or prose punctuation, and an edge `_`
-// that Markdown would read as emphasis in a sent message. An option id keeps `.`, `:` and `/`,
+// Also escapes what the parser reads as a reference's end or prose punctuation, and any `_` outside
+// a word, which Markdown would read as emphasis in a sent message. An option id keeps `.`, `:` and `/`,
 // which agents use in ids like `agent:effort`, since `=` always follows it.
 function encodeMentionPart(part: string, keep = ""): string {
   let encoded = encodeURIComponent(part)
     .replace(/[!'().*~]/gu, percentEncode)
-    .replace(/^_|_$/gu, percentEncode);
+    .replace(/_/gu, (char, index: number, text: string) =>
+      WORD_CHAR.test(text[index - 1] ?? "") && WORD_CHAR.test(text[index + 1] ?? "")
+        ? char
+        : percentEncode(char),
+    );
   for (const char of keep) encoded = encoded.replaceAll(percentEncode(char), char);
   return encoded;
 }
 
+const WORD_CHAR = /^[\p{L}\p{N}]$/u;
 const percentEncode = (char: string) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`;
 
 // Pi names its reasoning select `thinking`; Claude's `thinking` is a boolean and never matches.
@@ -100,12 +105,14 @@ export function modelMentionEffortDescriptor(
   return descriptor ?? null;
 }
 
+// Choices that send no effort, as the menu's own Default does: OpenCode's variant and Claude's `default`.
+const NO_EFFORT_CHOICE_IDS: ReadonlySet<string> = new Set([DEFAULT_VARIANT_CHOICE_ID, "default"]);
+
 /** Levels a mention offers besides Default. Prompt-injected levels like Ultrathink stay typed-only. */
 export function modelMentionEffortChoices(descriptor: SelectProviderOptionDescriptor) {
   return descriptor.options.filter(
     (choice) =>
-      choice.id !== DEFAULT_VARIANT_CHOICE_ID &&
-      !descriptor.promptInjectedValues?.includes(choice.id),
+      !NO_EFFORT_CHOICE_IDS.has(choice.id) && !descriptor.promptInjectedValues?.includes(choice.id),
   );
 }
 
