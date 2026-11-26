@@ -597,6 +597,16 @@ describe("ManifestVcsDriver", () => {
       });
       assert.strictEqual(NodeFS.readFileSync(`${repository}/sub/b.txt`, "utf8"), "mine\n");
 
+      // A deleted executable comes back executable, as its VCS recorded it.
+      for (const copy of [`${repository}/.kite/base/run.sh`, `${repository}/run.sh`]) {
+        NodeFS.writeFileSync(copy, "#!/bin/sh\n");
+        NodeFS.chmodSync(copy, 0o755);
+      }
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("3") });
+      NodeFS.rmSync(`${repository}/run.sh`);
+      yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("3") });
+      assert.notStrictEqual(NodeFS.statSync(`${repository}/run.sh`).mode & 0o111, 0);
+
       // Files of a moved base cannot be restored, and a rollback learns that up front.
       NodeFS.writeFileSync(`${repository}/.kite/revision`, "base-2");
       assert.isFalse(

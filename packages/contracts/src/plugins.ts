@@ -180,7 +180,14 @@ export type VcsPluginChangedFileStatus = typeof VcsPluginChangedFileStatus.Type;
 export const VcsPluginChangedFilesOutput = Schema.Struct({
   /** The revision the paths changed from; `readFile` reads unchanged files there. */
   revision: TrimmedNonEmptyString,
-  files: Schema.Array(Schema.Struct({ path: PluginPath, status: VcsPluginChangedFileStatus })),
+  files: Schema.Array(
+    Schema.Struct({
+      path: PluginPath,
+      status: VcsPluginChangedFileStatus,
+      /** The file at `revision` is executable, so a restored copy is too. */
+      executable: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
 });
 export type VcsPluginChangedFilesOutput = typeof VcsPluginChangedFilesOutput.Type;
 

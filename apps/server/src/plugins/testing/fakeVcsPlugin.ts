@@ -45,6 +45,9 @@ const sameContents = (a, b) => {
     return true;
   }
 };
+// The mode Kite recorded for the base copy, as Git's 100755.
+const executable = (file) =>
+  (fs.statSync(path.join(kite, "base", file)).mode & 0o111) !== 0 ? { executable: true } : {};
 const changes = () => {
   const base = path.join(kite, "base");
   const baseFiles = new Set(walk(base));
@@ -60,9 +63,10 @@ const changes = () => {
         addedDirs.add(top);
       } else files.push({ path: file, status: "added" });
     } else if (!sameContents(path.join(root, file), path.join(base, file)))
-      files.push({ path: file, status: "modified" });
+      files.push({ path: file, status: "modified", ...executable(file) });
   }
-  for (const file of baseFiles) if (!work.has(file)) files.push({ path: file, status: "deleted" });
+  for (const file of baseFiles)
+    if (!work.has(file)) files.push({ path: file, status: "deleted", ...executable(file) });
   return files;
 };
 const copyTree = (from, to) => {

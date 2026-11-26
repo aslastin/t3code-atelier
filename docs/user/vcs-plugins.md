@@ -104,7 +104,7 @@ Every command except `readFile` prints one JSON object on stdout. Optional field
 | `checkpointDiff`    | `{fromRevision}`, `{toRevision}`  | `{ "patch" }`, a Git-format patch. Must fail when either revision cannot be read.                                                                                                       |
 | `checkpointRestore` | `{revision}`                      | Anything.                                                                                                                                                                               |
 | `checkpointDelete`  | `{revision}`                      | Anything. Optional.                                                                                                                                                                     |
-| `changedFiles`      |                                   | `{ "revision", "files": [{ "path", "status": "modified" \| "added" \| "deleted" }] }`                                                                                                   |
+| `changedFiles`      |                                   | `{ "revision", "files": [{ "path", "status": "modified" \| "added" \| "deleted", "executable"? }] }`. Mark a file `executable` at `revision`, so a restored copy keeps the bit.         |
 | `readFile`          | `{revision}`, `{path}`            | The file's bytes. Exit with a non-zero code when the file does not exist at that revision.                                                                                              |
 
 Paths are relative to the repository root and use `/`. With `capabilities.worktrees`, both

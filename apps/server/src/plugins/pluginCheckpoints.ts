@@ -74,6 +74,7 @@ export const ensurePluginCheckpointTable = Effect.fn(
 interface ChangedFile {
   readonly path: string;
   readonly status: VcsPluginChangedFileStatus;
+  readonly executable?: boolean;
 }
 
 interface CheckpointRecord {
@@ -525,7 +526,8 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
               "diffCheckpoints",
               `${runner.label} could not read ${file.path} at its base revision.`,
             );
-          entries.push(`100644 ${yield* writeBlob(location, bytes)}\t${file.path}`);
+          const mode = file.executable === true ? "100755" : "100644";
+          entries.push(`${mode} ${yield* writeBlob(location, bytes)}\t${file.path}`);
         }
         if (entries.length > 0)
           yield* git(location, ["update-index", "-z", "--index-info"], {
@@ -734,17 +736,20 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       const previous = yield* fs.stat(destination).pipe(Effect.option);
       const isLink = Option.isSome(yield* fs.readLink(destination).pipe(Effect.option));
       yield* removePath(location, file.path);
-      yield* fs
-        .makeDirectory(path.dirname(destination), { recursive: true })
-        .pipe(
-          Effect.andThen(fs.writeFile(destination, bytes)),
-          Effect.andThen(
-            Option.isSome(previous) && !isLink && previous.value.type === "File"
-              ? fs.chmod(destination, previous.value.mode)
+      yield* fs.makeDirectory(path.dirname(destination), { recursive: true }).pipe(
+        Effect.andThen(fs.writeFile(destination, bytes)),
+        Effect.andThen(
+          Option.isSome(previous) && !isLink && previous.value.type === "File"
+            ? fs.chmod(destination, previous.value.mode)
+            : // A file gone from disk keeps the mode its VCS recorded.
+              file.executable === true
+              ? fs
+                  .stat(destination)
+                  .pipe(Effect.flatMap((info) => fs.chmod(destination, info.mode | 0o111)))
               : Effect.void,
-          ),
-          Effect.mapError(storageError("pluginCheckpoints.restore", location.root)),
-        );
+        ),
+        Effect.mapError(storageError("pluginCheckpoints.restore", location.root)),
+      );
     }
     yield* checkoutFrom(location, target.revision, overlay);
     return true;
