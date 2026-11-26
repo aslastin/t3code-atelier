@@ -3644,6 +3644,41 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
+  it.effect("writes another VCS's commit message from its changes, not the Git log around it", () =>
+    Effect.gen(function* () {
+      // A plugin's repository inside a Git checkout: the checkout's subjects are not its own.
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      let seen: { summary: string; patch: string; instructions?: string } | undefined;
+      const { manager } = yield* makeManager({
+        textGeneration: {
+          generateCommitMessage: (input) => {
+            seen = {
+              summary: input.stagedSummary,
+              patch: input.stagedPatch,
+              ...(input.policy?.commitInstructions
+                ? { instructions: input.policy.commitInstructions }
+                : {}),
+            };
+            return Effect.succeed({ subject: "Add notes", body: "Explain the notes." });
+          },
+        },
+      });
+
+      const message = yield* manager.writeCommitMessage({
+        cwd: repoDir,
+        branch: "feature",
+        summary: "notes.txt (+1 -0)",
+        patch: "diff --git a/notes.txt b/notes.txt",
+      });
+
+      expect(message).toBe("Add notes\n\nExplain the notes.");
+      expect(seen?.summary).toBe("notes.txt (+1 -0)");
+      expect(seen?.patch).toBe("diff --git a/notes.txt b/notes.txt");
+      expect(seen?.instructions ?? "").not.toContain("Recent commit subjects");
+    }),
+  );
+
   it.effect("falls back when the dedicated source control writer is unavailable", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");

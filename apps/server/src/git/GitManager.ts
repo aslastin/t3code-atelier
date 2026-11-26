@@ -1015,6 +1015,8 @@ export const make = Effect.gen(function* () {
   const resolveStylePolicy = Effect.fn("GitManager.resolveStylePolicy")(function* (
     cwd: string,
     settings: SourceControlTextGenerationSettings,
+    // Another VCS's repository can sit inside an unrelated Git checkout; its log is not theirs.
+    readSubjects: (cwd: string) => Effect.Effect<ReadonlyArray<string>> = readRecentCommitSubjects,
   ) {
     switch (settings.style.mode) {
       case "conventional_commits":
@@ -1029,7 +1031,7 @@ export const make = Effect.gen(function* () {
             : {},
         );
       case "repo_conventions": {
-        const subjects = yield* readRecentCommitSubjects(cwd);
+        const subjects = yield* readSubjects(cwd);
         const agentInstructions = yield* readRepositoryInstructions(cwd, "AGENTS.md");
         const isClaudeWriter =
           settings.modelSelection.instanceId === "claudeAgent" ||
@@ -4087,7 +4089,7 @@ export const make = Effect.gen(function* () {
     "GitManager.writeCommitMessage",
   )(function* (input) {
     const settings = yield* textGenerationSettingsFor(input, "writeCommitMessage");
-    const policy = yield* resolveStylePolicy(input.cwd, settings);
+    const policy = yield* resolveStylePolicy(input.cwd, settings, () => Effect.succeed([]));
     const generated = yield* textGeneration
       .generateCommitMessage({
         cwd: input.cwd,
