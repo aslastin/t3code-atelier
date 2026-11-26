@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Synchronous digests and random temp file names.
 import * as NodeCrypto from "node:crypto";
+import * as NodeOS from "node:os";
 
 import {
   VcsCheckpointStorageError,
@@ -27,6 +28,7 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import type { PluginCommandRunner } from "./pluginCommandRunner.ts";
 
 const CHECKPOINT_TIMEOUT_MS = 120_000;
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const READ_FILE_MAX_BYTES = 50_000_000;
 const CHANGED_FILES_MAX_BYTES = 5_000_000;
 
@@ -55,7 +57,7 @@ export const ensurePluginCheckpointTable = Effect.fn(
 )(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`
-    CREATE TABLE IF NOT EXISTS atelier_vcs_plugin_checkpoints (
+    CREATE TABLE IF NOT EXISTS atelier_vcs_plugin_checkpoint_records (
       repository_root TEXT NOT NULL,
       checkpoint_ref TEXT NOT NULL,
       plugin_id TEXT NOT NULL,
@@ -64,7 +66,7 @@ export const ensurePluginCheckpointTable = Effect.fn(
       base_revision TEXT,
       files_json TEXT,
       created_at TEXT NOT NULL,
-      PRIMARY KEY (repository_root, checkpoint_ref)
+      PRIMARY KEY (repository_root, plugin_id, checkpoint_ref)
     )
   `;
 });
@@ -135,12 +137,22 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     readonly scope: string;
     readonly shadow: string;
   }
+  // Exclusions arrive relative to the scope's folder; every path here is repository-relative.
+  const repositoryExcludes = (location: Location, excludes: ReadonlyArray<string> | undefined) =>
+    (excludes ?? []).map((exclude) =>
+      location.scope === "" ? exclude : `${location.scope}/${exclude}`,
+    );
+
   const locate = Effect.fn("pluginCheckpoints.locate")(function* (cwd: string) {
     const root = yield* context.repositoryRoot(cwd);
     const realRoot = yield* fs.realPath(root).pipe(Effect.orElseSucceed(() => root));
     const realCwd = yield* fs.realPath(cwd).pipe(Effect.orElseSucceed(() => cwd));
     const scope = path.relative(realRoot, realCwd).split(path.sep).join("/");
-    const key = NodeCrypto.createHash("sha256").update(realRoot).digest("hex").slice(0, 24);
+    // Per plugin too: another plugin for the same folder keeps its own shadow refs.
+    const key = NodeCrypto.createHash("sha256")
+      .update(`${kind}\0${realRoot}`)
+      .digest("hex")
+      .slice(0, 24);
     return { root: realRoot, scope, shadow: path.join(shadowRoot, `${key}.git`) } as Location;
   });
 
@@ -171,6 +183,8 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         "core.fsmonitor=false",
         "-c",
         "core.hooksPath=",
+        "-c",
+        `core.attributesFile=${NodeOS.devNull}`,
         ...args,
       ],
       env: {
@@ -178,6 +192,10 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         GIT_AUTHOR_EMAIL: "checkpoints@t3.invalid",
         GIT_COMMITTER_NAME: "T3 Code",
         GIT_COMMITTER_EMAIL: "checkpoints@t3.invalid",
+        // The plugin's repository asked for no conversion: ignore its .gitattributes (eol,
+        // filters) by reading attributes from the empty tree.
+        GIT_ATTR_SOURCE: EMPTY_TREE,
+        GIT_ATTR_NOSYSTEM: "1",
         ...(options?.index ? { GIT_INDEX_FILE: options.index } : {}),
         ...(options?.literal ? { GIT_LITERAL_PATHSPECS: "1" } : {}),
       },
@@ -308,7 +326,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
   ) {
     const rows = yield* sql`
       SELECT strategy, revision, base_revision AS "baseRevision", files_json AS "filesJson"
-      FROM atelier_vcs_plugin_checkpoints
+      FROM atelier_vcs_plugin_checkpoint_records
       WHERE repository_root = ${location.root} AND checkpoint_ref = ${checkpointRef}
         AND plugin_id = ${kind}
     `.pipe(Effect.mapError(storageError("pluginCheckpoints.readRecord", location.root)));
@@ -336,7 +354,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       record.files === null ? null : yield* encodeFiles(record.files).pipe(Effect.mapError(failed));
     const createdAt = DateTime.formatIso(yield* DateTime.now);
     yield* sql`
-      INSERT OR REPLACE INTO atelier_vcs_plugin_checkpoints
+      INSERT OR REPLACE INTO atelier_vcs_plugin_checkpoint_records
         (repository_root, checkpoint_ref, plugin_id, strategy, revision, base_revision,
          files_json, created_at)
       VALUES (${location.root}, ${checkpointRef}, ${kind}, ${record.strategy}, ${record.revision},
@@ -467,7 +485,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         location,
         input.cwd,
         input.checkpointRef,
-        input.excludePaths ?? [],
+        repositoryExcludes(location, input.excludePaths),
       ).pipe(Effect.result);
       if (result._tag === "Success") {
         return yield* writeRecord(location, input.checkpointRef, result.success);
@@ -501,7 +519,12 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           // A path the other side added did not exist at the shared base.
           if (own.has(file.path) || file.status === "added") continue;
           const bytes = yield* readBaseFile(location, cwd, record.baseRevision!, file.path);
-          if (bytes === null) continue;
+          // A modified or deleted path existed at the base; an empty side would hide the change.
+          if (bytes === null)
+            return yield* unsupported(
+              "diffCheckpoints",
+              `${runner.label} could not read ${file.path} at its base revision.`,
+            );
           entries.push(`100644 ${yield* writeBlob(location, bytes)}\t${file.path}`);
         }
         if (entries.length > 0)
@@ -538,7 +561,12 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         `The snapshots were taken with different strategies (\`${from.strategy}\`, then \`${to.strategy}\`), so they cannot be compared.`,
       );
     if (from.strategy === "native") {
-      const { patch } = yield* nativeDiff(location, input.cwd, from.revision, to.revision);
+      // Said in the turn's note: a snapshot the plugin no longer reads is not an empty change.
+      const { patch } = yield* nativeDiff(location, input.cwd, from.revision, to.revision).pipe(
+        Effect.catch(() =>
+          unsupported("diffCheckpoints", `${runner.label} could not read one of these snapshots.`),
+        ),
+      );
       const filtered = input.filePaths ? filterPatch(patch, new Set(input.filePaths)) : patch;
       return input.format === "numstat" ? patchToNumstat(filtered) : filtered;
     }
@@ -588,10 +616,40 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           ),
         ).pipe(Effect.asVoid);
 
+  // A folder on the way that became a link would take the change outside the checkout.
+  const refuseLinkedParent = Effect.fnUntraced(function* (location: Location, file: string) {
+    const parts = file.split("/");
+    for (let index = 1; index < parts.length; index++) {
+      const parent = parts.slice(0, index).join("/");
+      if (Option.isSome(yield* fs.readLink(path.join(location.root, parent)).pipe(Effect.option)))
+        return yield* unsupported(
+          "restoreCheckpoint",
+          `${parent} is now a symbolic link, so ${file} cannot be restored safely.`,
+        );
+    }
+  });
+
   const removePath = (location: Location, file: string) =>
-    fs
-      .remove(path.join(location.root, file), { recursive: true, force: true })
-      .pipe(Effect.mapError(storageError("pluginCheckpoints.restore", location.root)));
+    refuseLinkedParent(location, file).pipe(
+      Effect.andThen(
+        fs
+          .remove(path.join(location.root, file), { recursive: true, force: true })
+          .pipe(Effect.mapError(storageError("pluginCheckpoints.restore", location.root))),
+      ),
+    );
+
+  // Removes `file`, but never a nested scope's files below it.
+  const removeKeeping = Effect.fnUntraced(function* (
+    location: Location,
+    file: string,
+    excludes: ReadonlyArray<string>,
+  ) {
+    if (!excludes.some((exclude) => exclude.startsWith(`${file}/`)))
+      return yield* removePath(location, file);
+    for (const entry of yield* listFiles(location, file)) {
+      if (inScope(entry, "", excludes)) yield* removePath(location, entry);
+    }
+  });
 
   const restoreCheckpoint: VcsCheckpointOps["restoreCheckpoint"] = Effect.fn(
     "pluginCheckpoints.restoreCheckpoint",
@@ -599,7 +657,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     const location = yield* locate(input.cwd);
     const target = yield* readRecord(location, input.checkpointRef);
     if (target === null) return false;
-    const excludes = input.excludePaths ?? [];
+    const excludes = repositoryExcludes(location, input.excludePaths);
     if (target.strategy === "native") {
       yield* runner.run("checkpointRestore", {
         cwd: input.cwd,
@@ -652,14 +710,14 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         // A folder the checkpoint added may have gained files since.
         if (file.status === "added") {
           for (const extra of yield* listFiles(location, file.path)) {
-            if (!overlaySet.has(extra)) yield* removePath(location, extra);
+            if (!overlaySet.has(extra) && kept(extra)) yield* removePath(location, extra);
           }
         }
         continue;
       }
       // The checkpoint left this path at its base state.
       if (file.status === "added") {
-        yield* removePath(location, file.path);
+        yield* removeKeeping(location, file.path, excludes);
         continue;
       }
       const bytes = yield* readBaseFile(location, input.cwd, target.baseRevision!, file.path);
@@ -669,6 +727,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           "restoreCheckpoint",
           `${runner.label} could not read ${file.path} at its base revision.`,
         );
+      yield* refuseLinkedParent(location, file.path);
       const destination = path.join(location.root, file.path);
       // Replaced, not written through: the path may now be a link to another file. A regular
       // file keeps its mode, such as the executable bit.
@@ -719,14 +778,30 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     "pluginCheckpoints.hasCheckpointRef",
   )(function* (input) {
     const location = yield* locate(input.cwd);
+    return (yield* readRecord(location, input.checkpointRef)) !== null;
+  });
+
+  // What a restore would need, checked before a rollback rewinds the provider's conversation.
+  const verifyRestorable: NonNullable<VcsCheckpointOps["verifyRestorable"]> = Effect.fn(
+    "pluginCheckpoints.verifyRestorable",
+  )(function* (input) {
+    const location = yield* locate(input.cwd);
     const record = yield* readRecord(location, input.checkpointRef);
     if (record === null) return false;
-    if (record.strategy !== "native") return true;
     // A plugin's snapshot can be gone with its worktree; only one it still reads counts.
-    return yield* nativeDiff(location, input.cwd, record.revision, record.revision).pipe(
+    if (record.strategy === "native")
+      return yield* nativeDiff(location, input.cwd, record.revision, record.revision).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
+    const stored = yield* git(location, ["cat-file", "-e", `${record.revision}^{commit}`]).pipe(
       Effect.as(true),
       Effect.orElseSucceed(() => false),
     );
+    if (!stored || record.strategy === "full") return stored;
+    // Changed-files files restore only onto the base revision they were taken from.
+    const current = yield* changedFiles(location, input.cwd, []).pipe(Effect.option);
+    return Option.isSome(current) && current.value.revision === record.baseRevision;
   });
 
   const deleteCheckpointRefs: VcsCheckpointOps["deleteCheckpointRefs"] = Effect.fn(
@@ -748,8 +823,9 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         yield* git(location, ["update-ref", "-d", checkpointRef]).pipe(Effect.ignore);
       }
       yield* sql`
-        DELETE FROM atelier_vcs_plugin_checkpoints
+        DELETE FROM atelier_vcs_plugin_checkpoint_records
         WHERE repository_root = ${location.root} AND checkpoint_ref = ${checkpointRef}
+          AND plugin_id = ${kind}
       `.pipe(
         Effect.mapError(storageError("pluginCheckpoints.deleteCheckpointRefs", location.root)),
       );
@@ -764,6 +840,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       Effect.fail(unsupported("captureHeadCheckpoint", "Plugins capture every checkpoint.")),
     hasCheckpointRef,
     restoreCheckpoint,
+    verifyRestorable,
     diffCheckpoints,
     // Every changed path belongs to the turn.
     listAuthoredPaths: () => Effect.succeed(null),
@@ -775,19 +852,21 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
 function unquoteGitPath(quoted: string): string {
   const bytes: number[] = [];
   const escapes: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13 };
-  for (let index = 0; index < quoted.length; index++) {
-    const char = quoted[index]!;
+  const chars = [...quoted];
+  for (let index = 0; index < chars.length; index++) {
+    const char = chars[index]!;
     if (char !== "\\") {
       bytes.push(...Buffer.from(char, "utf8"));
       continue;
     }
-    const next = quoted[index + 1] ?? "";
-    const octal = /^[0-7]{3}/.exec(quoted.slice(index + 1));
+    const octal = /^[0-7]{3}/.exec(chars.slice(index + 1, index + 4).join(""));
     if (octal) {
       bytes.push(Number.parseInt(octal[0], 8));
       index += 3;
     } else {
-      bytes.push(escapes[next] ?? next.charCodeAt(0));
+      const next = chars[index + 1] ?? "";
+      if (escapes[next] !== undefined) bytes.push(escapes[next]);
+      else bytes.push(...Buffer.from(next, "utf8"));
       index += 1;
     }
   }
@@ -826,9 +905,12 @@ function patchToNumstat(patch: string): string {
     const binary = /^Binary files .* differ$/m.test(section) || /^GIT binary patch$/m.test(section);
     let added = 0;
     let deleted = 0;
+    // Header lines come before the first hunk; inside one, "+++i;" is an added "++i;".
+    let inHunk = false;
     for (const line of section.split("\n")) {
-      if (line.startsWith("+++") || line.startsWith("---")) continue;
-      if (line.startsWith("+")) added++;
+      if (line.startsWith("@@")) inHunk = true;
+      else if (!inHunk) continue;
+      else if (line.startsWith("+")) added++;
       else if (line.startsWith("-")) deleted++;
     }
     const counts = binary ? "-\t-" : `${added}\t${deleted}`;

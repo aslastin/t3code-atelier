@@ -53,7 +53,7 @@ const setup = Effect.fn("test.setup")(function* (options: FakeVcsPluginOptions =
   const strategies = Effect.gen(function* () {
     const sql = Context.get(context, SqlClient.SqlClient);
     const rows = yield* sql<{ readonly strategy: string }>`
-      SELECT strategy FROM atelier_vcs_plugin_checkpoints ORDER BY checkpoint_ref
+      SELECT strategy FROM atelier_vcs_plugin_checkpoint_records ORDER BY checkpoint_ref
     `;
     return rows.map((row) => row.strategy);
   });
@@ -145,6 +145,8 @@ describe("ManifestVcsDriver", () => {
       const { driver, repository } = yield* setup();
       NodeFS.writeFileSync(`${repository}/a.txt`, "changed\n");
       NodeFS.writeFileSync(`${repository}/new.txt`, "new\n");
+      // A name can start with a space; it is a different file from the trimmed one.
+      NodeFS.writeFileSync(`${repository}/ lead.txt`, "lead\n");
       const identity = yield* driver!.detectRepository(`${repository}/sub`);
       assert.strictEqual(identity?.rootPath, repository);
       // An alias whose own parents have no marker still finds the repository it points into.
@@ -159,6 +161,7 @@ describe("ManifestVcsDriver", () => {
       assert.deepStrictEqual(
         status.workingTree.files.map((file) => [file.path, file.untracked === true]),
         [
+          [" lead.txt", true],
           ["a.txt", false],
           ["new.txt", true],
         ],
@@ -261,12 +264,26 @@ describe("ManifestVcsDriver", () => {
       });
       assert.strictEqual(numstat, "1\t1\ta.txt\0");
 
+      // An added "++i;" is the hunk line "+++i;", not a file header.
+      NodeFS.writeFileSync(`${repository}/a.txt`, "++i;\n");
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("1b") });
+      assert.strictEqual(
+        yield* checkpoints.diffCheckpoints({
+          cwd: repository,
+          fromCheckpointRef: ref("1"),
+          toCheckpointRef: ref("1b"),
+          ignoreWhitespace: false,
+          format: "numstat",
+        }),
+        "1\t1\ta.txt\0",
+      );
+
       // Git quotes a name outside ASCII; the summary still lists it.
       NodeFS.writeFileSync(`${repository}/café.txt`, "new\n");
       yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("2") });
       const quoted = yield* checkpoints.diffCheckpoints({
         cwd: repository,
-        fromCheckpointRef: ref("1"),
+        fromCheckpointRef: ref("1b"),
         toCheckpointRef: ref("2"),
         ignoreWhitespace: false,
         format: "numstat",
@@ -278,11 +295,19 @@ describe("ManifestVcsDriver", () => {
       );
       assert.strictEqual(NodeFS.readFileSync(`${repository}/a.txt`, "utf8"), "one\n");
 
-      // A snapshot the plugin can no longer read is not offered as a checkpoint.
+      // A snapshot the plugin can no longer read still exists, so a turn start keeps its ref,
+      // but it cannot be restored, and its diff says why instead of showing nothing.
       NodeFS.rmSync(`${repository}/.kite/snapshots`, { recursive: true });
-      assert.isFalse(
+      assert.isTrue(
         yield* checkpoints.hasCheckpointRef({ cwd: repository, checkpointRef: ref("1") }),
       );
+      assert.isFalse(
+        yield* checkpoints.verifyRestorable!({ cwd: repository, checkpointRef: ref("1") }),
+      );
+      const unreadable = yield* checkpoints
+        .diffCheckpoints({ ...diff, ignoreWhitespace: false })
+        .pipe(Effect.flip);
+      assert.strictEqual(unreadable._tag, "VcsUnsupportedOperationError");
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
@@ -450,11 +475,84 @@ describe("ManifestVcsDriver", () => {
         .pipe(Effect.flip);
       assert.strictEqual(NodeFS.readFileSync(`${repository}/a.txt`, "utf8"), "edited\n");
 
-      // Another plugin's record for the same repository is not this plugin's checkpoint.
-      yield* sql`UPDATE atelier_vcs_plugin_checkpoints SET plugin_id = 'other'`;
+      // Another plugin's record for the same ref sits beside this one, never replacing it.
+      yield* sql`
+        INSERT INTO atelier_vcs_plugin_checkpoint_records
+          (repository_root, checkpoint_ref, plugin_id, strategy, revision, created_at)
+        SELECT repository_root, checkpoint_ref, 'other', 'native', 'x', created_at
+        FROM atelier_vcs_plugin_checkpoint_records
+      `;
+      assert.isTrue(
+        yield* checkpoints.hasCheckpointRef({ cwd: repository, checkpointRef: ref("0") }),
+      );
+      yield* sql`DELETE FROM atelier_vcs_plugin_checkpoint_records WHERE plugin_id = 'kite'`;
       assert.isFalse(
         yield* checkpoints.hasCheckpointRef({ cwd: repository, checkpointRef: ref("0") }),
       );
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live("changed-files restores nothing through a linked folder or into a nested scope", () =>
+    Effect.gen(function* () {
+      const { driver, repository } = yield* setup({ checkpoints: ["changed-files"] });
+      const checkpoints = driver!.checkpoints;
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
+
+      // A deletion recorded under sub/, then sub/ replaced by a link to another folder.
+      NodeFS.rmSync(`${repository}/sub/b.txt`);
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("1") });
+      const elsewhere = NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-kite-elsewhere-`);
+      NodeFS.writeFileSync(`${elsewhere}/b.txt`, "keep\n");
+      NodeFS.rmSync(`${repository}/sub`, { recursive: true });
+      NodeFS.symlinkSync(elsewhere, `${repository}/sub`);
+      yield* checkpoints
+        .restoreCheckpoint({ cwd: repository, checkpointRef: ref("1") })
+        .pipe(Effect.flip);
+      assert.strictEqual(NodeFS.readFileSync(`${elsewhere}/b.txt`, "utf8"), "keep\n");
+      NodeFS.rmSync(`${repository}/sub`);
+      NodeFS.mkdirSync(`${repository}/sub`);
+      NodeFS.writeFileSync(`${repository}/sub/b.txt`, "two\n");
+
+      // An added folder holding a nested scope loses only its own files.
+      NodeFS.mkdirSync(`${repository}/generated/nested`, { recursive: true });
+      NodeFS.writeFileSync(`${repository}/generated/own.txt`, "own\n");
+      NodeFS.writeFileSync(`${repository}/generated/nested/keep.txt`, "keep\n");
+      yield* checkpoints.restoreCheckpoint({
+        cwd: repository,
+        checkpointRef: ref("0"),
+        excludePaths: ["generated/nested"],
+      });
+      assert.isFalse(NodeFS.existsSync(`${repository}/generated/own.txt`));
+      assert.isTrue(NodeFS.existsSync(`${repository}/generated/nested/keep.txt`));
+
+      // Exclusions are relative to the scope's folder.
+      yield* checkpoints.captureCheckpoint({ cwd: `${repository}/sub`, checkpointRef: ref("2") });
+      NodeFS.writeFileSync(`${repository}/sub/b.txt`, "mine\n");
+      yield* checkpoints.restoreCheckpoint({
+        cwd: `${repository}/sub`,
+        checkpointRef: ref("2"),
+        excludePaths: ["b.txt"],
+      });
+      assert.strictEqual(NodeFS.readFileSync(`${repository}/sub/b.txt`, "utf8"), "mine\n");
+
+      // Files of a moved base cannot be restored, and a rollback learns that up front.
+      NodeFS.writeFileSync(`${repository}/.kite/revision`, "base-2");
+      assert.isFalse(
+        yield* checkpoints.verifyRestorable!({ cwd: repository, checkpointRef: ref("0") }),
+      );
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live("full keeps file bytes the repository's attributes would convert", () =>
+    Effect.gen(function* () {
+      const { driver, repository } = yield* setup({ checkpoints: ["full"] });
+      const checkpoints = driver!.checkpoints;
+      NodeFS.writeFileSync(`${repository}/.gitattributes`, "*.txt text eol=lf\n");
+      NodeFS.writeFileSync(`${repository}/crlf.txt`, "x\r\n");
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
+      NodeFS.writeFileSync(`${repository}/crlf.txt`, "changed\r\n");
+      yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("0") });
+      assert.strictEqual(NodeFS.readFileSync(`${repository}/crlf.txt`, "utf8"), "x\r\n");
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 

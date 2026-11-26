@@ -102,6 +102,10 @@ export interface VcsCheckpointOps {
   readonly restoreCheckpoint: (
     input: VcsRestoreCheckpointInput,
   ) => Effect.Effect<boolean, VcsError>;
+  /** Atelier fork: whether a restore would succeed now; `hasCheckpointRef` when absent. */
+  readonly verifyRestorable?: (
+    input: Omit<VcsRestoreCheckpointInput, "fallbackToHead">,
+  ) => Effect.Effect<boolean, VcsError>;
   readonly diffCheckpoints: (input: VcsDiffCheckpointsInput) => Effect.Effect<string, VcsError>;
   readonly listAuthoredPaths: (
     input: VcsListAuthoredPathsInput,

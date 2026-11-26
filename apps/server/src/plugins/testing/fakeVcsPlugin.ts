@@ -96,6 +96,11 @@ const patch = (fromDir, toDir) => {
   return text;
 };
 const snapshotDir = (revision) => path.join(kite, "snapshots", revision);
+// A test moves the base by writing .kite/revision, as a pull or a commit would.
+const baseRevision = () => {
+  const file = path.join(kite, "revision");
+  return fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim() : "base-1";
+};
 const readRefs = () => {
   const file = path.join(kite, "refs.json");
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : [];
@@ -232,13 +237,13 @@ switch (command) {
     out({ patch: patch(path.join(kite, "base"), root) });
     break;
   case "changed":
-    out({ revision: "base-1", files: changes() });
+    out({ revision: baseRevision(), files: changes() });
     break;
   case "show": {
     if (fs.existsSync(path.join(kite, "broken-show"))) fail("the store is unavailable");
     const [revision, file] = args;
     const target = path.join(kite, "base", file);
-    if (revision !== "base-1" || !fs.existsSync(target)) fail("no such file");
+    if (revision !== baseRevision() || !fs.existsSync(target)) fail("no such file");
     process.stdout.write(fs.readFileSync(target));
     break;
   }

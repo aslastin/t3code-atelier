@@ -825,9 +825,10 @@ export const layer: Layer.Layer<
             failed(target, `Checkpoint status is ${target.checkpoint.status}.`),
           );
         }
-        const exists = yield* checkpointStore
-          .hasCheckpointRef({ cwd: target.scope.cwd, checkpointRef: target.checkpoint.ref })
-          .pipe(Effect.catch((cause) => Effect.flip(failed(target, cause))));
+        const ref = { cwd: target.scope.cwd, checkpointRef: target.checkpoint.ref };
+        const exists = yield* (
+          checkpointStore.verifyRestorable ?? checkpointStore.hasCheckpointRef
+        )(ref).pipe(Effect.catch((cause) => Effect.flip(failed(target, cause))));
         if (!exists) return yield* Effect.flip(failed(target, "Checkpoint ref is unavailable."));
       }
     });

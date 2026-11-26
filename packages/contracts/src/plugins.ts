@@ -79,7 +79,8 @@ export const PluginCheckOutput = Schema.Struct({
 });
 export type PluginCheckOutput = typeof PluginCheckOutput.Type;
 
-const PluginPath = TrimmedNonEmptyString.check(Schema.isMaxLength(4_096));
+// Kept as printed: a name can start or end with a space.
+const PluginPath = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4_096));
 
 export const VcsPluginStatusOutput = Schema.Struct({
   refName: Schema.NullOr(TrimmedNonEmptyString),

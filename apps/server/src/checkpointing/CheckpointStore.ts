@@ -85,6 +85,10 @@ export class CheckpointStore extends Context.Service<
     readonly hasCheckpointRef: (
       input: Omit<RestoreCheckpointInput, "fallbackToHead">,
     ) => Effect.Effect<boolean, CheckpointStoreError>;
+    /** Whether a restore would succeed now, which can be stricter than the ref existing. */
+    readonly verifyRestorable?: (
+      input: Omit<RestoreCheckpointInput, "fallbackToHead">,
+    ) => Effect.Effect<boolean, CheckpointStoreError>;
 
     readonly restoreCheckpoint: (
       input: RestoreCheckpointInput,
@@ -158,6 +162,13 @@ export const make = Effect.gen(function* () {
     return yield* checkpoints.hasCheckpointRef(input);
   });
 
+  const verifyRestorable: NonNullable<CheckpointStore["Service"]["verifyRestorable"]> = Effect.fn(
+    "verifyRestorable",
+  )(function* (input) {
+    const checkpoints = yield* resolveCheckpoints(input.cwd);
+    return yield* (checkpoints.verifyRestorable ?? checkpoints.hasCheckpointRef)(input);
+  });
+
   const restoreCheckpoint: CheckpointStore["Service"]["restoreCheckpoint"] = Effect.fn(
     "restoreCheckpoint",
   )(function* (input) {
@@ -192,6 +203,7 @@ export const make = Effect.gen(function* () {
     resolveCleanHead,
     captureHeadCheckpoint,
     hasCheckpointRef,
+    verifyRestorable,
     restoreCheckpoint,
     diffCheckpoints,
     listAuthoredPaths,
