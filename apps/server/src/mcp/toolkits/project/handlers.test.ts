@@ -44,6 +44,7 @@ import * as SourceControlProviderRegistry from "../../../sourceControl/SourceCon
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
+import { VcsPluginDrivers } from "../../../plugins/VcsPluginDrivers.ts";
 import * as VcsProcess from "../../../vcs/VcsProcess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -69,6 +70,8 @@ const clientLaunchHarness = (input: {
   readonly refusedByCeiling?: true;
   /** A VCS workflow that answers for the project, as for a VCS plugin's repository. */
   readonly workflow?: Partial<GitWorkflowService.GitWorkflowService["Service"]>;
+  /** Markers of the installed VCS plugins. */
+  readonly pluginMarkers?: ReadonlyArray<string>;
 }) => {
   const projectId = ProjectId.make("project:client-target");
   const modelSelection = {
@@ -192,6 +195,14 @@ const clientLaunchHarness = (input: {
     ...(input.workflow === undefined
       ? []
       : [Layer.mock(GitWorkflowService.GitWorkflowService)(input.workflow)]),
+    ...(input.pluginMarkers === undefined
+      ? []
+      : [
+          Layer.succeed(VcsPluginDrivers, {
+            markers: () => input.pluginMarkers ?? [],
+            installedMarkers: () => input.pluginMarkers ?? [],
+          } as unknown as VcsPluginDrivers["Service"]),
+        ]),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
       namedProjectsRoot: "/projects",
       isScratchProject: () => Effect.succeed(false),
@@ -924,6 +935,44 @@ it.effect("a launch into a VCS plugin's repository asks the plugin, not Git", ()
         worktreePath: `${checkout}/my-project`,
       });
     }
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a defaulted launch into a plugin repository whose status fails creates nothing", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const repo = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-launch-plugin-fail-" });
+    yield* fileSystem.makeDirectory(`${repo}/.kite`);
+    yield* fileSystem.writeFileString(`${repo}/.kite/HEAD`, "main\n");
+    const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+    const { projectId, dependencies } = clientLaunchHarness({
+      runtimeModeCeiling: "auto",
+      launched,
+      workspaceRoot: repo,
+      defaultThreadEnvMode: "worktree",
+      pluginMarkers: [".kite/HEAD"],
+      workflow: {
+        localStatus: () =>
+          Effect.fail(
+            new GitCommandError({
+              operation: "kite.status",
+              command: "status",
+              cwd: repo,
+              detail: "the plugin failed",
+            }),
+          ),
+      },
+    });
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
+      ),
+    );
+    const result = (yield* toolkit
+      .handle("t3_thread_launch", { title: "Fix", projectId })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies))).at(-1)?.result;
+    expect(result).toMatchObject({ code: "orchestration_error" });
+    expect(launched).toHaveLength(0);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 

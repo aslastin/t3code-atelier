@@ -185,7 +185,7 @@ const defaultWorktreeStrategy = Effect.fn("mcp.defaultWorktreeStrategy")(functio
 ): Effect.fn.Return<
   OrchestrationV2ThreadLaunchWorkspaceStrategy | undefined,
   OrchestratorMcpFailure,
-  GitVcsDriver.GitVcsDriver
+  GitVcsDriver.GitVcsDriver | FileSystem.FileSystem | Path.Path
 > {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const unreadable = new OrchestratorMcpFailure({
@@ -202,6 +202,26 @@ const defaultWorktreeStrategy = Effect.fn("mcp.defaultWorktreeStrategy")(functio
     workflow === undefined
       ? null
       : yield* workflow.localStatus({ cwd: workspaceRoot }).pipe(Effect.orElseSucceed(() => null));
+  // A plugin repository whose status failed must not read as "not a repository" to Git below.
+  if (workflow !== undefined && status === null) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const markers = Option.match(yield* Effect.serviceOption(VcsPluginDrivers), {
+      onNone: () => [],
+      onSome: (plugins) => plugins.installedMarkers(),
+    });
+    for (let folder = workspaceRoot; ; folder = path.dirname(folder)) {
+      for (const marker of markers) {
+        if (
+          yield* fileSystem
+            .exists(path.join(folder, marker))
+            .pipe(Effect.orElseSucceed(() => false))
+        )
+          return yield* unreadable;
+      }
+      if (path.dirname(folder) === folder) break;
+    }
+  }
   const capabilities = status?.capabilities;
   if (status !== null && capabilities !== undefined && capabilities.kind !== GIT_VCS_KIND) {
     if (!capabilities.supportsWorktrees) return undefined;
