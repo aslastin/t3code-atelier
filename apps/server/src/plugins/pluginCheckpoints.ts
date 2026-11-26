@@ -164,7 +164,6 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     options?: {
       readonly index?: string;
       readonly stdin?: string;
-      readonly literal?: boolean;
       readonly maxOutputBytes?: number;
       readonly truncate?: boolean;
     },
@@ -198,7 +197,6 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         GIT_ATTR_SOURCE: EMPTY_TREE,
         GIT_ATTR_NOSYSTEM: "1",
         ...(options?.index ? { GIT_INDEX_FILE: options.index } : {}),
-        ...(options?.literal ? { GIT_LITERAL_PATHSPECS: "1" } : {}),
       },
       ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}),
       timeoutMs: CHECKPOINT_TIMEOUT_MS,
@@ -230,30 +228,25 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       (index) => fs.remove(index, { force: true }).pipe(Effect.ignore),
     );
 
-  const stagePaths = (location: Location, index: string, paths: ReadonlyArray<string>) =>
+  // A listed folder can hold a nested scope: Git never reads its files, they are left out.
+  const stagePaths = (
+    location: Location,
+    index: string,
+    paths: ReadonlyArray<string>,
+    excludes: ReadonlyArray<string>,
+  ) =>
     paths.length === 0
       ? Effect.void
       : git(
           location,
           ["add", "--force", "--all", "--pathspec-from-file=-", "--pathspec-file-nul"],
-          { index, literal: true, stdin: `${paths.join("\0")}\0` },
-        ).pipe(Effect.asVoid);
-
-  const unstagePaths = (location: Location, index: string, paths: ReadonlyArray<string>) =>
-    paths.length === 0
-      ? Effect.void
-      : git(
-          location,
-          [
-            "rm",
-            "--cached",
-            "-r",
-            "-q",
-            "--ignore-unmatch",
-            "--pathspec-from-file=-",
-            "--pathspec-file-nul",
-          ],
-          { index, literal: true, stdin: `${paths.join("\0")}\0` },
+          {
+            index,
+            stdin: `${[
+              ...paths.map((file) => `:(top,literal)${file}`),
+              ...excludes.map((exclude) => `:(top,literal,exclude)${exclude}`),
+            ].join("\0")}\0`,
+          },
         ).pipe(Effect.asVoid);
 
   const commitIndex = Effect.fn("pluginCheckpoints.commitIndex")(function* (
@@ -287,9 +280,15 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         kind,
         detail: `"${outside.path}" is not a repository-relative path.`,
       });
+    // A new folder around the project's folder makes the whole project folder new.
+    const files = output.files.map((file) =>
+      file.status === "added" && location.scope.startsWith(`${file.path}/`)
+        ? { ...file, path: location.scope }
+        : file,
+    );
     return {
       revision: output.revision,
-      files: output.files.filter((file) => inScope(file.path, location.scope, excludes)),
+      files: files.filter((file) => inScope(file.path, location.scope, excludes)),
     };
   });
 
@@ -402,6 +401,12 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           "captureCheckpoint",
           "A native snapshot cannot leave out a nested folder with its own checkpoints.",
         );
+      // Restoring it would put back the files beside the project's folder too.
+      if (location.scope !== "")
+        return yield* unsupported(
+          "captureCheckpoint",
+          "A native snapshot covers the whole repository, not only the project's folder.",
+        );
       const { revision } = yield* runner.runJson(
         "checkpointCapture",
         VcsPluginCheckpointCaptureOutput,
@@ -439,11 +444,8 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           location,
           index,
           files.filter((file) => file.status !== "deleted").map((file) => file.path),
-        ).pipe(
-          // A listed folder can hold a nested scope; its files stay out.
-          Effect.andThen(unstagePaths(location, index, excludes)),
-          Effect.andThen(commitIndex(location, index)),
-        ),
+          excludes,
+        ).pipe(Effect.andThen(commitIndex(location, index))),
       );
       yield* git(location, ["update-ref", checkpointRef, commit]);
       return {
@@ -703,6 +705,11 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           "restoreCheckpoint",
           "A native snapshot cannot be restored around a nested folder with its own checkpoints.",
         );
+      if (location.scope !== "")
+        return yield* unsupported(
+          "restoreCheckpoint",
+          "A native snapshot covers the whole repository, not only the project's folder.",
+        );
       yield* runner.run("checkpointRestore", {
         cwd: input.cwd,
         values: { repositoryRoot: location.root, revision: target.revision },
@@ -719,17 +726,21 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         "-r",
         "-z",
         "--no-renames",
-        "--name-status",
         current,
         target.revision,
       ]);
       const parts = changes.split("\0").filter((part) => part.length > 0);
       const write: string[] = [];
       for (let index = 0; index + 1 < parts.length; index += 2) {
+        // ":<old mode> <new mode> <old id> <new id> <status>", then the path.
+        const [oldMode, newMode, , , status] = parts[index]!.slice(1).split(" ");
         const file = parts[index + 1]!;
         // A nested scope's files stay its own, even where the older snapshot still has them.
         if (!inScope(file, location.scope, excludes)) continue;
-        if (parts[index] === "D") yield* removePath(location, file);
+        // A repository inside is staged as its commit alone; its files and history were never
+        // saved, so it is never removed or replaced.
+        if (oldMode === GITLINK_MODE || newMode === GITLINK_MODE) continue;
+        if (status === "D") yield* removePath(location, file);
         else write.push(file);
       }
       yield* checkoutFrom(location, target.revision, write);
@@ -772,6 +783,11 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           `${runner.label} could not read ${file.path} at its base revision.`,
         );
       yield* refuseLinkedParent(location, file.path);
+      if (excludes.some((exclude) => exclude.startsWith(`${file.path}/`)))
+        return yield* unsupported(
+          "restoreCheckpoint",
+          `${file.path} is now a folder holding a nested folder with its own checkpoints, so its file cannot be restored.`,
+        );
       const destination = path.join(location.root, file.path);
       // Replaced, not written through: the path may now be a link to another file. A regular
       // file keeps its mode, such as the executable bit.
@@ -843,17 +859,23 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     const location = yield* locate(input.cwd);
     const record = yield* readRecord(location, input.checkpointRef);
     if (record === null) return false;
-    // A plugin's snapshot can be gone with its worktree; only one it still reads counts.
+    const excludes = repositoryExcludes(location, input.excludePaths);
+    // A plugin's snapshot can be gone with its worktree; only one it still reads counts. The
+    // restore refuses nested scopes and a project below the root, so this does too.
     if (record.strategy === "native")
-      return yield* nativeDiff(location, input.cwd, record.revision, record.revision).pipe(
-        Effect.as(true),
-        Effect.orElseSucceed(() => false),
-      );
-    // Every object the snapshot needs, not only its commit.
+      return excludes.length > 0 || location.scope !== ""
+        ? false
+        : yield* nativeDiff(location, input.cwd, record.revision, record.revision).pipe(
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+          );
+    // Every object the snapshot needs, not only its commit. Quiet: a large tree lists far more
+    // than any output limit.
     const stored = yield* git(location, [
       "rev-list",
       "--objects",
       "--missing=error",
+      "--quiet",
       record.revision,
     ]).pipe(
       Effect.as(true),
@@ -862,7 +884,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     if (!stored || record.strategy === "full") return stored;
     // Changed-files files restore only onto the base revision they were taken from, and the
     // paths left at their base must still read back from the plugin.
-    const current = yield* changedFiles(location, input.cwd, []).pipe(Effect.option);
+    const current = yield* changedFiles(location, input.cwd, excludes).pipe(Effect.option);
     if (Option.isNone(current) || current.value.revision !== record.baseRevision) return false;
     const recorded = new Set((record.files ?? []).map((file) => file.path));
     for (const file of current.value.files) {
@@ -944,13 +966,22 @@ function unquoteGitPath(quoted: string): string {
   return Buffer.from(bytes).toString("utf8");
 }
 
+const GITLINK_MODE = "160000";
+
 const DIFF_HEADER =
   /^diff --git (?:"a\/((?:[^"\\]|\\.)*)"|a\/(.+?)) (?:"b\/((?:[^"\\]|\\.)*)"|b\/(.+?))$/m;
 
 /** The old and new paths of a patch section, quoted or not. */
 function diffHeaderPaths(section: string): readonly [string, string] | null {
   const header = DIFF_HEADER.exec(section);
-  if (header === null) return null;
+  if (header === null) {
+    // Without prefixes (`diff.noprefix`), as Git reads it: one path named twice.
+    const rest = /^diff --git (.+)$/m.exec(section)?.[1];
+    if (rest === undefined || rest.length % 2 === 0) return null;
+    const half = (rest.length - 1) / 2;
+    const from = rest.slice(0, half);
+    return rest[half] === " " && rest.slice(half + 1) === from ? [from, from] : null;
+  }
   const from = header[1] !== undefined ? unquoteGitPath(header[1]) : header[2]!;
   const to = header[3] !== undefined ? unquoteGitPath(header[3]) : header[4]!;
   return [from, to];

@@ -90,7 +90,9 @@ const patch = (fromDir, toDir) => {
       /[^\x20-\x7e]/.test(file)
         ? '"' + prefix + [...Buffer.from(file, "utf8")].map((b) => (b < 0x80 ? String.fromCharCode(b) : "\\" + b.toString(8))).join("") + '"'
         : prefix + file;
-    text += "diff --git " + quote("a/") + " " + quote("b/") + "\n";
+    // A test switches the prefixes off, as Git's diff.noprefix does.
+    const noPrefix = fs.existsSync(path.join(kite, "no-prefix"));
+    text += "diff --git " + quote(noPrefix ? "" : "a/") + " " + quote(noPrefix ? "" : "b/") + "\n";
     text += "--- " + (a === null ? "/dev/null" : "a/" + file) + "\n";
     text += "+++ " + (b === null ? "/dev/null" : "b/" + file) + "\n";
     text += "@@ -1," + before.length + " +1," + after.length + " @@\n";

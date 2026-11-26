@@ -253,6 +253,8 @@ export interface CheckpointServiceV2Shape {
       readonly scope: Pick<OrchestrationV2CheckpointScope, "id" | "cwd">;
       readonly checkpoint: Pick<OrchestrationV2Checkpoint, "ordinalWithinScope" | "ref" | "status">;
     }>;
+    /** As for `restore`: a folder is checked without the nested ones that keep their own files. */
+    readonly scopes?: ReadonlyArray<Pick<OrchestrationV2CheckpointScope, "id" | "cwd">>;
   }) => Effect.Effect<void, CheckpointServiceV2Error>;
   readonly restore: (input: {
     readonly targets: ReadonlyArray<{
@@ -819,13 +821,20 @@ export const layer: Layer.Layer<
               (checkpointId) =>
                 new CheckpointRestoreError({ scopeId: target.scope.id, checkpointId, cause }),
             );
+      const nested =
+        input.scopes === undefined ? new Map() : yield* resolveNestedScopePaths(input.scopes);
       for (const target of input.targets) {
         if (target.checkpoint.status !== "ready") {
           return yield* Effect.flip(
             failed(target, `Checkpoint status is ${target.checkpoint.status}.`),
           );
         }
-        const ref = { cwd: target.scope.cwd, checkpointRef: target.checkpoint.ref };
+        const excludePaths = nested.get(target.scope.id);
+        const ref = {
+          cwd: target.scope.cwd,
+          checkpointRef: target.checkpoint.ref,
+          ...(excludePaths === undefined ? {} : { excludePaths }),
+        };
         const exists = yield* (
           checkpointStore.verifyRestorable ?? checkpointStore.hasCheckpointRef
         )(ref).pipe(Effect.catch((cause) => Effect.flip(failed(target, cause))));
@@ -847,7 +856,7 @@ export const layer: Layer.Layer<
                 (checkpointId) =>
                   new CheckpointRestoreError({ scopeId: target.scope.id, checkpointId, cause }),
               );
-        yield* ensureRestorable({ targets: input.targets });
+        yield* ensureRestorable({ targets: input.targets, scopes: input.scopes });
         const nested = yield* resolveNestedScopePaths(input.scopes);
         const snapshots: Array<Omit<CheckpointStore.RestoreCheckpointInput, "fallbackToHead">> = [];
         // A snapshot that could not be put back is the only copy of the folder's pre-rewind state.
