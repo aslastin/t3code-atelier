@@ -108,7 +108,13 @@ switch (command) {
     break;
   }
   case "status": {
-    const files = changes().map((file) => ({ path: file.path, insertions: 1, deletions: 0 }));
+    // Kite has no index: a file not in the base is untracked.
+    const files = changes().map((file) => ({
+      path: file.path,
+      insertions: 1,
+      deletions: 0,
+      ...(file.status === "added" ? { untracked: true } : {}),
+    }));
     out({ refName: fs.readFileSync(path.join(kite, "HEAD"), "utf8").trim(), isDefaultRef: true, files });
     break;
   }

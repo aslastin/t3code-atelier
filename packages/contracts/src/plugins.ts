@@ -87,6 +87,8 @@ export const VcsPluginStatusOutput = Schema.Struct({
         path: PluginPath,
         insertions: Schema.optionalKey(NonNegativeInt),
         deletions: Schema.optionalKey(NonNegativeInt),
+        /** A file the VCS does not track yet, so cleanup's tracked-changes rule ignores it. */
+        untracked: Schema.optionalKey(Schema.Boolean),
       }),
     ),
   ),

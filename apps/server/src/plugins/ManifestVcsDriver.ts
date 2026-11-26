@@ -156,6 +156,7 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
       path: file.path,
       insertions: file.insertions ?? 0,
       deletions: file.deletions ?? 0,
+      ...(file.untracked === true ? { untracked: true } : {}),
     }));
     return {
       isRepo: true,

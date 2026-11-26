@@ -390,16 +390,19 @@ const make = Effect.gen(function* () {
   const pluginWorktreeState = Effect.fnUntraced(function* (
     worktreePath: string,
     branch: string | null,
+    rules: WorktreeCleanupRules,
   ) {
     const status = yield* gitWorkflow.localStatus({ cwd: worktreePath });
     const plugin = plugins?.describe(status.capabilities?.kind ?? "");
-    const files = status.workingTree.files.length;
+    // Untracked files count unless the rule keeps only tracked changes. A plugin lists no
+    // ignored files, so "any local files" sees only what its status shows.
+    const files = status.workingTree.files.filter(
+      (file) => rules.worktreeKeepWhen !== "tracked-changes" || file.untracked !== true,
+    ).length;
     return {
       label: plugin?.label ?? "Its VCS plugin",
       recreates: plugin?.recreatesWorktrees === true,
       branchChanged: status.refName !== branch,
-      // A plugin's status does not tell tracked files from untracked or ignored ones, so any
-      // file it lists keeps the worktree, whichever keep rule is set.
       changes:
         files > 0 ? `has uncommitted changes (${files} ${files === 1 ? "file" : "files"})` : null,
     };
@@ -1540,7 +1543,7 @@ const make = Effect.gen(function* () {
         // deletion apply; the merge and unchanged rules read Git history a plugin does not expose.
         if (yield* isListedPluginWorktree(worktreePath, project.workspaceRoot)) {
           if (!eligible) return keep(notDueReason);
-          const first = yield* pluginWorktreeState(worktreePath, thread.branch);
+          const first = yield* pluginWorktreeState(worktreePath, thread.branch, settings);
           if (first.branchChanged) {
             if (!deleted) yield* followBranch(thread.worktreePath!);
             return keep("repository or branch changed");
@@ -1558,7 +1561,7 @@ const make = Effect.gen(function* () {
             Effect.gen(function* () {
               const blockedWhileMeasuring = yield* blockedSinceCheck();
               if (blockedWhileMeasuring !== null) return keep(blockedWhileMeasuring);
-              const last = yield* pluginWorktreeState(worktreePath, thread.branch);
+              const last = yield* pluginWorktreeState(worktreePath, thread.branch, settings);
               if (last.branchChanged) return keep("repository or branch changed since check");
               if (last.changes !== null) return keep(last.changes);
               if (yield* settingsChangedSinceCheck) return keep("settings changed since check");

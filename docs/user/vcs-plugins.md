@@ -81,26 +81,26 @@ one closer to the project folder wins.
 
 Every command except `readFile` prints one JSON object on stdout. Optional fields are marked `?`.
 
-| Command             | Placeholders                      | Prints                                                                                                                                                                    |
-| ------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `check`             |                                   | `{ "version", "problems": [string] }`. Runs in the plugin folder.                                                                                                         |
-| `status` (required) |                                   | `{ "refName": string \| null, "isDefaultRef"?, "hasPrimaryRemote"?, "files"?: [{ "path", "insertions"?, "deletions"? }], "hasUpstream"?, "aheadCount"?, "behindCount"? }` |
-| `listRemotes`       |                                   | `{ "remotes": [{ "name", "url", "pushUrl"?, "isPrimary"? }] }`. A VCS without URLs uses `<vcs>://<repository>`.                                                           |
-| `listRefs`          |                                   | `{ "refs": [{ "name", "current"?, "isDefault"?, "isRemote"?, "remoteName"? }] }`. Without it, only the current ref is offered.                                            |
-| `commit`            | `{messageFile}`, `{pathsFile}`    | `{ "commitSha"?, "subject"? }`. `{pathsFile}` lists the files to commit, one per line: the selected ones, or every changed file. Without it, only "commit all" works.     |
-| `diff`              | `{pathsFile}`                     | `{ "patch" }`, the uncommitted changes as a Git-format patch, only of `{pathsFile}` when given. Optional.                                                                 |
-| `push`              |                                   | `{ "branch"?, "upstreamBranch"? }`                                                                                                                                        |
-| `pull`              |                                   | `{ "status": "pulled" \| "skipped_up_to_date", "refName", "upstreamRef"? }`                                                                                               |
-| `worktreeCreate`    | `{path}`, `{newRef}`, `{baseRef}` | `{ "refName" }`. Create the checkout at `{path}`; T3 Code chooses it, as it does for Git.                                                                                 |
-| `worktreeRemove`    | `{path}`                          | Anything.                                                                                                                                                                 |
-| `worktreeAttach`    | `{path}`, `{ref}`                 | Anything. Check out the existing `{ref}` at `{path}`. Optional.                                                                                                           |
-| `worktreeList`      |                                   | `{ "worktrees": [{ "path" }] }` with absolute paths.                                                                                                                      |
-| `checkpointCapture` | `{checkpointRef}`                 | `{ "revision" }`                                                                                                                                                          |
-| `checkpointDiff`    | `{fromRevision}`, `{toRevision}`  | `{ "patch" }`, a Git-format patch. Must fail when either revision cannot be read.                                                                                         |
-| `checkpointRestore` | `{revision}`                      | Anything.                                                                                                                                                                 |
-| `checkpointDelete`  | `{revision}`                      | Anything. Optional.                                                                                                                                                       |
-| `changedFiles`      |                                   | `{ "revision", "files": [{ "path", "status": "modified" \| "added" \| "deleted" }] }`                                                                                     |
-| `readFile`          | `{revision}`, `{path}`            | The file's bytes. Exit with a non-zero code when the file does not exist at that revision.                                                                                |
+| Command             | Placeholders                      | Prints                                                                                                                                                                                  |
+| ------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `check`             |                                   | `{ "version", "problems": [string] }`. Runs in the plugin folder.                                                                                                                       |
+| `status` (required) |                                   | `{ "refName": string \| null, "isDefaultRef"?, "hasPrimaryRemote"?, "files"?: [{ "path", "insertions"?, "deletions"?, "untracked"? }], "hasUpstream"?, "aheadCount"?, "behindCount"? }` |
+| `listRemotes`       |                                   | `{ "remotes": [{ "name", "url", "pushUrl"?, "isPrimary"? }] }`. A VCS without URLs uses `<vcs>://<repository>`.                                                                         |
+| `listRefs`          |                                   | `{ "refs": [{ "name", "current"?, "isDefault"?, "isRemote"?, "remoteName"? }] }`. Without it, only the current ref is offered.                                                          |
+| `commit`            | `{messageFile}`, `{pathsFile}`    | `{ "commitSha"?, "subject"? }`. `{pathsFile}` lists the files to commit, one per line: the selected ones, or every changed file. Without it, only "commit all" works.                   |
+| `diff`              | `{pathsFile}`                     | `{ "patch" }`, the uncommitted changes as a Git-format patch, only of `{pathsFile}` when given. Optional.                                                                               |
+| `push`              |                                   | `{ "branch"?, "upstreamBranch"? }`                                                                                                                                                      |
+| `pull`              |                                   | `{ "status": "pulled" \| "skipped_up_to_date", "refName", "upstreamRef"? }`                                                                                                             |
+| `worktreeCreate`    | `{path}`, `{newRef}`, `{baseRef}` | `{ "refName" }`. Create the checkout at `{path}`; T3 Code chooses it, as it does for Git.                                                                                               |
+| `worktreeRemove`    | `{path}`                          | Anything.                                                                                                                                                                               |
+| `worktreeAttach`    | `{path}`, `{ref}`                 | Anything. Check out the existing `{ref}` at `{path}`. Optional.                                                                                                                         |
+| `worktreeList`      |                                   | `{ "worktrees": [{ "path" }] }` with absolute paths.                                                                                                                                    |
+| `checkpointCapture` | `{checkpointRef}`                 | `{ "revision" }`                                                                                                                                                                        |
+| `checkpointDiff`    | `{fromRevision}`, `{toRevision}`  | `{ "patch" }`, a Git-format patch. Must fail when either revision cannot be read.                                                                                                       |
+| `checkpointRestore` | `{revision}`                      | Anything.                                                                                                                                                                               |
+| `checkpointDelete`  | `{revision}`                      | Anything. Optional.                                                                                                                                                                     |
+| `changedFiles`      |                                   | `{ "revision", "files": [{ "path", "status": "modified" \| "added" \| "deleted" }] }`                                                                                                   |
+| `readFile`          | `{revision}`, `{path}`            | The file's bytes. Exit with a non-zero code when the file does not exist at that revision.                                                                                              |
 
 Paths are relative to the repository root and use `/`. With `capabilities.worktrees`, both
 `worktreeCreate` and `worktreeRemove` are required, and **New worktree** is offered for the
@@ -113,8 +113,9 @@ When a project is a subfolder of the repository, a new worktree's thread works i
 subfolder of the new checkout.
 
 Storage cleanup removes a plugin's worktrees as it does Git's, when their thread is deleted,
-inactive or settled. The merged and unchanged rules need Git history, so they do not apply, and
-any file `status` lists keeps a worktree. A thread's next turn brings a removed worktree back with
+inactive or settled. The merged and unchanged rules need Git history, so they do not apply. Any
+file `status` lists keeps a worktree, except one marked `"untracked": true` when cleanup keeps
+worktrees only for tracked changes. A thread's next turn brings a removed worktree back with
 `worktreeAttach`, after `listRefs` shows its branch is still there. Without both commands,
 cleanup removes only a deleted thread's worktree.
 

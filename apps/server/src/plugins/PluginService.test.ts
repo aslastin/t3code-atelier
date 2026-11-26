@@ -119,13 +119,17 @@ describe("ManifestVcsDriver", () => {
     Effect.gen(function* () {
       const { driver, repository } = yield* setup();
       NodeFS.writeFileSync(`${repository}/a.txt`, "changed\n");
+      NodeFS.writeFileSync(`${repository}/new.txt`, "new\n");
       const identity = yield* driver!.detectRepository(`${repository}/sub`);
       assert.strictEqual(identity?.rootPath, repository);
       const status = yield* driver!.workflow!.status!({ cwd: `${repository}/sub` });
       assert.strictEqual(status.refName, "main");
       assert.deepStrictEqual(
-        status.workingTree.files.map((file) => file.path),
-        ["a.txt"],
+        status.workingTree.files.map((file) => [file.path, file.untracked === true]),
+        [
+          ["a.txt", false],
+          ["new.txt", true],
+        ],
       );
       assert.isTrue(status.hasWorkingTreeChanges);
       assert.include(

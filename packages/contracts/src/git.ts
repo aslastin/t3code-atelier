@@ -242,6 +242,8 @@ const VcsStatusLocalShape = {
         path: GitFilePath,
         insertions: NonNegativeInt,
         deletions: NonNegativeInt,
+        /** Atelier fork: a VCS plugin marks a file its VCS does not track yet. */
+        untracked: Schema.optionalKey(Schema.Boolean),
       }),
     ),
     insertions: NonNegativeInt,
