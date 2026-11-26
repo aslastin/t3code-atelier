@@ -645,6 +645,10 @@ it.effect("keeps the pre-rewind snapshot of a folder a failed rewind could not p
                 targets.some((target) => target.checkpoint.ref === input.checkpointRef) ||
                 existing.has(input.checkpointRef),
             ),
+          verifyRestorable: (input) =>
+            Effect.sync(() =>
+              targets.some((target) => target.checkpoint.ref === input.checkpointRef),
+            ),
           captureCheckpoint: (input) =>
             Effect.sync(() => {
               captured.push(input.cwd);
