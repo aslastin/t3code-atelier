@@ -8,7 +8,12 @@ import * as Path from "effect/Path";
 import { ChildProcessSpawner } from "effect/process";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
-import { GIT_VCS_KIND, VcsDriverKind, VcsProcessExitError } from "@t3tools/contracts";
+import {
+  GIT_VCS_KIND,
+  VcsDriverKind,
+  VcsProcessExitError,
+  VcsProcessSpawnError,
+} from "@t3tools/contracts";
 
 import { testVcsDriver } from "./testing/testVcsDriver.ts";
 import type * as VcsDriver from "./VcsDriver.ts";
@@ -153,9 +158,24 @@ describe("VcsDriverRegistry", () => {
             return null;
           }).pipe(Effect.orDie),
       });
+      const offline = VcsDriverKind.make("offline");
+      const failure = new VcsProcessSpawnError({
+        operation: "detect",
+        command: offline,
+        cwd,
+        cause: "missing executable",
+      });
+      const drivers = new Map([
+        [offline, testVcsDriver({ detectRepository: () => Effect.fail(failure) })],
+        [kind, driver],
+      ]);
       const calls: string[] = [];
       yield* Effect.gen(function* () {
         const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
+        assert.equal(
+          yield* registry.detect({ cwd, requestedKind: offline }).pipe(Effect.flip),
+          failure,
+        );
         assert.equal((yield* registry.resolve({ cwd })).kind, GIT_VCS_KIND);
         yield* fs.writeFileString(path.join(parent, ".test-head"), "main");
         assert.equal((yield* registry.resolve({ cwd })).kind, kind);
@@ -177,7 +197,7 @@ describe("VcsDriverRegistry", () => {
           (yield* registry.resolve({ cwd, requestedKind: kind })).repository.rootPath,
           parent,
         );
-      }).pipe(Effect.provide(makeDiskBackedLayer(parent, calls, new Map([[kind, driver]]))));
+      }).pipe(Effect.provide(makeDiskBackedLayer(parent, calls, drivers)));
     }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 

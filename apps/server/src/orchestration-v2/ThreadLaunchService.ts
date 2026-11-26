@@ -1275,49 +1275,49 @@ const make = Effect.gen(function* () {
                   : {}),
               })
               .pipe(Effect.ignore);
-            yield* Effect.suspend(
-              (): Effect.Effect<void, VcsWorkflowCommandError | TaskFolderError> =>
-                discardPending && removedBranch
-                  ? discardPending(removedBranch)
-                  : removedTaskFolder === null
-                    ? git
-                        .removeWorktree({
-                          cwd: project.workspaceRoot,
-                          path: removedPath,
-                          force: true,
-                        })
-                        .pipe(
-                          Effect.andThen(
-                            removedBranch === null
-                              ? Effect.void
-                              : git
-                                  .deleteLocalBranch({
-                                    cwd: project.workspaceRoot,
-                                    refName: removedBranch,
-                                    force: true,
-                                  })
-                                  .pipe(Effect.ignoreCause({ log: true })),
-                          ),
-                        )
-                    : taskFolders
-                        .remove({
-                          root: removedTaskFolder,
-                          force: true,
-                          forget: true,
-                          deleteBranch: removedBranch ?? undefined,
-                        })
-                        .pipe(
-                          Effect.flatMap(({ kept }) =>
-                            kept.length === 0
-                              ? Effect.void
-                              : Effect.fail(
-                                  new TaskFolderError({
-                                    operation: "remove",
-                                    detail: `Kept ${kept.map((entry) => entry.path).join(", ")}.`,
-                                  }),
-                                ),
-                          ),
+            type CleanupError = VcsWorkflowCommandError | TaskFolderError;
+            yield* Effect.suspend((): Effect.Effect<void, CleanupError> =>
+              discardPending && removedBranch
+                ? discardPending(removedBranch)
+                : removedTaskFolder === null
+                  ? git
+                      .removeWorktree({
+                        cwd: project.workspaceRoot,
+                        path: removedPath,
+                        force: true,
+                      })
+                      .pipe(
+                        Effect.andThen(
+                          removedBranch === null
+                            ? Effect.void
+                            : git
+                                .deleteLocalBranch({
+                                  cwd: project.workspaceRoot,
+                                  refName: removedBranch,
+                                  force: true,
+                                })
+                                .pipe(Effect.ignoreCause({ log: true })),
                         ),
+                      )
+                  : taskFolders
+                      .remove({
+                        root: removedTaskFolder,
+                        force: true,
+                        forget: true,
+                        deleteBranch: removedBranch ?? undefined,
+                      })
+                      .pipe(
+                        Effect.flatMap(({ kept }) =>
+                          kept.length === 0
+                            ? Effect.void
+                            : Effect.fail(
+                                new TaskFolderError({
+                                  operation: "remove",
+                                  detail: `Kept ${kept.map((entry) => entry.path).join(", ")}.`,
+                                }),
+                              ),
+                        ),
+                      ),
             ).pipe(
               Effect.andThen(detach),
               Effect.catchCause((removeCause) =>

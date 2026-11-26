@@ -165,7 +165,9 @@ export const makeWithDrivers = Effect.fn("VcsDriverRegistry.makeWithDrivers")(fu
       const roots = new Map<string, VcsDriverHandle>();
       for (const [kind, driver] of additionalDrivers) {
         if (kind === GIT_VCS_KIND) continue;
-        const handle = yield* detectWithDriver(kind, driver, input.cwd);
+        const handle = yield* detectWithDriver(kind, driver, input.cwd).pipe(
+          Effect.orElseSucceed(() => null),
+        );
         if (handle === null) continue;
         const root = yield* canonicalPath(handle.repository.rootPath);
         if (!roots.has(root)) roots.set(root, handle);
@@ -183,7 +185,7 @@ export const makeWithDrivers = Effect.fn("VcsDriverRegistry.makeWithDrivers")(fu
             .exists(path.join(folder, ".git"))
             .pipe(Effect.orElseSucceed(() => false))
         ) {
-          const handle = yield* detectGit(cwd);
+          const handle = yield* detectGit(cwd).pipe(Effect.orElseSucceed(() => null));
           if (handle && (yield* canonicalPath(handle.repository.rootPath)) === folder)
             return handle;
         }
