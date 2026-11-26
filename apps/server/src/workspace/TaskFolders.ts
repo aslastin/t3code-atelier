@@ -34,6 +34,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import {
   removeEmptyDirectory,
   type RemoveEmptyDirectoryError,
@@ -242,7 +243,15 @@ const make = Effect.gen(function* () {
 
   const exists = (target: string) =>
     fileSystem.exists(target).pipe(Effect.orElseSucceed(() => false));
-  const isRepository = (folder: string) => exists(path.join(folder, ".git"));
+  // A VCS plugin's repository is one too: its files must get a checkout, never links back to
+  // the original folder.
+  const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
+  const isRepository = Effect.fnUntraced(function* (folder: string) {
+    for (const marker of [".git", ...(plugins?.installedMarkers() ?? [])]) {
+      if (yield* exists(path.join(folder, marker))) return true;
+    }
+    return false;
+  });
   const trackedFolders = (project: {
     readonly workspaceRoot: string;
     readonly trackedFolders: ReadonlyArray<ProjectTrackedFolder>;

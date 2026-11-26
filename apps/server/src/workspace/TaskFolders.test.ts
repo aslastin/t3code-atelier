@@ -14,6 +14,7 @@ import type * as Scope from "effect/Scope";
 import * as ServerConfig from "../config.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as TaskFolders from "./TaskFolders.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import * as TaskFolderStore from "./TaskFolderStore.ts";
 import {
   layerTaskFoldersWithGit,
@@ -275,6 +276,32 @@ it.live("gives two creations on one branch a folder each", () =>
     }),
   ),
 );
+
+it.live("gives a VCS plugin's project folder a checkout, not links to the original", () => {
+  const state: TaskFoldersTestState = { workspaceRoot: "/unset", trackedFolders: [], thread: null };
+  return Effect.gen(function* () {
+    const { fileSystem, path, tmp, repository } = yield* fixture;
+    const shop = path.join(tmp, "shop");
+    yield* fileSystem.makeDirectory(path.join(shop, ".kite"), { recursive: true });
+    yield* fileSystem.writeFileString(path.join(shop, ".kite", "HEAD"), "main\n");
+    const api = yield* repository("shop/api");
+    state.workspaceRoot = shop;
+    state.trackedFolders = tracked(api);
+    const plan = yield* (yield* TaskFolders.TaskFolders).plan({ projectId });
+    assert.isTrue(plan?.projectIsRepository);
+  }).pipe(
+    Effect.provide(
+      layerFor(state).pipe(
+        Layer.provide(
+          Layer.succeed(VcsPluginDrivers, {
+            installedMarkers: () => [".kite/HEAD"],
+          } as unknown as VcsPluginDrivers["Service"]),
+        ),
+      ),
+    ),
+    Effect.scoped,
+  );
+});
 
 it.live.each([{ projectIsRepository: true }, { projectIsRepository: false }])(
   "answers an existing thread's worktree request with a task folder, project is a repository=$projectIsRepository",
