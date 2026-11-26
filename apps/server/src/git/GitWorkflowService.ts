@@ -2,6 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 
 import {
   GIT_VCS_KIND,
@@ -272,6 +273,9 @@ const runDriverAction = Effect.fn("GitWorkflowService.runDriverAction")(function
   // Refused before a branch is started, so a failed request leaves the checkout as it was.
   if (commit && input.filePaths && handle.driver.capabilities?.supportsPartialCommit === false)
     return yield* unsupported(handle, "commit selected files");
+  // A plugin reads the selection one path per line.
+  if (commit && input.filePaths?.some((filePath) => /[\r\n]/.test(filePath)))
+    return yield* unsupported(handle, "commit a file whose name has a line break");
 
   const context = { action, cwd, actionId: options?.actionId ?? input.actionId };
   const reporter = options?.progressReporter;
@@ -431,6 +435,7 @@ export const make = Effect.gen(function* () {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
   const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
 
   // Nested projects and path aliases must share the checkout's branch-mutation lease.
   const withCheckoutLease = <A, E, R>(rootPath: string, effect: Effect.Effect<A, E, R>) =>
@@ -549,6 +554,11 @@ export const make = Effect.gen(function* () {
         // A driver cannot resolve arbitrary revisions; its worktreeCreate reports a bad base.
         (ops) => {
           const branch = /^refs\/heads\/(.+)$/.exec(input.refName)?.[1];
+          const remoteBranch = /^refs\/remotes\/(.+)$/.exec(input.refName)?.[1];
+          if (remoteBranch !== undefined)
+            return ops
+              .listRefs?.({ cwd: input.cwd, refKind: "remote" })
+              .pipe(Effect.map((result) => result.refs.some((ref) => ref.name === remoteBranch)));
           if (branch === undefined) return Effect.succeed(true);
           return driverRefNames(ops, input.cwd, true)?.pipe(
             Effect.map((names) => names.includes(branch)),
@@ -719,12 +729,33 @@ export const make = Effect.gen(function* () {
         (ops) => ops.listRefs?.(input),
       );
     }),
-    createWorktree: Effect.fn("GitWorkflowService.createWorktree")(function (input, options) {
-      return routeCommand(
-        "GitWorkflowService.createWorktree",
-        input.cwd,
+    createWorktree: Effect.fn("GitWorkflowService.createWorktree")(function* (input, options) {
+      const operation = "GitWorkflowService.createWorktree";
+      const handle = yield* resolveCommand(operation, input.cwd);
+      return yield* route(
+        handle,
+        operation,
         () => gitManager.createWorktree(input, options),
-        (ops) => ops.createWorktree?.(input),
+        (ops) => {
+          const created = ops.createWorktree?.(input);
+          const onMissing = options?.onMissingProjectFolder;
+          const remove = ops.removeWorktree;
+          if (!created || !onMissing || !remove || input.newRefName === undefined) return created;
+          // As for Git: a checkout without the project's folder lets the launch ask what to do.
+          return created.pipe(
+            Effect.tap((result) =>
+              result.worktree.projectPath !== null
+                ? Effect.void
+                : onMissing({
+                    root: result.worktree.path,
+                    relativePath: path.relative(handle.repository.rootPath, input.cwd),
+                    verify: Effect.void,
+                    discard: () =>
+                      remove({ cwd: input.cwd, path: result.worktree.path, force: true }),
+                  }),
+            ),
+          );
+        },
       );
     }),
     listWorktrees: Effect.fn("GitWorkflowService.listWorktrees")(function (cwd) {

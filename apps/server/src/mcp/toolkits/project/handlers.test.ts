@@ -938,42 +938,50 @@ it.effect("a launch into a VCS plugin's repository asks the plugin, not Git", ()
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect("a defaulted launch into a plugin repository whose status fails creates nothing", () =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const repo = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-launch-plugin-fail-" });
-    yield* fileSystem.makeDirectory(`${repo}/.kite`);
-    yield* fileSystem.writeFileString(`${repo}/.kite/HEAD`, "main\n");
-    const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
-    const { projectId, dependencies } = clientLaunchHarness({
-      runtimeModeCeiling: "auto",
-      launched,
-      workspaceRoot: repo,
-      defaultThreadEnvMode: "worktree",
-      pluginMarkers: [".kite/HEAD"],
-      workflow: {
-        localStatus: () =>
-          Effect.fail(
-            new GitCommandError({
-              operation: "kite.status",
-              command: "status",
-              cwd: repo,
-              detail: "the plugin failed",
-            }),
+it.effect.each([{ linked: false }, { linked: true }])(
+  "a defaulted launch into a plugin repository whose status fails creates nothing (%j)",
+  ({ linked }) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const repo = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-launch-plugin-fail-" });
+      yield* fileSystem.makeDirectory(`${repo}/.kite`);
+      yield* fileSystem.writeFileString(`${repo}/.kite/HEAD`, "main\n");
+      yield* fileSystem.makeDirectory(`${repo}/app`);
+      // A project opened through a link outside the repository still belongs to it.
+      const outside = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-launch-link-" });
+      if (linked) yield* fileSystem.symlink(`${repo}/app`, `${outside}/app`);
+      const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+      const { projectId, dependencies } = clientLaunchHarness({
+        runtimeModeCeiling: "auto",
+        launched,
+        workspaceRoot: linked ? `${outside}/app` : repo,
+        defaultThreadEnvMode: "worktree",
+        pluginMarkers: [".kite/HEAD"],
+        workflow: {
+          localStatus: () =>
+            Effect.fail(
+              new GitCommandError({
+                operation: "kite.status",
+                command: "status",
+                cwd: repo,
+                detail: "the plugin failed",
+              }),
+            ),
+        },
+      });
+      const toolkit = yield* ProjectToolkit.pipe(
+        Effect.provide(
+          McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
+            Layer.provide(dependencies),
           ),
-      },
-    });
-    const toolkit = yield* ProjectToolkit.pipe(
-      Effect.provide(
-        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
-      ),
-    );
-    const result = (yield* toolkit
-      .handle("t3_thread_launch", { title: "Fix", projectId })
-      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies))).at(-1)?.result;
-    expect(result).toMatchObject({ code: "orchestration_error" });
-    expect(launched).toHaveLength(0);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+        ),
+      );
+      const result = (yield* toolkit
+        .handle("t3_thread_launch", { title: "Fix", projectId })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies))).at(-1)?.result;
+      expect(result).toMatchObject({ code: "orchestration_error" });
+      expect(launched).toHaveLength(0);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 it.effect("a launch into a new worktree creates nothing when its branch collides", () =>

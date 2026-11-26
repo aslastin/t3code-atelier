@@ -210,16 +210,22 @@ const defaultWorktreeStrategy = Effect.fn("mcp.defaultWorktreeStrategy")(functio
       onNone: () => [],
       onSome: (plugins) => plugins.installedMarkers(),
     });
-    for (let folder = workspaceRoot; ; folder = path.dirname(folder)) {
-      for (const marker of markers) {
-        if (
-          yield* fileSystem
-            .exists(path.join(folder, marker))
-            .pipe(Effect.orElseSucceed(() => false))
-        )
-          return yield* unreadable;
+    // A symlinked project resolves to its repository as the plugin's own detection does.
+    const realRoot = yield* fileSystem
+      .realPath(workspaceRoot)
+      .pipe(Effect.orElseSucceed(() => workspaceRoot));
+    for (const start of new Set([workspaceRoot, realRoot])) {
+      for (let folder = start; ; folder = path.dirname(folder)) {
+        for (const marker of markers) {
+          if (
+            yield* fileSystem
+              .exists(path.join(folder, marker))
+              .pipe(Effect.orElseSucceed(() => false))
+          )
+            return yield* unreadable;
+        }
+        if (path.dirname(folder) === folder) break;
       }
-      if (path.dirname(folder) === folder) break;
     }
   }
   const capabilities = status?.capabilities;

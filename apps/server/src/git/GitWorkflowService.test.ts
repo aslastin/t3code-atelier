@@ -122,9 +122,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
               return "diff --git a/a.txt b/a.txt";
             }),
           recentCommitSubjects: () => Effect.succeed(["Fix the parser"]),
-          listRefs: () =>
+          listRefs: (input) =>
             Effect.succeed({
-              refs: [{ name: "trunk" }, { name: "feature/change-a-txt" }],
+              refs:
+                input.refKind === "remote"
+                  ? [{ name: "origin/trunk", isRemote: true, remoteName: "origin" }]
+                  : [{ name: "trunk" }, { name: "feature/change-a-txt" }],
             } as never),
           createBranch: (input) =>
             Effect.sync(() => {
@@ -242,13 +245,41 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
       assert.deepEqual(branches, ["feature/change-a-txt-2"]);
       assert.deepEqual(onBranch.branch, { status: "created", name: "feature/change-a-txt-2" });
       assert.deepEqual(commits, ["save", "Change a.txt", "Change a.txt"]);
+      // A name the plugin could not read back is refused before a branch is started.
+      const lineBreak = yield* workflow
+        .runStackedAction({
+          cwd,
+          actionId: "line-break",
+          action: "commit",
+          featureBranch: true,
+          filePaths: ["a\nb.txt"],
+          commitMessage: "save",
+        })
+        .pipe(Effect.flip);
+      assert.include(lineBreak, { _tag: "VcsUnsupportedOperationError" });
+      assert.deepEqual(branches, ["feature/change-a-txt-2"]);
+
+      // A remote-tracking base is checked against the driver's remote refs.
+      assert.isTrue(yield* workflow.hasCommit({ cwd, refName: "refs/remotes/origin/trunk" }));
+      assert.isFalse(yield* workflow.hasCommit({ cwd, refName: "refs/remotes/origin/gone" }));
 
       // A driver that commits every change refuses selected files before starting a branch.
+      const removed: string[] = [];
       const wholeOnly = {
         ...handle,
         driver: testVcsDriver({
           capabilities: { ...capabilities, supportsPartialCommit: false },
-          workflow: driver.workflow!,
+          workflow: {
+            ...driver.workflow!,
+            createWorktree: (input) =>
+              Effect.succeed({
+                worktree: { path: "/worktrees/topic", projectPath: null, refName: input.refName },
+              }),
+            removeWorktree: (input) =>
+              Effect.sync(() => {
+                removed.push(input.path);
+              }),
+          },
         }),
       };
       const refusingWorkflow = yield* GitWorkflowService.make.pipe(
@@ -276,6 +307,23 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
         .pipe(Effect.flip);
       assert.include(refused, { _tag: "VcsUnsupportedOperationError" });
       assert.deepEqual(branches, ["feature/change-a-txt-2"]);
+
+      // A new checkout without the project's folder lets the launch choose, as for Git.
+      let missingFolder:
+        | Parameters<NonNullable<GitVcsDriver.CreateWorktreeOptions["onMissingProjectFolder"]>>[0]
+        | null = null;
+      yield* refusingWorkflow.createWorktree(
+        { cwd: `${cwd}/app`, refName: "trunk", newRefName: "topic", path: null },
+        {
+          onMissingProjectFolder: (input) =>
+            Effect.sync(() => {
+              missingFolder = input;
+            }),
+        },
+      );
+      assert.equal(missingFolder!.root, "/worktrees/topic");
+      yield* missingFolder!.discard("topic");
+      assert.deepEqual(removed, ["/worktrees/topic"]);
     }),
   );
 
