@@ -423,8 +423,21 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         `${runner.label} lists no checkpoint strategy, so turns here have no checkpoint.`,
       );
     const location = yield* locate(input.cwd);
+    // A thread keeps the strategy its last checkpoint used, so neighboring checkpoints stay
+    // comparable after a fallback. A new thread starts from the manifest's order again.
+    const previous =
+      input.previousCheckpointRef === undefined
+        ? null
+        : yield* readRecord(location, input.previousCheckpointRef);
+    const order =
+      previous === null
+        ? context.strategies
+        : [
+            previous.strategy,
+            ...context.strategies.filter((strategy) => strategy !== previous.strategy),
+          ].filter((strategy) => context.strategies.includes(strategy));
     const failures: string[] = [];
-    for (const strategy of context.strategies) {
+    for (const strategy of order) {
       const result = yield* capture[strategy](
         location,
         input.cwd,

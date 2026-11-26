@@ -103,6 +103,10 @@ function PluginRow({
       <Badge variant="error" size="sm">
         <T>Invalid manifest</T>
       </Badge>
+    ) : plugin.status === "disabled" ? (
+      <Badge variant="secondary" size="sm">
+        <T>Turned off</T>
+      </Badge>
     ) : plugin.status === "checking" ? (
       <Badge variant="secondary" size="sm">
         <T>Checking</T>

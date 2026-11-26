@@ -217,6 +217,39 @@ describe("ManifestVcsDriver", () => {
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
+  it.live(
+    "keeps a thread on the strategy it fell back to, so its checkpoints stay comparable",
+    () =>
+      Effect.gen(function* () {
+        const { driver, repository, strategies } = yield* setup({
+          checkpoints: ["native", "changed-files"],
+        });
+        const checkpoints = driver!.checkpoints;
+        const broken = `${repository}/.kite/broken-snapshots`;
+        NodeFS.writeFileSync(broken, "");
+        yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
+        // Native works again, but the thread's next checkpoint stays on changed-files.
+        NodeFS.rmSync(broken);
+        NodeFS.writeFileSync(`${repository}/a.txt`, "edited\n");
+        yield* checkpoints.captureCheckpoint({
+          cwd: repository,
+          checkpointRef: ref("1"),
+          previousCheckpointRef: ref("0"),
+        });
+        assert.deepStrictEqual(yield* strategies, ["changed-files", "changed-files"]);
+        const patch = yield* checkpoints.diffCheckpoints({
+          cwd: repository,
+          fromCheckpointRef: ref("0"),
+          toCheckpointRef: ref("1"),
+          ignoreWhitespace: false,
+        });
+        assert.include(patch, "+edited");
+        // A new thread, with no previous checkpoint, tries native first again.
+        yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("2") });
+        assert.deepStrictEqual(yield* strategies, ["changed-files", "changed-files", "native"]);
+      }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   it.live("leaves the turn without a checkpoint, and says why, when no strategy works", () =>
     Effect.gen(function* () {
       const { driver, repository } = yield* setup({ checkpoints: ["native"] });

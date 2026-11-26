@@ -109,8 +109,11 @@ subfolder of the new checkout.
 ### Checkpoints
 
 T3 Code snapshots each turn so you can see its diff and roll it back. `checkpoints` lists the
-strategies T3 Code may use, in order. It tries them in that order for every snapshot and never
-uses one you did not list. Without the field, a plugin gets `["changed-files"]`.
+strategies T3 Code may use, in order, and it never uses one you did not list. Without the field, a
+plugin gets `["changed-files"]`. A thread's first snapshot tries them in that order. Later
+snapshots in the thread try the strategy of the previous one first, because snapshots taken with
+different strategies cannot be compared. After a fallback, the thread stays on the fallback, and
+a new thread starts from the top of the list again.
 
 - `native` uses `checkpointCapture`, `checkpointDiff`, and `checkpointRestore`. After each
   capture, T3 Code diffs the new snapshot against itself to make sure it reads back, and moves on
