@@ -412,7 +412,14 @@ const make = Effect.gen(function* () {
       taskFolder?.root ??
       (projectCwd === undefined
         ? ((yield* gitWorkflow.repositoryRoot(target)) ?? target)
-        : yield* worktreeRootForProject(fs, path, target, projectCwd))
+        : yield* worktreeRootForProject(
+            fs,
+            path,
+            target,
+            projectCwd,
+            undefined,
+            plugins?.markers(),
+          ))
     );
   });
   const boundThreads = Effect.fn("StorageCleanup.boundThreads")(function* (root: string) {
@@ -1146,7 +1153,14 @@ const make = Effect.gen(function* () {
         "workspaceRoot" in thread ? thread.workspaceRoot : projectRoots.get(thread.projectId);
       const root =
         projectRoot && thread.branch !== null
-          ? yield* worktreeRootForProject(fs, path, folder, projectRoot)
+          ? yield* worktreeRootForProject(
+              fs,
+              path,
+              folder,
+              projectRoot,
+              undefined,
+              plugins?.markers(),
+            )
           : folder;
       rootsByThread.set(thread.id, root);
     }

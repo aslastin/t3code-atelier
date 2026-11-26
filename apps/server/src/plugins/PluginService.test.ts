@@ -147,7 +147,8 @@ describe("ManifestVcsDriver", () => {
       assert.strictEqual(worktree.projectPath, `${worktree.path}/sub`);
       assert.deepStrictEqual(yield* workflow.listWorktrees!({ cwd: repository }), [worktree.path]);
 
-      yield* workflow.removeWorktree!({ cwd: repository, path: worktree.path });
+      // Callers pass the thread's folder, the subfolder; the whole checkout goes, as with Git.
+      yield* workflow.removeWorktree!({ cwd: `${repository}/sub`, path: worktree.projectPath! });
       assert.isFalse(NodeFS.existsSync(worktree.path));
       assert.deepStrictEqual(yield* workflow.listWorktrees!({ cwd: repository }), []);
     }).pipe(Effect.provide(layer), Effect.scoped),

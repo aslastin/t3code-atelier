@@ -45,6 +45,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import { CodexProviderCapabilitiesV2 } from "./orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { ServerActivation } from "./serverActivation.ts";
 import { withWorkspaceLease } from "./workspace/workspaceLease.ts";
+import { VcsPluginDrivers } from "./plugins/VcsPluginDrivers.ts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   CheckpointScopeId,
@@ -475,6 +476,11 @@ const cleanupFixture = (
             Effect.map((result) => result.stdout.trim() || null),
           ),
       } as unknown as GitWorkflowService.GitWorkflowService["Service"]),
+      // A plugin marker no Git fixture has; listings still come from Git.
+      Effect.provideService(VcsPluginDrivers, {
+        hasAny: () => false,
+        markers: () => [".kite/HEAD"],
+      } as unknown as VcsPluginDrivers["Service"]),
       Effect.provideService(ProviderSessionManager.ProviderSessionManagerV2, {
         isLive: () =>
           Effect.sync(() => {
@@ -2199,6 +2205,21 @@ describe("orphan worktree reports", () => {
           worktreeRoot: fixture.worktree,
           threadIds: [ThreadId.make("root-thread"), ThreadId.make("folder-thread")],
         });
+        // A VCS plugin's checkout is found by its marker, as a Git one is by `.git`.
+        const pluginRepo = `${fixture.repo}/kite-repo`;
+        const pluginWorktree = `${fixture.config.worktreesDir}/kite-feature`;
+        for (const root of [pluginRepo, pluginWorktree]) {
+          yield* fixture.fs.makeDirectory(`${root}/.kite`, { recursive: true });
+          yield* fixture.fs.writeFileString(`${root}/.kite/HEAD`, "main\n");
+          yield* fixture.fs.makeDirectory(`${root}/my-project`);
+        }
+        expect(
+          (yield* fixture.service.worktreeThreadIds(
+            `${pluginWorktree}/my-project`,
+            `${pluginRepo}/my-project`,
+          )).worktreeRoot,
+        ).toBe(pluginWorktree);
+        yield* fixture.fs.remove(pluginWorktree, { recursive: true });
         fixture.setStoredWorktreePaths([threadFolder]);
         yield* fixture.fs.utimes(fixture.worktree, 1, 1);
         const report = yield* fixture.service.runNow;

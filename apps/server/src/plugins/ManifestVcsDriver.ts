@@ -25,7 +25,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import * as VcsDriver from "../vcs/VcsDriver.ts";
-import { worktreeProjectFolder } from "../workspace/worktreeProjectPath.ts";
+import { worktreeProjectFolder, worktreeRootForProject } from "../workspace/worktreeProjectPath.ts";
 import { makePluginCheckpoints } from "./pluginCheckpoints.ts";
 import { makePluginCommandRunner, type PluginCommandRunner } from "./pluginCommandRunner.ts";
 import { checkpointStrategies, supportsWorktrees, usesPlaceholder } from "./pluginManifest.ts";
@@ -298,10 +298,27 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
         const root = yield* repositoryRoot(request.cwd).pipe(
           Effect.mapError(toCommandError("worktreeRemove", request.cwd)),
         );
+        // As for Git: a thread in a project subfolder names the whole checkout.
+        const target = yield* worktreeRootForProject(
+          fs,
+          path,
+          path.resolve(request.cwd, request.path),
+          request.cwd,
+          undefined,
+          manifest.detect.markers,
+        );
+        if (target === root)
+          return yield* new GitCommandError({
+            vcs: kind,
+            operation: `${kind}.worktreeRemove`,
+            command: "worktreeRemove",
+            cwd: request.cwd,
+            detail: "The repository itself is not a worktree.",
+          });
         yield* runner
           .run("worktreeRemove", {
             cwd: request.cwd,
-            values: { repositoryRoot: root, path: path.resolve(request.cwd, request.path) },
+            values: { repositoryRoot: root, path: target },
           })
           .pipe(Effect.mapError(toCommandError("worktreeRemove", request.cwd)));
       }),
