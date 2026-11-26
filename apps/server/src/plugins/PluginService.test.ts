@@ -149,6 +149,14 @@ describe("ManifestVcsDriver", () => {
       NodeFS.writeFileSync(`${repository}/ lead.txt`, "lead\n");
       const identity = yield* driver!.detectRepository(`${repository}/sub`);
       assert.strictEqual(identity?.rootPath, repository);
+      // An alias inside this repository that points into another belongs to the other one.
+      const other = makeFakeRepository(
+        NodeFS.realpathSync(NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-kite-other-`)),
+        { "sub/c.txt": "three\n" },
+      );
+      NodeFS.symlinkSync(`${other}/sub`, `${repository}/link`);
+      assert.strictEqual((yield* driver!.detectRepository(`${repository}/link`))?.rootPath, other);
+      NodeFS.rmSync(`${repository}/link`);
       // An alias whose own parents have no marker still finds the repository it points into.
       const alias = `${NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-kite-alias-`)}/sub`;
       NodeFS.symlinkSync(`${repository}/sub`, alias);
@@ -171,6 +179,14 @@ describe("ManifestVcsDriver", () => {
         yield* driver!.workflow!.workingDiff!({ cwd: repository }),
         "diff --git a/a.txt b/a.txt",
       );
+
+      // One path per line: a name with a line break cannot be listed for the plugin.
+      const ambiguous = yield* driver!.workflow!.commit!({
+        cwd: repository,
+        commitMessage: "Nothing",
+        filePaths: ["a\nb"],
+      }).pipe(Effect.flip);
+      assert.include(ambiguous.message, "line break");
 
       const committed = yield* driver!.workflow!.commit!({
         cwd: `${repository}/sub`,
@@ -215,10 +231,16 @@ describe("ManifestVcsDriver", () => {
         refs.refs.find((ref) => ref.name === "t3code/feature")?.worktreePath,
         worktree.path,
       );
+      assert.isTrue(refs.isAtRepositoryRoot);
+      assert.isFalse((yield* workflow.listRefs!({ cwd: `${repository}/sub` })).isAtRepositoryRoot);
       // The repository itself, and a checkout holding the caller, are never removed.
+      const repositoryAlias = `${NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-kite-alias-`)}/repo`;
+      NodeFS.symlinkSync(repository, repositoryAlias);
       for (const [cwd, target] of [
         [`${repository}/sub`, repository],
         [`${worktree.path}/sub`, worktree.path],
+        // Another spelling of the repository is still the repository.
+        [`${repository}/sub`, repositoryAlias],
       ] as const) {
         const refused = yield* workflow.removeWorktree!({ cwd, path: target }).pipe(Effect.flip);
         assert.include(refused.message, "not a worktree");

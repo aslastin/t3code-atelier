@@ -107,14 +107,20 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
   });
 
   // A folder reached through a symlink has its marker above the physical path, not the alias.
+  // The repository is where the folder physically is: an alias inside one repository that
+  // points into another belongs to the other.
   const detect = Effect.fnUntraced(function* (cwd: string) {
     const found = yield* detectMarkerRoot(fs, path, manifest.detect.markers, cwd);
-    if (found !== null) return found;
     const real = yield* fs.realPath(cwd).pipe(Effect.orElseSucceed(() => path.resolve(cwd)));
-    return real === path.resolve(cwd)
-      ? null
-      : yield* detectMarkerRoot(fs, path, manifest.detect.markers, real);
+    if (real === path.resolve(cwd)) return found;
+    const physical = yield* detectMarkerRoot(fs, path, manifest.detect.markers, real);
+    if (physical === null) return found;
+    if (found === null) return physical;
+    const foundReal = yield* fs.realPath(found.root).pipe(Effect.orElseSucceed(() => found.root));
+    return foundReal === physical.root ? found : physical;
   });
+  const real = (target: string) =>
+    fs.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
 
   const repositoryRoot = Effect.fn("ManifestVcsDriver.repositoryRoot")(function* (cwd: string) {
     const found = yield* detect(cwd);
@@ -123,6 +129,8 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
     return found.root;
   });
 
+  const repositoryRootForRefs = (cwd: string) =>
+    repositoryRoot(cwd).pipe(Effect.mapError(toCommandError("listRefs", cwd)));
   const listedWorktrees = Effect.fnUntraced(function* (cwd: string) {
     if (!runner.has("worktreeList")) return [];
     const out = yield* json("worktreeList", VcsPluginWorktreeListOutput, cwd);
@@ -148,6 +156,24 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
       ),
       Effect.mapError(toCommandError(command, cwd)),
     );
+
+  // One path per line, so a name with a line break cannot be listed unambiguously.
+  const pathsFileText = Effect.fnUntraced(function* (
+    paths: ReadonlyArray<string> | undefined,
+    cwd: string,
+  ) {
+    if (paths === undefined) return undefined;
+    const broken = paths.find((entry) => /[\r\n]/.test(entry));
+    if (broken !== undefined)
+      return yield* new GitCommandError({
+        vcs: kind,
+        operation: `${kind}.pathsFile`,
+        command: "pathsFile",
+        cwd,
+        detail: `${manifest.label} takes one path per line, so a name with a line break cannot be listed.`,
+      });
+    return paths.join("\n");
+  });
 
   // Long text reaches the command as a file, never as an argument.
   const withTextFile = <A, E, R>(
@@ -267,6 +293,8 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
       return {
         refs: refs.slice(start, end),
         isRepo: true,
+        isAtRepositoryRoot:
+          (yield* real(request.cwd)) === (yield* real(yield* repositoryRootForRefs(request.cwd))),
         hasPrimaryRemote: false,
         nextCursor: end < refs.length ? end : null,
         totalCount: refs.length,
@@ -298,8 +326,9 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
                 (file) => file.path,
               )
             : undefined);
+        const pathsText = yield* pathsFileText(paths, request.cwd);
         const out = yield* withTextFile(request.commitMessage, (messageFile) =>
-          withTextFile(paths?.join("\n"), (pathsFile) =>
+          withTextFile(pathsText, (pathsFile) =>
             json("commit", VcsPluginCommitOutput, request.cwd, { messageFile, pathsFile }),
           ),
         );
@@ -332,8 +361,9 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
     }),
     ...(commands.diff && {
       workingDiff: Effect.fn("ManifestVcsDriver.workingDiff")(function* (request) {
-        const out = yield* withTextFile(request.filePaths?.join("\n"), (pathsFile) =>
-          json("diff", VcsPluginCheckpointDiffOutput, request.cwd, { pathsFile }),
+        const out = yield* withTextFile(
+          yield* pathsFileText(request.filePaths, request.cwd),
+          (pathsFile) => json("diff", VcsPluginCheckpointDiffOutput, request.cwd, { pathsFile }),
         );
         return out.patch;
       }),
@@ -380,7 +410,7 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
                 null,
               )).refName;
         // A project in a subfolder works in the same subfolder of the new checkout (#12).
-        const relative = path.relative(root, path.resolve(request.cwd));
+        const relative = path.relative(yield* real(root), yield* real(request.cwd));
         const projectPath = yield* worktreeProjectFolder(fs, path, relative, worktreePath);
         return { worktree: { path: worktreePath, projectPath, refName } };
       }),
@@ -393,7 +423,17 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
         // As for Git: a path inside a checkout, such as a project subfolder, names the whole
         // checkout. A folder already gone is passed as given.
         const requested = path.resolve(request.cwd, request.path);
-        const target = (yield* detect(requested))?.root ?? requested;
+        const marked = yield* detect(requested);
+        // Without the plugin's own list, only a folder with its marker is a worktree.
+        if (marked === null && !runner.has("worktreeList"))
+          return yield* new GitCommandError({
+            vcs: kind,
+            operation: `${kind}.worktreeRemove`,
+            command: "worktreeRemove",
+            cwd: request.cwd,
+            detail: `${requested} is not a ${manifest.label} worktree.`,
+          });
+        const target = marked?.root ?? requested;
         const refuse = (detail: string) =>
           new GitCommandError({
             vcs: kind,
@@ -406,12 +446,28 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
           const relative = path.relative(parent, child);
           return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
         };
-        // Never the repository T3 Code works from, nor a checkout that holds the caller.
-        if (target === root || inside(target, path.resolve(request.cwd)))
+        // Never the repository T3 Code works from, nor a checkout that holds the caller, however
+        // either is spelled.
+        const [realTarget, realRoot, realCwd] = [
+          yield* real(target),
+          yield* real(root),
+          yield* real(request.cwd),
+        ];
+        if (
+          target === root ||
+          realTarget === realRoot ||
+          inside(target, path.resolve(request.cwd)) ||
+          inside(realTarget, realCwd)
+        )
           return yield* refuse("The repository itself is not a worktree.");
         if (runner.has("worktreeList")) {
           const listed = yield* listWorktreePaths(request.cwd);
-          if (!listed.some((entry) => path.resolve(entry) === target))
+          let isListed = false;
+          for (const entry of listed) {
+            if (path.resolve(entry) === target || (yield* real(entry)) === realTarget)
+              isListed = true;
+          }
+          if (!isListed)
             return yield* refuse(`${manifest.label} does not list ${target} as a worktree.`);
         }
         yield* runner
