@@ -198,6 +198,7 @@ describe("mobile model mentions", () => {
     });
     const step = {
       model,
+      ownerKey: "draft",
       draftMessage: inserted.text,
       start: 4,
       source: "model:traex/gpt-6.1",

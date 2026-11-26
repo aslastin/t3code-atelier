@@ -1129,6 +1129,11 @@ it("an @ model mention takes the reasoning effort picked in the menu and changes
   await expectHighlighted("High");
   await userEvent.keyboard("{Escape}");
   await expect.element(efforts).not.toBeInTheDocument();
+  // Moving the caret away hands the keys back to the editor.
+  await userEvent.click(effortButton("High"));
+  await expect.element(efforts).toBeVisible();
+  await userEvent.keyboard("{ArrowLeft}");
+  await expect.element(efforts).not.toBeInTheDocument();
   await userEvent.click(effortButton("High"));
   await userEvent.keyboard("{ArrowDown}");
   await expectHighlighted("Extra High");
@@ -1185,4 +1190,53 @@ it("an @ model mention takes the reasoning effort picked in the menu and changes
       }),
     ),
   );
+});
+
+it("a restored draft the editor re-serializes still offers a mentioned model's levels", async () => {
+  const thread = threadWithHistory("model-mention-restored", 1);
+  using _environment = installFakeEnvironment([thread], {
+    providers: [
+      {
+        ...CODEX_PROVIDER,
+        models: CODEX_PROVIDER.models.map((model) =>
+          model.slug === "gpt-5.5"
+            ? {
+                ...model,
+                capabilities: {
+                  optionDescriptors: [
+                    {
+                      id: "reasoningEffort",
+                      label: "Reasoning",
+                      type: "select",
+                      options: [{ id: "low", label: "Low" }],
+                    },
+                  ],
+                },
+              }
+            : model,
+        ),
+      },
+    ],
+  });
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const draft = scopeThreadRef(ENVIRONMENT_ID, thread.id);
+  // The editor writes this emphasis back as `*word*`.
+  useComposerDraftStore.getState().setPrompt(draft, "_word_ ask @gpt-5.5");
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, {
+    // AppRoot brings its own router.
+    router: false,
+  });
+  await expect.element(page.getByText(`Answer 0 for ${thread.id}.`)).toBeVisible();
+
+  await userEvent.click(page.getByRole("option", { name: /^GPT-5\.5/ }));
+  await expect
+    .element(page.getByRole("listbox", { name: "Reasoning effort for GPT-5.5" }))
+    .toBeVisible();
 });

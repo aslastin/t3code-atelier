@@ -300,6 +300,8 @@ export function resolveComposerCommandSelection(input: {
 /** The mention a picked model just inserted, whose level the menu now lists. */
 export interface ComposerModelEffortStep {
   readonly model: Extract<ComposerCommandItem, { type: "model" }>;
+  /** The draft the step opened in; the hook outlives a draft switch. */
+  readonly ownerKey: string | null;
   /** The draft right after the insertion; any edit ends the step. */
   readonly draftMessage: string;
   readonly start: number;
@@ -453,8 +455,14 @@ export function useComposerCommandMenu({
   });
 
   const [modelEffortStep, setModelEffortStep] = useState<ComposerModelEffortStep | null>(null);
+  // A caret moved into another `@`, `/` or `$` search hands the menu to that search.
   const activeModelEffortStep =
-    enabled && modelEffortStep?.draftMessage === draftMessage ? modelEffortStep : null;
+    enabled &&
+    trigger === null &&
+    modelEffortStep?.ownerKey === ownerKey &&
+    modelEffortStep.draftMessage === draftMessage
+      ? modelEffortStep
+      : null;
   // A step left behind stays dropped, so typing back to its text does not reopen it.
   if (modelEffortStep !== null && activeModelEffortStep === null) {
     setModelEffortStep(null);
@@ -811,6 +819,7 @@ export function useComposerCommandMenu({
     if (item.type === "model" && item.effort && trigger.kind === "path") {
       setModelEffortStep({
         model: item,
+        ownerKey,
         draftMessage: result.text,
         start: trigger.rangeStart,
         source: formatComposerModelMention(

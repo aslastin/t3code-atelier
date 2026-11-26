@@ -69,12 +69,19 @@ export function matchComposerModelItems(input: {
 /** The `@` menu's effort list for a model just picked, or for a chip whose effort is being changed. */
 export interface ComposerModelEffortStep {
   readonly model: ComposerModelItem;
-  /** The editor text the step opened on; any edit ends it. */
-  readonly prompt: string;
+  /** The draft the step opened in; the composer outlives a thread switch. */
+  readonly draftKey: string;
   readonly target:
-    | { readonly kind: "insert"; readonly modelSearchKey: string }
+    | {
+        readonly kind: "insert";
+        /** The editor text the step opened on; any edit ends it. */
+        readonly prompt: string;
+        readonly modelSearchKey: string;
+      }
     | {
         readonly kind: "edit";
+        /** The caret the chip click placed; moving it ends the step. */
+        readonly cursor: number;
         readonly apply: (source: string, effort: ComposerModelMentionEffort | null) => boolean;
       };
 }

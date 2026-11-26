@@ -64,15 +64,23 @@ export function formatComposerModelMention(
   effort?: ComposerModelMentionEffort | null,
 ): string {
   const mention = `model:${instanceId}/${model}`;
-  return effort ? `${mention}?${effort.optionId}=${encodeEffortValue(effort.value)}` : mention;
+  return effort
+    ? `${mention}?${encodeMentionPart(effort.optionId, ".:/")}=${encodeMentionPart(effort.value)}`
+    : mention;
 }
 
-// Also escapes what the mention parser treats as a reference's end or as prose punctuation.
-const encodeEffortValue = (value: string) =>
-  encodeURIComponent(value).replace(
+// Also escapes what the parser reads as a reference's end or prose punctuation. An option id keeps
+// `.`, `:` and `/`, which agents use in ids like `agent:effort`, since `=` always follows it.
+function encodeMentionPart(part: string, keep = ""): string {
+  let encoded = encodeURIComponent(part).replace(
     /[!'().*~]/gu,
     (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
   );
+  for (const char of keep) {
+    encoded = encoded.replaceAll(`%${char.charCodeAt(0).toString(16).toUpperCase()}`, char);
+  }
+  return encoded;
+}
 
 // Pi names its reasoning select `thinking`; Claude's `thinking` is a boolean and never matches.
 const EFFORT_SELECT_IDS = [...REASONING_EFFORT_OPTION_IDS, "thinking"];
@@ -89,7 +97,7 @@ export function modelMentionEffortDescriptor(
     EFFORT_SELECT_IDS.map((id) => selects.find((candidate) => candidate.id === id)).find(
       (candidate) => candidate !== undefined,
     );
-  return descriptor && EFFORT_OPTION_ID.test(descriptor.id) ? descriptor : null;
+  return descriptor ?? null;
 }
 
 /** Levels a mention offers besides Default. Prompt-injected levels like Ultrathink stay typed-only. */
@@ -111,8 +119,7 @@ export interface ComposerModelMentionOccurrence {
 }
 
 // ACP agents may namespace their option ids, as in `agent:effort`.
-const EFFORT_OPTION_ID = /^[A-Za-z_][\w.:-]*$/u;
-const EFFORT_SUFFIX = /\?([A-Za-z_][\w.:-]*)=([^\s?&=]+)$/u;
+const EFFORT_SUFFIX = /\?([^\s?&=]+)=([^\s?&=]+)$/u;
 
 function splitEffort(slug: string): {
   readonly model: string;
@@ -123,7 +130,10 @@ function splitEffort(slug: string): {
   try {
     return {
       model: slug.slice(0, match.index),
-      effort: { optionId: match[1]!, value: decodeURIComponent(match[2]!) },
+      effort: {
+        optionId: decodeURIComponent(match[1]!),
+        value: decodeURIComponent(match[2]!),
+      },
     };
   } catch {
     return { model: slug };

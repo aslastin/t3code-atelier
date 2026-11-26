@@ -109,18 +109,18 @@ describe("collectComposerModelMentions", () => {
     ]);
   });
 
-  it.each(["vendor's", "extra!", "v1.", "agent:deep (max)"])(
-    "round-trips the effort value %s as one reference",
-    (value) => {
-      const source = formatComposerModelMention("acp", "agent", {
-        optionId: "agent:effort",
-        value,
-      });
-      expect(collectComposerModelMentions(`${source}. next`)).toEqual([
-        expect.objectContaining({ source, effort: { optionId: "agent:effort", value } }),
-      ]);
-    },
-  );
+  it.each([
+    ["agent:effort", "vendor's"],
+    ["agent:effort", "extra!"],
+    ["agent:effort", "v1."],
+    ["agent/effort", "agent:deep (max)"],
+    ["agent effort?", "high"],
+  ])("round-trips option %s with value %s as one reference", (optionId, value) => {
+    const source = formatComposerModelMention("acp", "agent", { optionId, value });
+    expect(collectComposerModelMentions(`${source}. next`)).toEqual([
+      expect.objectContaining({ source, model: "agent", effort: { optionId, value } }),
+    ]);
+  });
 
   it.each([
     ["model:codex/gpt-6.1?", "gpt-6.1"],
@@ -184,6 +184,9 @@ describe("modelMentionEffortDescriptor", () => {
     expect(modelMentionEffortDescriptor([select("thinking")])?.id).toBe("thinking");
     expect(modelMentionEffortDescriptor([select("agent:effort", "reasoning")])?.id).toBe(
       "agent:effort",
+    );
+    expect(modelMentionEffortDescriptor([select("agent/effort", "reasoning")])?.id).toBe(
+      "agent/effort",
     );
   });
 

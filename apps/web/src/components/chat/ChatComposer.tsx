@@ -1219,13 +1219,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     ? `${composerSuggestionListId}:${composerTrigger.kind}:${composerTrigger.query.trim().toLowerCase()}`
     : null;
   const composerEditorValue = activePendingProgress ? activePendingProgress.customAnswer : prompt;
-  // Any edit ends the effort step; picking a model keeps it on the `@` mention it came from.
+  // A picked model's levels last while its `@` search is unedited; a chip's while the caret stays.
+  // The chip edit itself needs no text check: it rewrites its own node only if that node is intact.
   const activeModelEffortStep =
     modelEffortStep !== null &&
     !isLiteralPendingAnswer &&
-    modelEffortStep.prompt === composerEditorValue &&
-    (modelEffortStep.target.kind === "edit" ||
-      modelEffortStep.target.modelSearchKey === triggerMenuSearchKey)
+    modelEffortStep.draftKey === composerDraftTargetKey &&
+    (modelEffortStep.target.kind === "insert"
+      ? modelEffortStep.target.prompt === composerEditorValue &&
+        modelEffortStep.target.modelSearchKey === triggerMenuSearchKey
+      : modelEffortStep.target.cursor === composerCursor)
       ? modelEffortStep
       : null;
   // A step left behind stays dropped, so typing back to its text does not reopen it.
@@ -2222,8 +2225,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       if (item.effort && triggerMenuSearchKey !== null) {
         setModelEffortStep({
           model: item,
-          prompt: snapshot.value,
-          target: { kind: "insert", modelSearchKey: triggerMenuSearchKey },
+          draftKey: composerDraftTargetKey,
+          // The rendered text, not the editor's re-serialization, which can differ for a restored draft.
+          target: {
+            kind: "insert",
+            prompt: composerEditorValue,
+            modelSearchKey: triggerMenuSearchKey,
+          },
         });
         setComposerHighlightedItemId(composerModelEffortItemId(null));
         setComposerHighlightedSearchKey(modelEffortSearchKey(item));
@@ -2295,8 +2303,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         : null;
     setModelEffortStep({
       model,
-      prompt: promptRef.current,
-      target: { kind: "edit", apply: request.apply },
+      draftKey: composerDraftTargetKey,
+      target: {
+        kind: "edit",
+        cursor: composerEditorRef.current?.readSnapshot().cursor ?? composerCursor,
+        apply: request.apply,
+      },
     });
     setComposerHighlightedItemId(composerModelEffortItemId(current));
     setComposerHighlightedSearchKey(modelEffortSearchKey(model));
