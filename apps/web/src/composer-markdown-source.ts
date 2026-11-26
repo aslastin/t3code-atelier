@@ -159,12 +159,19 @@ function styledRangeLinkEdges(range: StyledRange): LinkEdges {
   };
 }
 
-/** Only a link drops brackets and parentheses when parsed. */
+/**
+ * Only a link drops brackets and parentheses when parsed. Literal delimiters typed
+ * beside it, like the `*` in `[a](url)*`, do not move its edges inward.
+ */
 function sourceLinkEdges(doc: ProseMirrorNode, region: TextRange): LinkEdges {
   const { text, units } = regionUnits(doc, region);
+  const first = units.indexOf(null);
+  const last = units.lastIndexOf(null);
+  const literal = (from: number, to: number) =>
+    units.slice(from, to).every((unit) => unit !== null);
   return {
-    start: text.startsWith("[") && units[0] === null,
-    end: text.endsWith(")") && units.at(-1) === null,
+    start: first !== -1 && text[first] === "[" && literal(0, first),
+    end: last !== -1 && text[last] === ")" && literal(last + 1, units.length),
   };
 }
 

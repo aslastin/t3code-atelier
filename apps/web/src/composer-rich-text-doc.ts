@@ -360,7 +360,7 @@ export function surroundSelectionWithMark(
 }
 
 /** Whether `block`'s inline content parses back to itself once written as Markdown. */
-export function inlineMarkdownRoundTrips(block: ProseMirrorNode): boolean {
+function inlineMarkdownRoundTrips(block: ProseMirrorNode): boolean {
   const { schema } = block.type;
   // Atoms are opaque to inline markdown, so use a placeholder instead of parsing their sources.
   const children: ProseMirrorNode[] = [];
@@ -1929,8 +1929,17 @@ export function markdownToFlat(map: RichDocMap, markdownOffset: number): number 
         const within = markdownOffset - run.mdStart;
         if (within <= run.openLen) return run.flatStart;
         // A chip is one document position however long its source is.
-        if (run.kind === "token" || within >= run.openLen + run.docLen) {
-          return run.flatStart + run.docLen;
+        if (run.kind === "token") return run.flatStart + run.docLen;
+        if (within >= run.openLen + run.docLen) {
+          // An offset in a link's `](address)` lands inside its label, which shows the
+          // address as source; the end of the label is outside the link.
+          const close = map.value.slice(
+            run.mdStart + run.openLen + run.docLen,
+            run.mdStart + run.mdLen,
+          );
+          return close.includes("](") && run.docLen > 1
+            ? run.flatStart + run.docLen - 1
+            : run.flatStart + run.docLen;
         }
         return run.flatStart + (within - run.openLen);
       }

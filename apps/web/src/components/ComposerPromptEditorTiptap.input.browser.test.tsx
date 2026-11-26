@@ -1475,6 +1475,149 @@ describe("Markdown links", () => {
     expect(serializeEditorDoc(editor.state.doc).value).toBe(value);
   });
 
+  it("keeps a whole link typed over a selection as typed", async () => {
+    await using screen = await mountEditor(`[old](${href}`);
+    const { editor } = screen;
+    await focusAt(editor, "end");
+    await act(async () => {
+      editor.commands.setTextSelection({ from: 1, to: editor.state.doc.content.size - 1 });
+      const { from, to } = editor.state.selection;
+      typeText(editor, from, to, `[new](${href})`);
+    });
+    expect(serializeEditorDoc(editor.state.doc).value).toBe(`[new](${href})`);
+    expect(textWithMark(editor, "link")).toEqual([]);
+  });
+
+  it("keeps an inner link's address when an outer link is typed around it", async () => {
+    await using screen = await mountEditor("");
+    const { editor } = screen;
+    await focusAt(editor, "end");
+    await userEvent.keyboard("[[[[docs](https://a.dev)](https://b.dev) ");
+    await vi.waitFor(() =>
+      expect(serializeEditorDoc(editor.state.doc).value).toBe(
+        "[[docs](https://a.dev)](https://b.dev) ",
+      ),
+    );
+  });
+
+  it("styles a typed link after a link whose label holds a backtick", async () => {
+    await using screen = await mountEditor(`[literal \` tick](${href}) `);
+    const { editor } = screen;
+    await focusAt(editor, "end");
+    await userEvent.keyboard("[[docs](https://example.com) ");
+    await vi.waitFor(() =>
+      expect(textWithMark(editor, "link")).toEqual(["literal ` tick", "docs"]),
+    );
+  });
+
+  it("keeps a `)` typed just before a shown link's closing `)`", async () => {
+    const value = `[docs](${href}) after`;
+    await using screen = await mountEditor(value);
+    const { editor } = screen;
+    await focusAt(editor, 3);
+    expect(editor.state.doc.textContent).toBe(value);
+    await act(async () => {
+      editor.commands.setTextSelection(value.indexOf(") after") + 1);
+    });
+    await userEvent.keyboard("){End}");
+    await vi.waitFor(() =>
+      expect(serializeEditorDoc(editor.state.doc).value).toBe(`[docs](${href})) after`),
+    );
+  });
+
+  it("hides a link's Markdown when the caret leaves past a literal `*` beside it", async () => {
+    await using screen = await mountEditor(`see [docs](${href})*`);
+    const { editor } = screen;
+    await focusAt(editor, "see do".length + 1);
+    expect(textWithMark(editor, "markdownSource")).toHaveLength(1);
+    await userEvent.keyboard("{End}");
+    await vi.waitFor(() => expect(editor.state.doc.textContent).toBe("see docs*"));
+    expect(editor.view.dom.querySelectorAll(".composer-link-favicon")).toHaveLength(1);
+  });
+
+  it("keeps a caret in a link's address when rich text is turned on", async () => {
+    const value = `[docs](https://t3.codes) after`;
+    const ui = (richTextEnabled: boolean) => (
+      <Composer value={value} richTextEnabled={richTextEnabled} skills={[]} />
+    );
+    await using screen = await render(ui(false));
+    const plain = editorIn(screen.container);
+    await focusAt(plain, "[docs](https://t3".length + 1);
+    await screen.rerender(ui(true));
+    const editor = editorIn(screen.container);
+    await vi.waitFor(() => expect(editor.view.hasFocus()).toBe(true));
+    await userEvent.keyboard("X");
+    await vi.waitFor(() =>
+      expect(serializeEditorDoc(editor.state.doc).value).toBe(`[docs](https://t3X.codes) after`),
+    );
+  });
+
+  it.each([
+    {
+      value: "see **bold word here** now",
+      select: "word",
+      expected: `see **bold [word](${href}) here** now`,
+    },
+    { value: "see \\!docs", select: "docs", expected: `see \\![docs](${href})` },
+  ])("links $select in $value", async ({ value, select, expected }) => {
+    const editorRef = createRef<ComposerPromptEditorHandle>();
+    await using screen = await render(
+      <Composer value={value} richTextEnabled skills={[]} editorRef={editorRef} />,
+    );
+    const editor = editorIn(screen.container);
+    await focusAt(editor, "end");
+    const text = editor.state.doc.textContent;
+    await act(async () => {
+      editor.commands.setTextSelection({
+        from: text.indexOf(select) + 1,
+        to: text.indexOf(select) + 1 + select.length,
+      });
+    });
+    await act(async () => {
+      expect(editorRef.current?.openLinkEditor()).toBe(true);
+    });
+    await expect.element(page.getByRole("textbox", { name: "Link URL" })).toHaveFocus();
+    await userEvent.keyboard("t3.codes{Enter}");
+    await vi.waitFor(() => expect(serializeEditorDoc(editor.state.doc).value).toBe(expected));
+  });
+
+  it.each([
+    { name: "a word inside a literal code span", text: "two `read docs here`", select: "docs" },
+  ])("refuses to link $name", async ({ text, select }) => {
+    const editorRef = createRef<ComposerPromptEditorHandle>();
+    await using screen = await render(
+      <Composer value="" richTextEnabled skills={[]} editorRef={editorRef} />,
+    );
+    const editor = editorIn(screen.container);
+    await act(async () => {
+      editor.commands.setContent({
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+      });
+      editor.commands.setTextSelection({
+        from: text.indexOf(select) + 1,
+        to: text.indexOf(select) + 1 + select.length,
+      });
+    });
+    expect(editorRef.current?.openLinkEditor()).toBe(false);
+  });
+
+  it("does not open the URL field for a selection reaching into a shown address", async () => {
+    const editorRef = createRef<ComposerPromptEditorHandle>();
+    const value = `[docs](${href}) after`;
+    await using screen = await render(
+      <Composer value={value} richTextEnabled skills={[]} editorRef={editorRef} />,
+    );
+    const editor = editorIn(screen.container);
+    await focusAt(editor, 3);
+    expect(editor.state.doc.textContent).toBe(value);
+    const start = value.indexOf("codes)");
+    await act(async () => {
+      editor.commands.setTextSelection({ from: start + 1, to: value.length + 1 });
+    });
+    expect(editorRef.current?.openLinkEditor()).toBe(false);
+  });
+
   it("does not open the URL field for a link's revealed address", async () => {
     const editorRef = createRef<ComposerPromptEditorHandle>();
     const value = "[docs](https://old.test) after";

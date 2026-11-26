@@ -417,6 +417,15 @@ describe("composer rich text document model", () => {
     // A caret before a link is outside it, so it maps before the `[`.
     const map = serializeEditorDoc(adjacent);
     expect(flatToMarkdown(map, "see ".length)).toBe("see ".length);
+    // An offset in an address lands inside the label, where the address shows as source;
+    // a one-character label has no inside, so it lands at the end.
+    expect(markdownToFlat(map, "see [a](https://t3".length)).toBe("see a".length);
+    const longLabel = serializeEditorDoc(
+      schema.node("doc", null, [
+        schema.node("paragraph", null, [linked("abc", "https://t3.codes")]),
+      ]),
+    );
+    expect(markdownToFlat(longLabel, "[abc](https://t3".length)).toBe(2);
   });
 
   it("applies a shared mark to text on both sides of a chip", () => {
