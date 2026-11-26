@@ -112,7 +112,7 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
   };
 
   const movePendingActionToFeatureBranch = useCallback(async () => {
-    if (!canCreateFeatureBranch || !confirmAction) return;
+    if (!canCreateFeatureBranch || !offersFeatureBranch || !confirmAction) return;
     navigation.dispatch(StackActions.replace("Thread", { environmentId, threadId }));
 
     if (includesCommit) {
@@ -140,6 +140,7 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
     await gitActions.onRunSelectedThreadGitAction({ action: confirmAction });
   }, [
     canCreateFeatureBranch,
+    offersFeatureBranch,
     confirmAction,
     gitActions,
     gitState.selectedThreadBranches,
@@ -168,13 +169,15 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
           disabled={!canWriteSourceControl}
           onPress={() => void continuePendingAction()}
         />
-        <SheetActionButton
-          icon="arrow.branch"
-          label={gt("Feature branch & continue")}
-          disabled={!canCreateFeatureBranch || !offersFeatureBranch}
-          tone="primary"
-          onPress={() => void movePendingActionToFeatureBranch()}
-        />
+        {offersFeatureBranch ? (
+          <SheetActionButton
+            icon="arrow.branch"
+            label={gt("Feature branch & continue")}
+            disabled={!canCreateFeatureBranch}
+            tone="primary"
+            onPress={() => void movePendingActionToFeatureBranch()}
+          />
+        ) : null}
       </View>
     </FitSheet>
   );

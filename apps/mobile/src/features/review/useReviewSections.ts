@@ -90,11 +90,14 @@ export function useReviewSections(input: {
       : NO_GIT_SECTIONS_ATOM,
   );
 
+  // Sections remembered from before the repository went to a VCS plugin are not its own.
   const gitSections = (
-    [
-      ["working-tree", workingTreePreview],
-      ["branch-range", branchPreview],
-    ] as const
+    offersGitSections
+      ? ([
+          ["working-tree", workingTreePreview],
+          ["branch-range", branchPreview],
+        ] as const)
+      : []
   ).flatMap(([kind, preview]) =>
     (preview.data?.incomplete
       ? lastGitSections
@@ -120,10 +123,12 @@ export function useReviewSections(input: {
     checkpoints: readyCheckpoints,
     gitSections: canReadFiles || fileAccess.isPending ? gitSections : [],
     turnDiffById: reviewTurnDiffsBySectionId(readyCheckpoints, lastTurnDiffs),
-    gitSectionStates: {
-      "working-tree": gitSectionState(fileAccess.isPending, workingTreePreview),
-      "branch-range": gitSectionState(fileAccess.isPending, branchPreview),
-    },
+    gitSectionStates: offersGitSections
+      ? {
+          "working-tree": gitSectionState(fileAccess.isPending, workingTreePreview),
+          "branch-range": gitSectionState(fileAccess.isPending, branchPreview),
+        }
+      : { "working-tree": null, "branch-range": null },
     ...(selectedThreadProject ? { rootName: selectedThreadProject.title } : {}),
     resolve: messages,
   });

@@ -353,7 +353,19 @@ export default function DiffPanel({
   // A plain folder holding tracked repositories has no branch or working tree of its own; every
   // way into the panel lands on its latest turn.
   // A VCS plugin's repository has turn diffs, but no Git branch, working-tree or commit views.
-  const offersGitScopes = gitRepository !== null || vcsAllows(gitStatusQuery.data, "reviewDiff");
+  // A selected repository answers for itself: it may belong to a plugin the thread's folder does not.
+  const selectedRepositoryStatusQuery = useEnvironmentQuery(
+    activeThread != null && gitRepository !== null
+      ? vcsEnvironment.status({
+          environmentId: activeThread.environmentId,
+          input: { cwd: gitRepository.cwd },
+        })
+      : null,
+  );
+  const offersGitScopes = vcsAllows(
+    gitRepository === null ? gitStatusQuery.data : selectedRepositoryStatusQuery.data,
+    "reviewDiff",
+  );
   const turnDiffsOnly = (!isGitRepo && hasRepositoryChanges) || (isGitRepo && !offersGitScopes);
   const diffSelection: DiffPanelSelection =
     turnDiffsOnly &&

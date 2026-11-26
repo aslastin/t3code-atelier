@@ -1314,7 +1314,10 @@ function CheckoutGitActionsControl({
 
   const continuePendingDefaultBranchAction = (featureBranch: boolean) => {
     if (!pendingDefaultBranchAction || !canWriteSourceControl) return;
-    if (featureBranch && (!canCreateFeatureBranch || featureBranchUnavailableReason !== null))
+    if (
+      featureBranch &&
+      (!offersFeatureBranch || !canCreateFeatureBranch || featureBranchUnavailableReason !== null)
+    )
       return;
     const { action, commitMessage, onConfirmed, filePaths } = pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
@@ -2040,7 +2043,7 @@ function CheckoutGitActionsControl({
               {pendingDefaultBranchActionCopy?.title ?? gt("Run action on default branch?")}
             </DialogTitle>
             <DialogDescription>{pendingDefaultBranchActionCopy?.description}</DialogDescription>
-            {featureBranchUnavailableReason && (
+            {offersFeatureBranch && featureBranchUnavailableReason && (
               <p className="text-xs text-muted-foreground">{featureBranchUnavailableReason}</p>
             )}
           </DialogHeader>
@@ -2062,18 +2065,16 @@ function CheckoutGitActionsControl({
             >
               {pendingDefaultBranchActionCopy?.continueLabel ?? gt("Continue")}
             </Button>
-            <Button
-              className="w-full max-w-full sm:w-auto"
-              size="sm-multiline"
-              onClick={() => continuePendingDefaultBranchAction(true)}
-              disabled={
-                !canCreateFeatureBranch ||
-                featureBranchUnavailableReason !== null ||
-                !offersFeatureBranch
-              }
-            >
-              <T>Check out feature branch & continue</T>
-            </Button>
+            {offersFeatureBranch && (
+              <Button
+                className="w-full max-w-full sm:w-auto"
+                size="sm-multiline"
+                onClick={() => continuePendingDefaultBranchAction(true)}
+                disabled={!canCreateFeatureBranch || featureBranchUnavailableReason !== null}
+              >
+                <T>Check out feature branch & continue</T>
+              </Button>
+            )}
           </DialogFooter>
         </DialogPopup>
       </Dialog>
