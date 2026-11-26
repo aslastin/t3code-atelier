@@ -366,10 +366,18 @@ const make = Effect.gen(function* () {
       ? resolved
       : null;
   });
-  // A VCS plugin's checkout has no gitfile; its plugin listing the folder stands in for one.
+  // A VCS plugin's checkout has no gitfile; its plugin listing the folder stands in for one. It
+  // must answer to that plugin too: another VCS's checkout can sit at a path still listed.
   const listedPluginCheckout = Effect.fnUntraced(function* (checkout: TaskFolderCheckout) {
     if (plugins?.hasAny() !== true || (yield* exists(path.join(checkout.worktreePath, ".git"))))
       return false;
+    const kindOf = (cwd: string) =>
+      git.localStatus({ cwd }).pipe(
+        Effect.map((status) => status.capabilities?.kind),
+        Effect.orElseSucceed(() => undefined),
+      );
+    const kind = yield* kindOf(checkout.repositoryPath);
+    if (kind === undefined || (yield* kindOf(checkout.worktreePath)) !== kind) return false;
     const real = (target: string) =>
       fileSystem.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
     const target = yield* real(checkout.worktreePath);

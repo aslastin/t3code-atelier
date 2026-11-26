@@ -412,11 +412,18 @@ const make = Effect.gen(function* () {
     if (!gitWorkflowHasPlugins()) return null;
     const markers = (yield* projectPlugin(projectCwd))?.plugin.markers ?? [];
     if (markers.length === 0) return null;
-    let folder = path.resolve(target);
+    // Physical ancestors, as the plugin's removal resolves them: a link's own name would
+    // check a smaller folder than the one removed.
+    let folder = yield* fs
+      .realPath(path.resolve(target))
+      .pipe(Effect.orElseSucceed(() => path.resolve(target)));
+    const projectRoot = yield* fs
+      .realPath(projectCwd)
+      .pipe(Effect.orElseSucceed(() => path.resolve(projectCwd)));
     while (true) {
       for (const marker of markers) {
         if (yield* fs.exists(path.join(folder, marker)).pipe(Effect.orElseSucceed(() => false)))
-          return inside(folder, path.resolve(projectCwd)) || pathKey(folder) === pathKey(projectCwd)
+          return inside(folder, projectRoot) || pathKey(folder) === pathKey(projectRoot)
             ? null
             : folder;
       }
@@ -1203,6 +1210,14 @@ const make = Effect.gen(function* () {
             return { keep: inspection.reason, force: false, bytes: inspection.bytes };
           if (yield* settingsChanged)
             return { keep: "settings changed since check", force: false, bytes: inspection.bytes };
+          // Measuring takes time: work saved meanwhile keeps the checkout, as in the sweep.
+          const last = yield* pluginWorktreeState(checkoutPath, branch, rules);
+          const lastReason =
+            last.kind !== pluginKind || last.branchChanged
+              ? "repository or branch changed since check"
+              : last.changes;
+          if (lastReason !== null)
+            return { keep: lastReason, force: false, bytes: inspection.bytes };
           // Checked as the sweep checks it, so the plugin is not asked to keep untracked files.
           return { keep: null, force: true, bytes: inspection.bytes };
         }

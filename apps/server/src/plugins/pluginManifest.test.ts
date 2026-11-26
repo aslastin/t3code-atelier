@@ -48,7 +48,7 @@ describe("pluginManifest", () => {
         checkpoints: ["native", "native", "full"],
         extraManifest: {
           check: ["/usr/bin/kite", "{path}"],
-          detect: { markers: ["../.kite/HEAD", " .kite/HEAD"] },
+          detect: { markers: ["../.kite/HEAD", " .kite/HEAD", "./.kite/HEAD"] },
           icon: "../icon.svg",
           capabilities: { worktrees: true },
         },
@@ -65,6 +65,7 @@ describe("pluginManifest", () => {
         "check: {path} is not available here.",
         'detect.markers: "../.kite/HEAD" must be a path inside the repository folder, with no spaces around it.',
         'detect.markers: " .kite/HEAD" must be a path inside the repository folder, with no spaces around it.',
+        'detect.markers: "./.kite/HEAD" must be a path inside the repository folder, with no spaces around it.',
         "icon: must be an .svg file inside the plugin folder.",
         "checkpoints: each strategy can be listed once.",
         "capabilities.worktrees: needs commands.worktreeCreate, commands.worktreeRemove and commands.worktreeList.",

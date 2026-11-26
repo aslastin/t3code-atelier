@@ -2348,6 +2348,12 @@ describe("VCS plugin worktrees", () => {
       files: [{ path: "a.txt" }],
       verdict: { keep: "has uncommitted changes (1 file)", force: false },
     },
+    {
+      name: "a checkout changed while it was measured",
+      // Clean when first read, changed when read again after the walk.
+      files: "changes-later" as const,
+      verdict: { keep: "has uncommitted changes (1 file)", force: false },
+    },
   ])("checks $name in a task folder through the plugin", (row) =>
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
@@ -2355,9 +2361,13 @@ describe("VCS plugin worktrees", () => {
       const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
       fixture.setThreads([]);
       fixture.setDeletedThreads([thread]);
+      let reads = 0;
       fixture.setPluginStatus({
         refName: "feature",
-        files: row.files,
+        get files() {
+          reads += 1;
+          return row.files !== "changes-later" ? row.files : reads > 1 ? [{ path: "a.txt" }] : [];
+        },
         aheadCount: 0,
         repositoryBranches: ["feature"],
       });
@@ -2479,6 +2489,19 @@ describe("VCS plugin worktrees", () => {
         .pipe(Effect.flip);
       expect(refused.detail).toContain("Another thread");
       expect(yield* fixture.fs.exists(fixture.pluginWorktree)).toBe(true);
+
+      // Named through a link from elsewhere, the subfolder still stands for the whole checkout.
+      const elsewhere = yield* fixture.fs.makeTempDirectoryScoped({ prefix: "t3-plugin-alias-" });
+      yield* fixture.fs.symlink(`${fixture.pluginWorktree}/sub`, `${elsewhere}/sub`);
+      const throughLink = yield* fixture.service
+        .removeWorktree({
+          cwd: fixture.repo,
+          path: `${elsewhere}/sub`,
+          force: true,
+          onlyIfUnused: true,
+        })
+        .pipe(Effect.flip);
+      expect(throughLink.detail).toContain("Another thread");
     }).pipe(Effect.provide(cleanupTestLayer)),
   );
 

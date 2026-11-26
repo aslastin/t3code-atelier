@@ -88,7 +88,7 @@ export function classifyExecutable(executable: string): ExecutableKind {
 const isSafeRelativePath = (value: string) =>
   value.trim() === value &&
   !/^[A-Za-z]:|^[/\\]/.test(value) &&
-  value.split(/[/\\]/).every((part) => part !== ".." && part !== "");
+  value.split(/[/\\]/).every((part) => part !== ".." && part !== "." && part !== "");
 
 export const manifestCommands = (manifest: VcsPluginManifest) =>
   [["check", manifest.check], ...Object.entries(manifest.commands)] as ReadonlyArray<

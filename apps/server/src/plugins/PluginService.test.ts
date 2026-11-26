@@ -307,6 +307,18 @@ describe("ManifestVcsDriver", () => {
       }
       assert.isTrue(NodeFS.existsSync(worktree.path));
 
+      // Without force, local work keeps the checkout, as `git worktree remove` does.
+      const original = NodeFS.readFileSync(`${worktree.path}/a.txt`, "utf8");
+      NodeFS.writeFileSync(`${worktree.path}/a.txt`, "local work\n");
+      const dirty = yield* workflow.removeWorktree!({
+        cwd: `${repository}/sub`,
+        path: worktree.projectPath!,
+        force: false,
+      }).pipe(Effect.flip);
+      assert.include(dirty.message, "uncommitted changes");
+      assert.isTrue(NodeFS.existsSync(`${worktree.path}/a.txt`));
+      NodeFS.writeFileSync(`${worktree.path}/a.txt`, original);
+
       // Callers pass the thread's folder, the subfolder; the whole checkout goes, as with Git.
       yield* workflow.removeWorktree!({ cwd: `${repository}/sub`, path: worktree.projectPath! });
       assert.isFalse(NodeFS.existsSync(worktree.path));

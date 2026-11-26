@@ -134,7 +134,16 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
   const listedWorktrees = Effect.fnUntraced(function* (cwd: string) {
     if (!runner.has("worktreeList")) return [];
     const out = yield* json("worktreeList", VcsPluginWorktreeListOutput, cwd);
-    return out.worktrees.filter((worktree) => path.isAbsolute(worktree.path));
+    const relative = out.worktrees.find((worktree) => !path.isAbsolute(worktree.path));
+    if (relative !== undefined)
+      return yield* new GitCommandError({
+        vcs: kind,
+        operation: `${kind}.worktreeList`,
+        command: "worktreeList",
+        cwd,
+        detail: `worktreeList returned "${relative.path}", which is not an absolute path.`,
+      });
+    return out.worktrees;
   });
   const listWorktreePaths = (cwd: string) =>
     listedWorktrees(cwd).pipe(Effect.map((worktrees) => worktrees.map((entry) => entry.path)));
@@ -469,6 +478,17 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
           }
           if (!isListed)
             return yield* refuse(`${manifest.label} does not list ${target} as a worktree.`);
+        }
+        // As `git worktree remove` without --force: local work keeps the checkout.
+        if (
+          request.force !== true &&
+          (yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false)))
+        ) {
+          const files = (yield* json("status", VcsPluginStatusOutput, target)).files ?? [];
+          if (files.length > 0)
+            return yield* refuse(
+              `${target} has uncommitted changes (${files.length} ${files.length === 1 ? "file" : "files"}).`,
+            );
         }
         yield* runner
           .run("worktreeRemove", {

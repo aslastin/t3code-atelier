@@ -313,13 +313,19 @@ it.live("gives a VCS plugin's project folder a checkout, not links to the origin
     assert.include(unlisted.detail, "is not a worktree of");
     state.pluginWorktrees = [shop, checkout];
     yield* restore;
+    // Another VCS's checkout at the listed path is not the thread's.
+    yield* fileSystem.remove(path.join(checkout, ".kite"), { recursive: true });
+    yield* fileSystem.makeDirectory(path.join(checkout, ".other"), { recursive: true });
+    yield* fileSystem.writeFileString(path.join(checkout, ".other", "HEAD"), "main\n");
+    const replaced = yield* restore.pipe(Effect.flip);
+    assert.include(replaced.detail, "is not a worktree of");
   }).pipe(
     Effect.provide(
       layerFor(state).pipe(
         Layer.provide(
           Layer.succeed(VcsPluginDrivers, {
             hasAny: () => true,
-            installedMarkers: () => [".kite/HEAD"],
+            installedMarkers: () => [".kite/HEAD", ".other/HEAD"],
           } as unknown as VcsPluginDrivers["Service"]),
         ),
       ),

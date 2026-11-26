@@ -5,6 +5,7 @@ import {
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
@@ -37,6 +38,7 @@ export const layerTaskFoldersWithGit = (state: TaskFoldersTestState) => {
   const layerWorkflow = Layer.unwrap(
     Effect.gen(function* () {
       const git = yield* GitVcsDriver.GitVcsDriver;
+      const fs = yield* FileSystem.FileSystem;
       const succeeds = (cwd: string, args: ReadonlyArray<string>) =>
         git
           .execute({ operation: "task-folders-test", cwd, args, allowNonZeroExit: true })
@@ -55,6 +57,15 @@ export const layerTaskFoldersWithGit = (state: TaskFoldersTestState) => {
           ),
         currentBranch: (cwd) => succeeds(cwd, ["symbolic-ref", "--short", "--quiet", "HEAD"]),
         listWorktrees: () => Effect.sync(() => state.pluginWorktrees ?? []),
+        // The VCS a folder answers to, by the marker a test gave it.
+        localStatus: ({ cwd }) =>
+          Effect.gen(function* () {
+            for (const kind of ["kite", "other"]) {
+              if (yield* fs.exists(`${cwd}/.${kind}/HEAD`).pipe(Effect.orElseSucceed(() => false)))
+                return { capabilities: { kind } } as never;
+            }
+            return { capabilities: { kind: "git" } } as never;
+          }),
       });
     }),
   );
