@@ -282,6 +282,26 @@ const make = Effect.gen(function* () {
     directory,
   });
 
+  // An import interrupted mid-swap leaves the old copy aside: put it back, then drop leftovers.
+  for (const name of yield* fs
+    .readDirectory(directory)
+    .pipe(Effect.orElseSucceed((): string[] => []))) {
+    const leftover = path.join(directory, name);
+    if (name.startsWith(".previous-")) {
+      const aside = yield* readManifest(fs, path, leftover);
+      const id = aside.manifest?.id;
+      if (
+        id !== undefined &&
+        !(yield* fs.exists(path.join(directory, id)).pipe(Effect.orElseSucceed(() => true)))
+      ) {
+        yield* fs.rename(leftover, path.join(directory, id)).pipe(Effect.ignore);
+        continue;
+      }
+    }
+    if (name.startsWith(".previous-") || name.startsWith(".import-"))
+      yield* fs.remove(leftover, { recursive: true, force: true }).pipe(Effect.ignore);
+  }
+
   // Startup: read every folder now, check in the background.
   const disabledAtStart = yield* readDisabled;
   for (const folder of yield* listFolders) {
@@ -390,7 +410,14 @@ const make = Effect.gen(function* () {
           yield* cleanupStaging;
           return yield* failure(operation, staged.manifestErrors.join(" "), id);
         }
+        // The source can change after the preview; the copy installs under the id it carries.
+        if (staged.manifest.id !== id) {
+          yield* cleanupStaging;
+          return yield* failure(operation, "The plugin's id changed while it was imported.", id);
+        }
         const checked = yield* check(staged);
+        // The check runs in the copy and can write there, so the limits are checked once more.
+        yield* walkSource(staging).pipe(Effect.tapError(() => cleanupStaging));
         const target = path.join(directory, id);
         const previous = path.join(directory, `.previous-${NodeCrypto.randomUUID()}`);
         const hadPrevious = yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false));

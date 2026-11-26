@@ -117,6 +117,10 @@ switch (command) {
     if (fs.existsSync(path.join(dir, "hold-check")))
       while (!fs.existsSync(path.join(dir, "release-check")))
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    // A check that leaves a cache behind, as some CLIs do on first run.
+    if (fs.existsSync(path.join(dir, "grow-on-check")))
+      for (let index = 0; index < 2100; index++)
+        fs.writeFileSync(path.join(dir, "cache-" + index), "");
     const problemsFile = path.join(process.env.T3_PLUGIN_DIR ?? "", "problems.txt");
     const problems = fs.existsSync(problemsFile) ? [fs.readFileSync(problemsFile, "utf8").trim()] : [];
     out({ version: "1.2.3", problems });

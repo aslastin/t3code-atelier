@@ -63,6 +63,46 @@ const setup = Effect.fn("test.setup")(function* (options: FakeVcsPluginOptions =
 
 const layer = NodeServices.layer;
 
+const buildPlugins = (home: string) =>
+  Layer.build(
+    PluginService.layer.pipe(
+      Layer.provide(VcsProcess.layer),
+      Layer.provideMerge(SqlitePersistence.layerMemory),
+      Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
+      Layer.provide(ServerConfig.layerTest(home, home)),
+    ),
+  );
+
+it.live("puts back a plugin an interrupted reimport had set aside", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-plugins-home-" });
+    writeFakeVcsPlugin(`${home}/plugins/.previous-1234`);
+    NodeFS.mkdirSync(`${home}/plugins/.import-5678`, { recursive: true });
+    const plugins = Context.get(yield* buildPlugins(home), PluginService.PluginService);
+    assert.deepStrictEqual(
+      (yield* plugins.list).plugins.map((plugin) => plugin.id),
+      ["kite"],
+    );
+    assert.isFalse(NodeFS.existsSync(`${home}/plugins/.import-5678`));
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+it.live("refuses an import whose check grows the copy past the limits", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-plugins-home-" });
+    const source = writeFakeVcsPlugin(
+      yield* fs.makeTempDirectoryScoped({ prefix: "t3-plugins-source-" }),
+    );
+    NodeFS.writeFileSync(`${source}/grow-on-check`, "");
+    const plugins = Context.get(yield* buildPlugins(home), PluginService.PluginService);
+    const refused = yield* plugins.importFolder(source).pipe(Effect.flip);
+    assert.include(refused.detail, "too large");
+    assert.isFalse(NodeFS.existsSync(`${home}/plugins/kite`));
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
 it.live("keeps a plugin turned off while its startup check was still running", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
