@@ -26,6 +26,9 @@ appears in the app version as `+atelier.<N>`.
    under each project. The ungrouped sidebar and the chat header name a thread's topic next to
    its project.
 3. **[Plan mode](#plan-mode).** Refine a proposal, then implement it in the current thread or a new thread in the same checkout.
+4. **Reasoning effort in model mentions.** Picking a model in the composer's `@` menu lists its
+   reasoning levels in the same menu, and the chip reads **Model · Level**. Click the level to
+   change it. The agent reads the exact model and level from each mention.
 
 ### Plan mode
 

@@ -39,6 +39,7 @@ import { getRouter } from "~/router";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentThreadDetails } from "~/state/threads";
 import {
+  CODEX_PROVIDER,
   ENVIRONMENT_ID,
   PROJECT_ID,
   answerAssetUrls,
@@ -1037,4 +1038,341 @@ it("/side sends the draft's attachments and context, and keeps them when it does
       "/side what is this?",
     ]),
   );
+});
+
+const MENTION_LEVELS = [
+  { id: "low", label: "Low" },
+  { id: "medium", label: "Medium" },
+  { id: "high", label: "High", isDefault: true },
+  { id: "xhigh", label: "Extra High" },
+];
+
+/** A thread whose GPT-5.5 lists reasoning levels and GPT-5.4 none, with helpers for its composer. */
+async function openMentionComposer(threadId: string, options: { readonly prompt?: string } = {}) {
+  await using stack = new AsyncDisposableStack();
+  const thread = threadWithHistory(threadId, 1);
+  stack.use(
+    installFakeEnvironment([thread], {
+      acceptCommands: true,
+      providers: [
+        {
+          ...CODEX_PROVIDER,
+          models: CODEX_PROVIDER.models.map((model) =>
+            model.slug === "gpt-5.5"
+              ? {
+                  ...model,
+                  capabilities: {
+                    optionDescriptors: [
+                      {
+                        id: "reasoningEffort",
+                        label: "Reasoning",
+                        type: "select",
+                        options: MENTION_LEVELS,
+                      },
+                    ],
+                  },
+                }
+              : model,
+          ),
+        },
+      ],
+    }),
+  );
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const draft = scopeThreadRef(ENVIRONMENT_ID, thread.id);
+  if (options.prompt !== undefined) {
+    useComposerDraftStore.getState().setPrompt(draft, options.prompt);
+  }
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+  );
+  await router.load();
+  // AppRoot brings its own router.
+  stack.use(await render(<AppRoot router={router} />, { router: false }));
+  await expect.element(page.getByText(`Answer 0 for ${thread.id}.`)).toBeVisible();
+  // A restored draft keeps its caret at the end; a click would move it.
+  if (options.prompt === undefined) await userEvent.click(page.getByTestId("composer-editor"));
+  const owned = stack.move();
+
+  const efforts = page.getByRole("listbox", { name: "Reasoning effort for GPT-5.5" });
+  // A model option's name goes on with its provider.
+  const expectHighlighted = (label: string) =>
+    expect
+      .element(
+        page.getByRole("option", {
+          selected: true,
+          name: new RegExp(`^${label.replaceAll(".", "\\.")}(Codex)?$`),
+        }),
+      )
+      .toBeVisible();
+  const effortButton = (level: string) =>
+    page.getByRole("button", { name: `Reasoning effort ${level}. Change` });
+  return {
+    efforts,
+    expectHighlighted,
+    effortButton,
+    prompt: () => useComposerDraftStore.getState().getComposerDraft(draft)?.prompt,
+    /** Types `text`, which ends in an `@` search, and picks the highlighted model. */
+    pick: async (text: string, model = "GPT-5.5") => {
+      await insertText(text);
+      await expectHighlighted(model);
+      await userEvent.keyboard("{Enter}");
+    },
+    /** Moves to `level` in the open level list and applies it. */
+    chooseLevel: async (level: string) => {
+      const steps = MENTION_LEVELS.findIndex((choice) => choice.label === level) + 1;
+      await userEvent.keyboard("{ArrowDown}".repeat(steps));
+      await expectHighlighted(level);
+      await userEvent.keyboard("{Enter}");
+      await expect.element(effortButton(level)).toBeVisible();
+    },
+    [Symbol.asyncDispose]: () => owned.disposeAsync(),
+  };
+}
+
+it("picking a model with levels puts its mention in and lists them; Back restores the search", async () => {
+  await using composer = await openMentionComposer("mention-pick");
+
+  await composer.pick("Ask @gpt-5.5");
+  await expect.element(composer.efforts).toBeVisible();
+  await composer.expectHighlighted("Default");
+  // The plain mention is in while the levels show, so any send names the model.
+  await vi.waitFor(() => expect(composer.prompt()).toBe("Ask model:codex/gpt-5.5 "));
+
+  await userEvent.keyboard("{ArrowLeft}");
+  await composer.expectHighlighted("GPT-5.5");
+  expect(composer.prompt()).toBe("Ask @gpt-5.5");
+  // Picking again from the restored list lists the levels again.
+  await userEvent.keyboard("{Enter}");
+  await expect.element(composer.efforts).toBeVisible();
+});
+
+it("a chosen level goes into the mention and shows on its chip", async () => {
+  await using composer = await openMentionComposer("mention-level");
+
+  await composer.pick("Ask @gpt-5.5");
+  await composer.chooseLevel("High");
+
+  expect(composer.prompt()).toBe("Ask model:codex/gpt-5.5?reasoningEffort=high ");
+  await expect.element(composer.efforts).not.toBeInTheDocument();
+});
+
+it("Escape or Default leaves a new mention without an effort", async () => {
+  await using composer = await openMentionComposer("mention-no-effort");
+
+  await composer.pick("Ask @gpt-5.5");
+  await expect.element(composer.efforts).toBeVisible();
+  await userEvent.keyboard("{Escape}");
+  await expect.element(composer.efforts).not.toBeInTheDocument();
+  await composer.pick("or @gpt-5.5");
+  await composer.expectHighlighted("Default");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(composer.efforts).not.toBeInTheDocument();
+
+  expect(composer.prompt()).toBe("Ask model:codex/gpt-5.5 or model:codex/gpt-5.5 ");
+});
+
+it("a model without levels goes in at once", async () => {
+  await using composer = await openMentionComposer("mention-no-levels");
+
+  await composer.pick("Ask @gpt-5.4", "GPT-5.4");
+
+  await vi.waitFor(() => expect(composer.prompt()).toBe("Ask model:codex/gpt-5.4 "));
+  await expect.element(composer.efforts).not.toBeInTheDocument();
+});
+
+it("a chip's level reopens the menu on it: Escape keeps it, Enter changes it", async () => {
+  await using composer = await openMentionComposer("mention-chip-edit");
+  await composer.pick("Ask @gpt-5.5");
+  await composer.chooseLevel("High");
+
+  await userEvent.click(composer.effortButton("High"));
+  await composer.expectHighlighted("High");
+  await userEvent.keyboard("{Escape}");
+  await expect.element(composer.efforts).not.toBeInTheDocument();
+  await userEvent.click(composer.effortButton("High"));
+  await userEvent.keyboard("{ArrowDown}");
+  await composer.expectHighlighted("Extra High");
+  await userEvent.keyboard("{Enter}");
+
+  await expect.element(composer.effortButton("Extra High")).toBeVisible();
+  expect(composer.prompt()).toBe("Ask model:codex/gpt-5.5?reasoningEffort=xhigh ");
+});
+
+it("a chip without an effort gets one from its details", async () => {
+  await using composer = await openMentionComposer("mention-add-effort");
+  await composer.pick("Ask @gpt-5.5");
+  await userEvent.keyboard("{Escape}");
+
+  const details = page.getByRole("button", { name: "Model GPT-5.5. Show details" });
+  // Closing the details without choosing hands focus back to the chip.
+  await userEvent.click(details);
+  await expect.element(page.getByRole("button", { name: "Choose reasoning effort" })).toBeVisible();
+  await userEvent.keyboard("{Escape}");
+  await expect.element(details).toHaveFocus();
+  await userEvent.click(details);
+  await userEvent.click(page.getByRole("button", { name: "Choose reasoning effort" }));
+  await composer.expectHighlighted("Default");
+  await composer.chooseLevel("Low");
+
+  expect(composer.prompt()).toBe("Ask model:codex/gpt-5.5?reasoningEffort=low ");
+});
+
+it("a chip's level menu gives way when the caret moves", async () => {
+  await using composer = await openMentionComposer("mention-chip-caret");
+  await composer.pick("Ask @gpt-5.5");
+  await composer.chooseLevel("High");
+
+  await userEvent.click(composer.effortButton("High"));
+  await expect.element(composer.efforts).toBeVisible();
+  await userEvent.keyboard("{ArrowLeft}");
+
+  await expect.element(composer.efforts).not.toBeInTheDocument();
+});
+
+it("Undo under a chip's level menu closes it", async () => {
+  await using composer = await openMentionComposer("mention-chip-undo");
+  await composer.pick("Ask @gpt-5.5");
+  await composer.chooseLevel("High");
+  await userEvent.click(composer.effortButton("High"));
+  await userEvent.keyboard("{ArrowDown}");
+  await composer.expectHighlighted("Extra High");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(composer.effortButton("Extra High")).toBeVisible();
+
+  await userEvent.click(composer.effortButton("Extra High"));
+  await expect.element(composer.efforts).toBeVisible();
+  await userEvent.keyboard("{ControlOrMeta>}z{/ControlOrMeta}");
+
+  await expect.element(composer.effortButton("High")).toBeVisible();
+  await expect.element(composer.efforts).not.toBeInTheDocument();
+});
+
+it("extending a selection closes a chip's level menu", async () => {
+  await using composer = await openMentionComposer("mention-chip-selection");
+  await composer.pick("Ask @gpt-5.5");
+  await composer.chooseLevel("High");
+  await insertText("today");
+
+  await userEvent.click(composer.effortButton("High"));
+  await expect.element(composer.efforts).toBeVisible();
+  await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
+
+  await expect.element(composer.efforts).not.toBeInTheDocument();
+});
+
+it("a delete after a chip closes its level menu", async () => {
+  await using composer = await openMentionComposer("mention-chip-delete");
+  await composer.pick("Ask @gpt-5.5");
+  await composer.chooseLevel("Low");
+  await insertText("today");
+
+  await userEvent.click(composer.effortButton("Low"));
+  await expect.element(composer.efforts).toBeVisible();
+  await userEvent.keyboard("{Delete}");
+
+  await expect.element(composer.efforts).not.toBeInTheDocument();
+  expect(composer.prompt()).toBe("Ask model:codex/gpt-5.5?reasoningEffort=low oday");
+});
+
+it("a last chip whose space was deleted stays a chip when its level changes", async () => {
+  await using composer = await openMentionComposer("mention-chip-no-space");
+  await composer.pick("Ask @gpt-5.5");
+  await composer.chooseLevel("Low");
+  await userEvent.keyboard("{Backspace}");
+  await vi.waitFor(() =>
+    expect(composer.prompt()).toBe("Ask model:codex/gpt-5.5?reasoningEffort=low"),
+  );
+
+  await userEvent.click(composer.effortButton("Low"));
+  await userEvent.keyboard("{ArrowDown}");
+  await composer.expectHighlighted("Medium");
+  await userEvent.keyboard("{Enter}");
+
+  await expect.element(composer.effortButton("Medium")).toBeVisible();
+  expect(composer.prompt()).toBe("Ask model:codex/gpt-5.5?reasoningEffort=medium");
+});
+
+it("an edit drops a picked model's levels for good, even once the text reads the same again", async () => {
+  await using composer = await openMentionComposer("mention-edit-drops");
+  await composer.pick("Ask @gpt-5.5");
+  await expect.element(composer.efforts).toBeVisible();
+
+  await insertText("z");
+  await expect.element(composer.efforts).not.toBeInTheDocument();
+  await userEvent.keyboard("{Backspace}");
+
+  await vi.waitFor(() => expect(composer.prompt()).toBe("Ask model:codex/gpt-5.5 "));
+  await expect.element(composer.efforts).not.toBeInTheDocument();
+});
+
+it("sending while a picked model's levels show sends that model", async () => {
+  await using composer = await openMentionComposer("mention-send");
+  await composer.pick("Ask @gpt-5.5");
+  await expect.element(composer.efforts).toBeVisible();
+
+  await userEvent.click(page.getByRole("button", { name: "Submit message" }));
+
+  await vi.waitFor(() =>
+    expect(dispatchedCommands()).toContainEqual(
+      expect.objectContaining({
+        type: "message.dispatch",
+        text: expect.stringMatching(/^Ask model:codex\/gpt-5\.5 ?$/),
+      }),
+    ),
+  );
+});
+
+it("a restored draft the editor re-serializes still offers a mentioned model's levels", async () => {
+  // The editor writes this emphasis back as `*word*`.
+  await using composer = await openMentionComposer("mention-restored", {
+    prompt: "_word_ ask @gpt-5.5",
+  });
+
+  await userEvent.click(page.getByRole("option", { name: /^GPT-5\.5/ }));
+
+  await expect.element(composer.efforts).toBeVisible();
+});
+
+/** Writes `@gpt-5.5 today`, the caret after the search, and picks the model. */
+async function pickBeforeToday(composer: Awaited<ReturnType<typeof openMentionComposer>>) {
+  await insertText(" today");
+  await userEvent.keyboard("{Home}");
+  await composer.pick("@gpt-5.5");
+  await expect.element(composer.efforts).toBeVisible();
+  await vi.waitFor(() => expect(composer.prompt()).toBe("model:codex/gpt-5.5 today"));
+}
+
+it("Back keeps a space that was already after the search, which stays editable text", async () => {
+  await using composer = await openMentionComposer("mention-back-space");
+  await pickBeforeToday(composer);
+
+  await userEvent.keyboard("{ArrowLeft}");
+  await vi.waitFor(() => expect(composer.prompt()).toBe("@gpt-5.5 today"));
+  // A file chip would go whole.
+  await userEvent.keyboard("{Backspace}");
+
+  await vi.waitFor(() => expect(composer.prompt()).toBe("@gpt-5. today"));
+});
+
+it("selecting text after a picked mention hands the keys back to the editor", async () => {
+  await using composer = await openMentionComposer("mention-pick-selection");
+  await pickBeforeToday(composer);
+
+  await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
+
+  await expect.element(composer.efforts).not.toBeInTheDocument();
+});
+
+it("deleting text after a picked mention hands the keys back to the editor", async () => {
+  await using composer = await openMentionComposer("mention-pick-delete");
+  await pickBeforeToday(composer);
+
+  await userEvent.keyboard("{Delete}");
+
+  await expect.element(composer.efforts).not.toBeInTheDocument();
+  expect(composer.prompt()).toBe("model:codex/gpt-5.5 oday");
 });

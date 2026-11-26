@@ -1,4 +1,9 @@
-import type { ComposerContextRecord, EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type {
+  ComposerContextRecord,
+  EnvironmentId,
+  ModelCapabilities,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   composerChipSizeSuffix,
   contextChipIcon,
@@ -7,7 +12,11 @@ import {
   type ContextChipIconRef,
   UNAVAILABLE_CONTEXT_CHIP_PRESENTATION,
 } from "./composerChipPresentation";
-import { formatComposerModelMention } from "@t3tools/client-runtime/composer-model-mentions";
+import {
+  collectComposerModelMentions,
+  formatComposerModelMention,
+  modelMentionEffortDescriptor,
+} from "@t3tools/client-runtime/composer-model-mentions";
 import type {
   SelectableMarkdownModel,
   SelectableMarkdownSkill,
@@ -134,37 +143,53 @@ export function buildEnrichedModelReferences(
       readonly slug: string;
       readonly name: string;
       readonly subProvider?: string | undefined;
+      readonly capabilities?: ModelCapabilities | null | undefined;
     }>;
   }>,
   sources?: ReadonlySet<string>,
 ): ReadonlyArray<SelectableMarkdownModel> {
-  return providers.flatMap((provider) =>
-    provider.models
-      .filter(
-        (model) =>
-          !sources || sources.has(formatComposerModelMention(provider.instanceId, model.slug)),
+  const mentions = sources
+    ? [...sources].flatMap((source) =>
+        collectComposerModelMentions(source).filter((mention) => mention.source === source),
       )
-      .map((model) => {
-        const qualifier = model.subProvider?.trim();
-        const label = qualifier
-          ? model.name
-              .replace(
-                new RegExp(
-                  `^${qualifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s*[.:/-]\\s*|\\s+)`,
-                  "iu",
-                ),
-                "",
-              )
-              .trim() || model.name
-          : model.name;
-        return {
-          source: formatComposerModelMention(provider.instanceId, model.slug),
-          label,
-          providerLabel: qualifier || provider.displayName || provider.instanceId,
-          driver: provider.driver,
-          iconUrl: provider.iconUrl,
-        };
-      }),
+    : null;
+  return providers.flatMap((provider) =>
+    provider.models.flatMap((model) => {
+      const qualifier = model.subProvider?.trim();
+      const label = qualifier
+        ? model.name
+            .replace(
+              new RegExp(
+                `^${qualifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s*[.:/-]\\s*|\\s+)`,
+                "iu",
+              ),
+              "",
+            )
+            .trim() || model.name
+        : model.name;
+      const reference = {
+        source: formatComposerModelMention(provider.instanceId, model.slug),
+        label,
+        providerLabel: qualifier || provider.displayName || provider.instanceId,
+        driver: provider.driver,
+        iconUrl: provider.iconUrl,
+      };
+      if (!mentions) return [reference];
+      const descriptor = modelMentionEffortDescriptor(model.capabilities?.optionDescriptors);
+      return mentions
+        .filter(
+          (mention) => mention.instanceId === provider.instanceId && mention.model === model.slug,
+        )
+        .map(({ source, effort }) => {
+          if (!effort) return reference;
+          // An effort the catalog no longer lists still shows what the agent will read.
+          const effortLabel =
+            (descriptor?.id === effort.optionId
+              ? descriptor.options.find((choice) => choice.id === effort.value)?.label
+              : undefined) ?? effort.value;
+          return { ...reference, source, label: `${label} · ${effortLabel}` };
+        });
+    }),
   );
 }
 

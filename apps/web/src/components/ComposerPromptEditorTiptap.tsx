@@ -136,6 +136,7 @@ import {
   setPendingLink,
 } from "~/composer-link";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
+import type { ComposerModelMentionEffort } from "@t3tools/client-runtime/composer-model-mentions";
 import { ModelMentionChip, modelMentionKey, modelMentionKeysAtom } from "./chat/ModelMentionChip";
 import { getTimelinePageScrollKey } from "./chat/pageScrollController";
 import { ContextChip } from "./ContextChip";
@@ -161,11 +162,24 @@ import {
 } from "./composerAttachmentInsertion";
 import type { ComposerDraftContextRecords } from "./composerContextPresentation";
 
+/** The key name the editor reports for the line's back arrow, `←` or, right to left, `→`. */
+export const COMPOSER_MENU_BACK_KEY = "ComposerMenuBack";
+
 export interface ComposerPromptEditorHandle {
   focus: () => void;
   focusAt: (cursor: number) => void;
   focusAtEnd: () => void;
   readSelectionRange: () => { start: number; end: number };
+  /**
+   * Swaps the model chip whose source starts at prompt offset `start` for plain `text`, caret after
+   * it, without rebuilding the document, which would turn an `@` search before a space into a chip.
+   */
+  replaceModelMention: (
+    start: number,
+    source: string,
+    text: string,
+    options: { removeFollowingSpace: boolean },
+  ) => boolean;
   captureAttachmentInsertion: () => ComposerAttachmentInsertion | undefined;
   requestCitationComment: (request: ComposerCitationCommentRequest) => void;
   readSnapshot: () => {
@@ -367,21 +381,76 @@ const ComposerSkillExtension = Node.create({
   },
 });
 
-function ComposerModelNodeView({ node }: NodeViewProps) {
+function ComposerModelNodeView({ node, editor, getPos }: NodeViewProps) {
   const actions = use(ComposerContextActionsContext);
+  const instanceId = String(node.attrs.instanceId);
+  const model = String(node.attrs.model);
+  const effort = (node.attrs.effort as ComposerModelMentionEffort | null) ?? undefined;
+  const { editModelEffort } = actions;
   return (
     <NodeViewWrapper as="span" className={CHIP_NODE_SELECTION_CLASS_NAME}>
       <ModelMentionChip
         environmentId={actions.environmentId}
-        instanceId={String(node.attrs.instanceId)}
-        model={String(node.attrs.model)}
+        instanceId={instanceId}
+        model={model}
+        effort={effort}
         source={String(node.attrs.source)}
+        onEditEffort={
+          editModelEffort && editor.isEditable
+            ? () => {
+                const pos = getPos();
+                if (pos === undefined) return;
+                const source = String(node.attrs.source);
+                // The caret after the chip and its space keeps Enter out of any code block it sat in.
+                const after = pos + node.nodeSize;
+                const { doc } = editor.state;
+                const spaced =
+                  after < doc.content.size && doc.textBetween(after, after + 1) === " "
+                    ? after + 1
+                    : after;
+                editor.chain().focus().setTextSelection(spaced).run();
+                const openedDoc = editor.state.doc;
+                const chipAt = () => {
+                  // A remount, such as a rich-text toggle, leaves this editor behind.
+                  if (editor.isDestroyed) return null;
+                  const current = editor.state.doc.nodeAt(pos);
+                  return current?.type.name === "composer-model" && current.attrs.source === source
+                    ? current
+                    : null;
+                };
+                editModelEffort({
+                  instanceId,
+                  model,
+                  effort: effort ?? null,
+                  // Any edit, Undo, or moving or extending the caret leaves the menu behind.
+                  isCurrent: () =>
+                    !editor.isDestroyed &&
+                    editor.state.doc === openedDoc &&
+                    editor.state.selection.empty &&
+                    editor.state.selection.from === spaced,
+                  // Edits the chip in place, so a chip with no space after it stays a chip.
+                  apply: (nextSource, nextEffort) => {
+                    const current = chipAt();
+                    if (!current) return false;
+                    editor.view.dispatch(
+                      editor.state.tr.setNodeMarkup(pos, undefined, {
+                        ...current.attrs,
+                        effort: nextEffort,
+                        source: nextSource,
+                      }),
+                    );
+                    return true;
+                  },
+                });
+              }
+            : undefined
+        }
       />
     </NodeViewWrapper>
   );
 }
 
-/** `model:<instance>/<model>` from the `@` menu; `source` is the exact prompt text. */
+/** `model:<instance>/<model>[?<option>=<value>]` from the `@` menu; `source` is the exact prompt text. */
 const ComposerModelExtension = Node.create({
   name: "composer-model",
   group: "inline",
@@ -392,6 +461,7 @@ const ComposerModelExtension = Node.create({
     return {
       instanceId: { default: "" },
       model: { default: "" },
+      effort: { default: null },
       source: { default: "" },
     };
   },
@@ -1193,6 +1263,15 @@ function ComposerPromptEditorTiptapInner(
         handleKeyDown: (view, event) => {
           // In a right-to-left line the start is on the right.
           const backArrow = caretLineDirection(view.state) === "rtl" ? "ArrowRight" : "ArrowLeft";
+          // A menu step, like the `@` menu's effort levels, takes Back before the caret moves.
+          if (
+            event.key === backArrow &&
+            readCallbacks().onCommandKeyDown?.(COMPOSER_MENU_BACK_KEY, event)
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            return true;
+          }
           const boundary = event.metaKey
             ? event.key === "ArrowLeft" || event.key === "ArrowRight"
               ? "lineboundary"
@@ -1845,6 +1924,30 @@ function ComposerPromptEditorTiptapInner(
       readSelectionRange: () => {
         readSnapshot();
         return selectionRangeRef.current;
+      },
+      replaceModelMention: (start, source, text, { removeFollowingSpace }) => {
+        if (!editor || editor.isDestroyed) return false;
+        const run = serializeEditorDoc(editor.state.doc).runs.find(
+          (candidate) =>
+            candidate.kind === "token" &&
+            candidate.nodeName === "composer-model" &&
+            candidate.mdStart + candidate.openLen === start,
+        );
+        const node = run ? editor.state.doc.nodeAt(run.pmPos) : null;
+        if (!run || node?.attrs.source !== source) return false;
+        const after = run.pmPos + node.nodeSize;
+        const { doc } = editor.state;
+        const end =
+          removeFollowingSpace &&
+          after < doc.content.size &&
+          doc.textBetween(after, after + 1) === " "
+            ? after + 1
+            : after;
+        const tr = editor.state.tr.replaceWith(run.pmPos, end, editor.schema.text(text));
+        tr.setSelection(TextSelection.create(tr.doc, run.pmPos + text.length));
+        editor.view.dispatch(tr.scrollIntoView());
+        editor.view.focus();
+        return true;
       },
       captureAttachmentInsertion: () =>
         editor ? captureComposerAttachmentInsertion(editor) : undefined,
