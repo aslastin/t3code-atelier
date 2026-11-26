@@ -7,6 +7,8 @@ export interface ComposerModelEffortEditRequest {
   readonly instanceId: string;
   readonly model: string;
   readonly effort: ComposerModelMentionEffort | null;
+  /** False once the chip changed or the caret left where the click put it. */
+  readonly isCurrent: () => boolean;
   readonly apply: (source: string, effort: ComposerModelMentionEffort | null) => boolean;
 }
 

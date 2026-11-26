@@ -80,8 +80,9 @@ export interface ComposerModelEffortStep {
       }
     | {
         readonly kind: "edit";
-        /** The caret the chip click placed; moving it ends the step. */
+        /** The caret the chip click placed; a render reads `isCurrent` only when this changes. */
         readonly cursor: number;
+        readonly isCurrent: () => boolean;
         readonly apply: (source: string, effort: ComposerModelMentionEffort | null) => boolean;
       };
 }

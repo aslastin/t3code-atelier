@@ -115,8 +115,11 @@ describe("collectComposerModelMentions", () => {
     ["agent:effort", "v1."],
     ["agent/effort", "agent:deep (max)"],
     ["agent effort?", "high"],
+    ["_deep_", "_max_"],
   ])("round-trips option %s with value %s as one reference", (optionId, value) => {
     const source = formatComposerModelMention("acp", "agent", { optionId, value });
+    // An edge `_` would read as emphasis in a sent message's Markdown.
+    expect(source).not.toMatch(/[?=]_|_(?:=|$)/u);
     expect(collectComposerModelMentions(`${source}. next`)).toEqual([
       expect.objectContaining({ source, model: "agent", effort: { optionId, value } }),
     ]);

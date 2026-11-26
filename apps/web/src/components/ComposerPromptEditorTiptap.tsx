@@ -386,19 +386,25 @@ function ComposerModelNodeView({ node, editor, getPos }: NodeViewProps) {
                     ? after + 1
                     : after;
                 editor.chain().focus().setTextSelection(spaced).run();
+                const chipAt = () => {
+                  const current = editor.state.doc.nodeAt(pos);
+                  return current?.type.name === "composer-model" && current.attrs.source === source
+                    ? current
+                    : null;
+                };
                 editModelEffort({
                   instanceId,
                   model,
                   effort: effort ?? null,
+                  // Undo, typing, or moving or extending the caret leaves the menu nothing to edit.
+                  isCurrent: () => {
+                    const { selection } = editor.state;
+                    return selection.empty && selection.from === spaced && chipAt() !== null;
+                  },
                   // Edits the chip in place, so a chip with no space after it stays a chip.
                   apply: (nextSource, nextEffort) => {
-                    const current = editor.state.doc.nodeAt(pos);
-                    if (
-                      current?.type.name !== "composer-model" ||
-                      current.attrs.source !== source
-                    ) {
-                      return false;
-                    }
+                    const current = chipAt();
+                    if (!current) return false;
                     editor.view.dispatch(
                       editor.state.tr.setNodeMarkup(pos, undefined, {
                         ...current.attrs,

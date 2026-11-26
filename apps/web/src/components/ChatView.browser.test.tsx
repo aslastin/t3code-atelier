@@ -1141,6 +1141,19 @@ it("an @ model mention takes the reasoning effort picked in the menu and changes
   await expect.element(effortButton("Extra High")).toBeVisible();
   expect(prompt()).toBe("Ask model:codex/gpt-5.5?reasoningEffort=xhigh ");
 
+  // Undo restores the chip under an open menu, which then has nothing left to edit.
+  await userEvent.click(effortButton("Extra High"));
+  await expect.element(efforts).toBeVisible();
+  await userEvent.keyboard("{ControlOrMeta>}z{/ControlOrMeta}");
+  await expect.element(effortButton("High")).toBeVisible();
+  await expect.element(efforts).not.toBeInTheDocument();
+  await userEvent.click(effortButton("High"));
+  await userEvent.keyboard("{ArrowDown}");
+  await expectHighlighted("Extra High");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(effortButton("Extra High")).toBeVisible();
+  expect(prompt()).toBe("Ask model:codex/gpt-5.5?reasoningEffort=xhigh ");
+
   // Escape on a new mention keeps the model with no effort; a model without levels goes in at once.
   await insertText("and @gpt-5.5");
   await expectHighlighted("GPT-5.5");
@@ -1155,6 +1168,13 @@ it("an @ model mention takes the reasoning effort picked in the menu and changes
       "Ask model:codex/gpt-5.5?reasoningEffort=xhigh and model:codex/gpt-5.5 or model:codex/gpt-5.4 ",
     ),
   );
+
+  // Extending a selection forward hands the arrows back to the editor.
+  await userEvent.click(effortButton("Extra High"));
+  await expect.element(efforts).toBeVisible();
+  await userEvent.keyboard("{Shift>}{ArrowRight}{/Shift}");
+  await expect.element(efforts).not.toBeInTheDocument();
+  await userEvent.keyboard("{End}");
 
   // A last chip whose space was deleted stays a chip when its level changes.
   await insertText("then @gpt-5.5");

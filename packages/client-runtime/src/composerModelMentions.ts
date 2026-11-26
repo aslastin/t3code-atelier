@@ -69,18 +69,18 @@ export function formatComposerModelMention(
     : mention;
 }
 
-// Also escapes what the parser reads as a reference's end or prose punctuation. An option id keeps
-// `.`, `:` and `/`, which agents use in ids like `agent:effort`, since `=` always follows it.
+// Also escapes what the parser reads as a reference's end or prose punctuation, and an edge `_`
+// that Markdown would read as emphasis in a sent message. An option id keeps `.`, `:` and `/`,
+// which agents use in ids like `agent:effort`, since `=` always follows it.
 function encodeMentionPart(part: string, keep = ""): string {
-  let encoded = encodeURIComponent(part).replace(
-    /[!'().*~]/gu,
-    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
-  for (const char of keep) {
-    encoded = encoded.replaceAll(`%${char.charCodeAt(0).toString(16).toUpperCase()}`, char);
-  }
+  let encoded = encodeURIComponent(part)
+    .replace(/[!'().*~]/gu, percentEncode)
+    .replace(/^_|_$/gu, percentEncode);
+  for (const char of keep) encoded = encoded.replaceAll(percentEncode(char), char);
   return encoded;
 }
+
+const percentEncode = (char: string) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`;
 
 // Pi names its reasoning select `thinking`; Claude's `thinking` is a boolean and never matches.
 const EFFORT_SELECT_IDS = [...REASONING_EFFORT_OPTION_IDS, "thinking"];

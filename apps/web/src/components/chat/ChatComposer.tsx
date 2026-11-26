@@ -336,6 +336,8 @@ export interface ChatComposerHandle {
   toggleModelPicker: () => void;
   openControl: (command: KeybindingCommand) => void;
   isModelPickerOpen: () => boolean;
+  /** Puts in the model whose levels the `@` menu shows, without an effort, before a send. */
+  commitPickedModelMention: () => void;
   isCaretAtStart: () => boolean;
   compactContext: () => void;
   readSnapshot: () => {
@@ -1219,8 +1221,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     ? `${composerSuggestionListId}:${composerTrigger.kind}:${composerTrigger.query.trim().toLowerCase()}`
     : null;
   const composerEditorValue = activePendingProgress ? activePendingProgress.customAnswer : prompt;
-  // A picked model's levels last while its `@` search is unedited; a chip's while the caret stays.
-  // The chip edit itself needs no text check: it rewrites its own node only if that node is intact.
+  // A picked model's levels last while its `@` search is unedited; a chip's while the chip is
+  // unchanged and the caret stays where the click put it.
   const activeModelEffortStep =
     modelEffortStep !== null &&
     !isLiteralPendingAnswer &&
@@ -1228,7 +1230,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     (modelEffortStep.target.kind === "insert"
       ? modelEffortStep.target.prompt === composerEditorValue &&
         modelEffortStep.target.modelSearchKey === triggerMenuSearchKey
-      : modelEffortStep.target.cursor === composerCursor)
+      : modelEffortStep.target.cursor === composerCursor && modelEffortStep.target.isCurrent())
       ? modelEffortStep
       : null;
   // A step left behind stays dropped, so typing back to its text does not reopen it.
@@ -2283,6 +2285,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
   const returnToModelListStable = useStableCallback(returnToModelList);
 
+  // Any send, in the form or not, names the picked model rather than its `@` search.
+  const commitPickedModelMention = () => {
+    if (activeModelEffortStep?.target.kind === "insert") {
+      applyModelEffort(activeModelEffortStep, null);
+    }
+  };
+  const commitPickedModelMentionStable = useStableCallback(commitPickedModelMention);
+
+  // Extending a selection moves no caret and renders nothing, so it would leave a chip's menu up.
+  const dropModelEffortEdit = () => {
+    if (modelEffortStep?.target.kind === "edit") setModelEffortStep(null);
+  };
+  const dropModelEffortEditStable = useStableCallback(dropModelEffortEdit);
+
   const editModelEffort = (request: ComposerModelEffortEditRequest) => {
     const entry = providerInstanceEntries.find(
       (candidate) => candidate.instanceId === request.instanceId,
@@ -2307,6 +2323,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       target: {
         kind: "edit",
         cursor: composerEditorRef.current?.readSnapshot().cursor ?? composerCursor,
+        isCurrent: request.isCurrent,
         apply: request.apply,
       },
     });
@@ -2374,10 +2391,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       event?.preventDefault();
       return false;
     }
-    // Sending while a picked model's levels show sends that model, not the `@` search.
-    if (activeModelEffortStep?.target.kind === "insert") {
-      applyModelEffort(activeModelEffortStep, null);
-    }
+    commitPickedModelMention();
     const modeCommand = promptRef.current.trim();
     if (
       planModesAvailable &&
@@ -3414,6 +3428,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       },
       compactContext: compactThreadContextStable,
       isModelPickerOpen: () => isComposerModelPickerOpen,
+      commitPickedModelMention: commitPickedModelMentionStable,
       isCaretAtStart: () => {
         const range = composerEditorRef.current?.readSelectionRange();
         return range !== undefined && range.start === 0 && range.end === 0;
@@ -3534,6 +3549,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activeThread,
       addComposerAttachments,
       addComposerFoldersStable,
+      commitPickedModelMentionStable,
       foldPastedText,
       composerDraftTarget,
       composerModelOptions,
@@ -4002,6 +4018,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     className={cn(showMobilePendingAnswerActions && "max-sm:pb-12")}
                     onChange={onPromptChangeStable}
                     onCommandKeyDown={onComposerCommandKeyStable}
+                    onVisibleSelectionChange={dropModelEffortEditStable}
                     onPageScrollKeyDown={onPageScrollKeyDown}
                     onPageScrollKeyUp={onPageScrollKeyUp}
                     onPageScrollRelease={onPageScrollRelease}
