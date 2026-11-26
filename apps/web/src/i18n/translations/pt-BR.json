@@ -4372,9 +4372,8 @@
   "405a3e88ee6e62b3": "Não é possível listar as alterações deste turno neste repositório.",
   "f6958f38dc87c712": "Criar fork a partir desta resposta",
   "72f8e14b1246d224": "Responder a esta resposta",
-  "33802dfa98c07ca7": [
-    "As alterações deste turno não podem ser exibidas:",
-    " ",
+  "a9cd2bb09991f9d4": [
+    "As alterações deste turno não podem ser exibidas: ",
     {
       "i": 1,
       "k": "_gt_value_1",
@@ -11537,6 +11536,7 @@
       "v": "v"
     }
   ],
+  "a5861af92b344936": "A cópia instalada é excluída, e seus repositórios deixam de ser detectados até você importar o plugin novamente. Desative-o em vez disso para mantê-lo instalado.",
   "8c87144bb1681580": "Importar uma pasta de plugin deste servidor",
   "e30b840393c5dc4c": "Importar",
   "954573ade31e4d7d": "Plugins adicionam um sistema de controle de versão que o T3 Code não inclui. Veja o guia de plugins para o formato do manifesto.",

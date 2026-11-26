@@ -4374,9 +4374,8 @@
   "405a3e88ee6e62b3": "This turn's changes in this repository cannot be listed.",
   "f6958f38dc87c712": "Fork from this response",
   "72f8e14b1246d224": "Reply to this response",
-  "33802dfa98c07ca7": [
-    "This turn's changes cannot be shown:",
-    " ",
+  "a9cd2bb09991f9d4": [
+    "This turn's changes cannot be shown: ",
     {
       "i": 1,
       "k": "_gt_value_1",
@@ -11547,6 +11546,7 @@
       "v": "v"
     }
   ],
+  "a5861af92b344936": "Its installed copy is deleted, and its repositories are no longer detected until you import the plugin again. Turn it off instead to keep it installed.",
   "8c87144bb1681580": "Import a plugin folder from this server",
   "e30b840393c5dc4c": "Import",
   "954573ade31e4d7d": "Plugins add a version control system T3 Code does not ship. See the plugin guide for the manifest format.",

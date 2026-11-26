@@ -4372,9 +4372,8 @@
   "405a3e88ee6e62b3": "No se pueden listar los cambios de este turno en este repositorio.",
   "f6958f38dc87c712": "Bifurcar desde esta respuesta",
   "72f8e14b1246d224": "Responder a esta respuesta",
-  "33802dfa98c07ca7": [
-    "Los cambios de este turno no se pueden mostrar:",
-    " ",
+  "a9cd2bb09991f9d4": [
+    "Los cambios de este turno no se pueden mostrar: ",
     {
       "i": 1,
       "k": "_gt_value_1",
@@ -11532,6 +11531,7 @@
       "v": "v"
     }
   ],
+  "a5861af92b344936": "Se elimina su copia instalada y sus repositorios dejan de detectarse hasta que vuelvas a importar el plugin. Desactívalo en su lugar para mantenerlo instalado.",
   "8c87144bb1681580": "Importar una carpeta de plugin de este servidor",
   "e30b840393c5dc4c": "Importar",
   "954573ade31e4d7d": "Los plugins añaden un sistema de control de versiones que T3 Code no incluye. Consulta la guía de plugins para el formato del manifiesto.",

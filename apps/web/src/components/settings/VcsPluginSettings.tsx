@@ -6,6 +6,15 @@ import { T, useGT, useMessages, Var } from "gt-react";
 
 import { cn } from "../../lib/utils";
 import { useEnvironmentQuery } from "../../state/query";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { pluginEnvironment } from "../../state/plugins";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Badge } from "../ui/badge";
@@ -83,6 +92,7 @@ function PluginRow({
   });
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
 
   const run = async (call: () => ReturnType<typeof recheck>) => {
     setBusy(true);
@@ -174,12 +184,43 @@ function PluginRow({
             size="xs"
             variant="ghost-destructive"
             disabled={!canManage || busy}
-            onClick={() => void run(() => remove({ environmentId, input }))}
+            onClick={() => setConfirmingRemove(true)}
           >
             <T>Remove</T>
           </Button>
         </div>
       </div>
+      <AlertDialog open={confirmingRemove} onOpenChange={setConfirmingRemove}>
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              <T>
+                Remove <Var>{plugin.label}</Var>?
+              </T>
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              <T>
+                Its installed copy is deleted, and its repositories are no longer detected until you
+                import the plugin again. Turn it off instead to keep it installed.
+              </T>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" />}>
+              <T>Cancel</T>
+            </AlertDialogClose>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setConfirmingRemove(false);
+                void run(() => remove({ environmentId, input }));
+              }}
+            >
+              <T>Remove</T>
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
     </div>
   );
 }
