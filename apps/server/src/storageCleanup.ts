@@ -657,6 +657,13 @@ const make = Effect.gen(function* () {
       inspectRepositories: boolean | "plain-folder" | "plugin" = false,
     ) {
       const root = yield* fs.realPath(worktreePath);
+      // A plugin checkout mounted of its own is a virtual checkout of the whole repository:
+      // walking it reads all of it through the mount. Its plugin's status decides alone, and
+      // an orphan's size stays unknown.
+      if (inspectRepositories === "plugin" || inspectRepositories === false) {
+        const [own, parent] = yield* Effect.all([fs.stat(root), fs.stat(path.dirname(root))]);
+        if (own.dev !== parent.dev) return { bytes: null, reason: null };
+      }
       const skipped = yield* sharedPnpmVirtualStore(root);
       const incomplete = { bytes: null, reason: "worktree could not be fully inspected" };
       // A plain folder is not a checkout, so a repository at its root counts like one below it.

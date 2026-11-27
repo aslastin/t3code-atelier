@@ -346,6 +346,8 @@ const cleanupFixture = (
     readonly outside?: boolean;
     /** The project's driver also lists Git's worktree, as for a Git project. */
     readonly listsGitWorktree?: boolean;
+    /** The checkout is a file system mounted of its own, as a virtual checkout is. */
+    readonly mounted?: boolean;
   },
 ) =>
   Effect.gen(function* () {
@@ -406,6 +408,24 @@ const cleanupFixture = (
     let events: Stream.Stream<OrchestrationV2DomainEvent> = Stream.empty;
     const activated = yield* Deferred.make<void>();
     const context = yield* Layer.build(StorageCleanup.layer).pipe(
+      Effect.provideService(
+        FileSystem.FileSystem,
+        plugin?.mounted
+          ? FileSystem.FileSystem.of({
+              ...fs,
+              stat: (target) =>
+                fs
+                  .stat(target)
+                  .pipe(
+                    Effect.map((info) =>
+                      target === pluginWorktree || target.startsWith(`${pluginWorktree}/`)
+                        ? { ...info, dev: info.dev + 1n }
+                        : info,
+                    ),
+                  ),
+            })
+          : fs,
+      ),
       Effect.provideService(GitVcsDriver.GitVcsDriver, {
         ...git,
         execute: (input) =>
@@ -2519,6 +2539,26 @@ describe("VCS plugin worktrees", () => {
       );
       expect(entry?.outcome).toBe("kept");
       expect(yield* fixture.fs.exists(`${inner}/work.txt`)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("removes a VCS plugin checkout mounted of its own without walking it", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, {
+        recreates: true,
+        mounted: true,
+      });
+      // A virtual checkout holds the whole repository: walking it would read all of it, so its
+      // plugin's status alone decides. A repository nested inside goes unseen.
+      yield* fixture.fs.makeDirectory(`${fixture.pluginWorktree}/inner/.git`, { recursive: true });
+      const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry?.outcome).toBe("removed");
     }).pipe(Effect.provide(cleanupTestLayer)),
   );
 

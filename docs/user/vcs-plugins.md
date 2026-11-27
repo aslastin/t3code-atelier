@@ -159,6 +159,9 @@ worktree stays when:
 - `status` reports an `aheadCount` above 0. If your VCS keeps a worktree's branch inside the
   worktree, report unpushed commits there, counted from the branch's base when it has no
   upstream, or they are lost with the worktree.
+- It holds a repository of its own below its root. A checkout that is a file system mounted of
+  its own, as a virtual checkout of a whole monorepo is, is not walked for these: only `status`
+  decides there.
 - Its thread is still live and the plugin cannot bring it back. A thread's next turn checks its
   branch out again with `worktreeAttach`, so the repository's `refList` must still list that
   branch. Without both commands, cleanup removes only a deleted thread's worktree.
