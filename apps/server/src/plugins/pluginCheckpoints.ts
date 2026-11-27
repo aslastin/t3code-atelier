@@ -468,11 +468,23 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       const files: ChangedFile[] = [];
       for (const file of changes.files) {
         const absolute = path.join(location.root, file.path);
-        // A symbolic link counts even when its target is gone.
+        // A symbolic link counts even when its target is gone. Only a path known to be absent is
+        // a deletion: one that cannot be looked at fails the capture.
+        const absent = () => Effect.succeed(false);
         const present =
           file.status !== "deleted" &&
-          ((yield* fs.exists(absolute).pipe(Effect.orElseSucceed(() => false))) ||
-            Option.isSome(yield* fs.readLink(absolute).pipe(Effect.option)));
+          (yield* fs.readLink(absolute).pipe(
+            Effect.as(true),
+            Effect.catchReason("PlatformError", "NotFound", absent),
+            Effect.catch(() =>
+              fs
+                .stat(absolute)
+                .pipe(Effect.as(true), Effect.catchReason("PlatformError", "NotFound", absent)),
+            ),
+            Effect.mapError(() =>
+              unsupported("captureCheckpoint", `${file.path} could not be looked at.`),
+            ),
+          ));
         files.push(present || file.status === "deleted" ? file : { ...file, status: "deleted" });
       }
       yield* ensureShadow(location);
@@ -1033,6 +1045,8 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     folder: string,
   ) {
     const absolute = path.join(location.root, folder);
+    // A link to a folder is the entry itself, never the folder it leads to.
+    if (Option.isSome(yield* fs.readLink(absolute).pipe(Effect.option))) return [folder];
     const info = yield* fs.stat(absolute).pipe(Effect.orElseSucceed(() => null));
     if (info === null) return [];
     if (info.type !== "Directory") return [folder];

@@ -90,6 +90,18 @@ it.live("puts back a plugin an interrupted reimport had set aside", () =>
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
+it.live("puts back a set-aside plugin whose manifest no longer reads", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-plugins-home-" });
+    const aside = `${home}/plugins/.previous-kite.0f8fad5b-d9cb-469f-a165-70867728950e`;
+    writeFakeVcsPlugin(aside);
+    NodeFS.writeFileSync(`${aside}/plugin.json`, "{");
+    yield* buildPlugins(home);
+    assert.isTrue(NodeFS.existsSync(`${home}/plugins/kite/bin/kite.mjs`));
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
 it.live("refuses an import whose check grows the copy past the limits", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -203,7 +215,11 @@ describe("PluginService", () => {
       const cut = writeFakeVcsPlugin(NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-cut-icon-`), {
         id: "cut",
       });
-      for (const svg of ["<svg><path", '<svg><svg><circle r="3"/></svg>']) {
+      for (const svg of [
+        "<svg><path",
+        '<svg><svg><circle r="3"/></svg>',
+        '<svg xmlns="http://www.w3.org/2000/svg"><g></svg>',
+      ]) {
         NodeFS.writeFileSync(`${cut}/icon.svg`, svg);
         const cutIcon = yield* plugins.importFolder(cut).pipe(Effect.flip);
         assert.include(cutIcon.message, "icon: icon.svg", svg);
@@ -348,6 +364,20 @@ describe("ManifestVcsDriver", () => {
       assert.include(dirty.message, "uncommitted changes");
       assert.isTrue(NodeFS.existsSync(`${worktree.path}/a.txt`));
       NodeFS.writeFileSync(`${worktree.path}/a.txt`, original);
+
+      // A folder put where a listed checkout was is not removed, even forced.
+      NodeFS.renameSync(worktree.path, `${worktree.path}-moved`);
+      NodeFS.mkdirSync(worktree.path);
+      NodeFS.writeFileSync(`${worktree.path}/mine.txt`, "mine\n");
+      const replaced = yield* workflow.removeWorktree!({
+        cwd: `${repository}/sub`,
+        path: worktree.path,
+        force: true,
+      }).pipe(Effect.flip);
+      assert.include(replaced.message, "is not a Kite checkout");
+      assert.isTrue(NodeFS.existsSync(`${worktree.path}/mine.txt`));
+      NodeFS.rmSync(worktree.path, { recursive: true });
+      NodeFS.renameSync(`${worktree.path}-moved`, worktree.path);
 
       // Callers pass the thread's folder, the subfolder; the whole checkout goes, as with Git.
       yield* workflow.removeWorktree!({ cwd: `${repository}/sub`, path: worktree.projectPath! });
@@ -698,6 +728,17 @@ describe("ManifestVcsDriver", () => {
         yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("1") }),
       );
       assert.strictEqual(NodeFS.readlinkSync(`${repository}/alias`), "sub/b.txt");
+
+      // A new link to a folder is one entry: the folder it leads to is never looked into.
+      const linkedFolder = NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-kite-linked-`);
+      NodeFS.writeFileSync(`${linkedFolder}/file.txt`, "theirs\n");
+      NodeFS.symlinkSync(linkedFolder, `${repository}/shortcut`);
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("2") });
+      assert.isTrue(
+        yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("2") }),
+      );
+      assert.isTrue(NodeFS.existsSync(`${linkedFolder}/file.txt`));
+      NodeFS.rmSync(`${repository}/shortcut`);
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 

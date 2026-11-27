@@ -474,6 +474,10 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
           inside(realTarget, realCwd)
         )
           return yield* refuse("The repository itself is not a worktree.");
+        // A folder still there must be the plugin's checkout, forced or not: a stale entry can
+        // name a folder put in its place since.
+        if (marked === null && (yield* fs.exists(target).pipe(Effect.orElseSucceed(() => true))))
+          return yield* refuse(`${target} is not a ${manifest.label} checkout.`);
         if (runner.has("worktreeList")) {
           const listed = yield* listWorktreePaths(request.cwd);
           let isListed = false;

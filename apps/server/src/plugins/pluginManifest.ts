@@ -236,18 +236,27 @@ export const checkPluginFiles = Effect.fn("pluginManifest.checkPluginFiles")(fun
   return errors;
 });
 
-// A whole SVG document, so a cut-off file is refused rather than drawn as nothing: each `<svg>`
-// opened is closed, and only comments or whitespace follow the outermost one.
+// A whole SVG document, so a cut-off file is refused rather than drawn as nothing: one `<svg>`
+// root, every element closed in order, and only comments or whitespace around it.
 const isWholeSvg = (text: string) => {
-  const body = text.replace(/<!--[\s\S]*?-->/g, "").trim();
-  if (!/<svg[\s>]/i.test(body) || !/<\/svg\s*>$/i.test(body)) return false;
-  let depth = 0;
-  for (const tag of body.matchAll(/<(\/?)svg\b[^>]*?(\/?)>/gi)) {
-    if (tag[1] === "/") depth -= 1;
-    else if (tag[2] !== "/") depth += 1;
-    if (depth < 0) return false;
+  const body = text
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "")
+    .replace(/<\?[\s\S]*?\?>/g, "")
+    .replace(/<!DOCTYPE[^>]*>/i, "")
+    .trim();
+  if (!/^<svg[\s>/]/i.test(body) || !/<\/svg\s*>$/i.test(body)) return false;
+  const open: string[] = [];
+  let closedRoot = false;
+  for (const tag of body.matchAll(/<(\/?)([A-Za-z_][\w:.-]*)(?:"[^"]*"|'[^']*'|[^'">])*?(\/?)>/g)) {
+    if (closedRoot) return false;
+    const name = tag[2]!;
+    if (tag[1] === "/") {
+      if (open.pop() !== name) return false;
+    } else if (tag[3] !== "/") open.push(name);
+    if (open.length === 0) closedRoot = true;
   }
-  return depth === 0;
+  return closedRoot && open.length === 0;
 };
 
 /** The icon's SVG text, or null when it is missing, too large, or outside the folder. */

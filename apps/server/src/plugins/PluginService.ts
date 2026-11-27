@@ -313,7 +313,8 @@ const make = Effect.gen(function* () {
     const leftover = path.join(directory, name);
     if (name.startsWith(".previous-")) {
       const aside = yield* readManifest(fs, path, leftover);
-      const id = aside.manifest?.id;
+      // The name carries the folder too, for a copy whose manifest no longer reads.
+      const id = aside.manifest?.id ?? /^\.previous-(.+)\.[0-9a-f-]{36}$/.exec(name)?.[1];
       if (
         id !== undefined &&
         !(yield* fs.exists(path.join(directory, id)).pipe(Effect.orElseSucceed(() => true)))
@@ -467,7 +468,7 @@ const make = Effect.gen(function* () {
           return yield* failure(operation, afterCheck.manifestErrors.join(" "), id);
         }
         const target = path.join(directory, id);
-        const previous = path.join(directory, `.previous-${NodeCrypto.randomUUID()}`);
+        const previous = path.join(directory, `.previous-${id}.${NodeCrypto.randomUUID()}`);
         const hadPrevious = yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false));
         yield* Effect.gen(function* () {
           if (hadPrevious) yield* fs.rename(target, previous);
