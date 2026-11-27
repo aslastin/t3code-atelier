@@ -2,6 +2,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
+import type { PlatformError } from "effect/PlatformError";
 import * as Semaphore from "effect/Semaphore";
 
 const leases = new Map<string, { semaphore: Semaphore.Semaphore; users: number }>();
@@ -30,7 +31,7 @@ export const withWorkspaceLease = <A, E, R>(
 // restores call Git work that leases the project root.
 interface Reservation {
   readonly cwd: string;
-  readonly kind: "restore" | "turn-start";
+  readonly kind: "exclusive" | "shared";
 }
 
 const reservations = new Set<Reservation>();
@@ -47,7 +48,7 @@ const contains = (path: Path.Path, parent: string, child: string) => {
 };
 
 const conflicts = (path: Path.Path, a: Reservation, b: Reservation) =>
-  (a.kind === "restore" || b.kind === "restore") &&
+  (a.kind === "exclusive" || b.kind === "exclusive") &&
   (contains(path, a.cwd, b.cwd) || contains(path, b.cwd, a.cwd));
 
 const reserve = (path: Path.Path, reservation: Reservation): Effect.Effect<void> =>
@@ -72,21 +73,20 @@ const release = (reservation: Reservation) =>
 // A worktree removed by storage cleanup is recreated inside the reserved
 // section, so resolve its nearest existing ancestor: a symlink alias above it
 // must still canonicalize the same on both sides. Walks at most the path depth.
-const canonicalize = (
+export const resolveWorkspaceLocation = (
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
   target: string,
-): Effect.Effect<string> =>
+): Effect.Effect<string, PlatformError> =>
   fileSystem.realPath(target).pipe(
     Effect.catchReason("PlatformError", "NotFound", () => {
       const parent = path.dirname(target);
       return parent === target
         ? Effect.succeed(target)
-        : canonicalize(fileSystem, path, parent).pipe(
+        : resolveWorkspaceLocation(fileSystem, path, parent).pipe(
             Effect.map((resolved) => path.join(resolved, path.basename(target))),
           );
     }),
-    Effect.orElseSucceed(() => target),
   );
 
 const withReservation =
@@ -97,7 +97,8 @@ const withReservation =
     cwd: string,
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<A, E, R> =>
-    canonicalize(fileSystem, path, cwd).pipe(
+    resolveWorkspaceLocation(fileSystem, path, cwd).pipe(
+      Effect.orElseSucceed(() => cwd),
       Effect.flatMap((canonical) => {
         const reservation: Reservation = { cwd: canonical, kind };
         return reserve(path, reservation).pipe(
@@ -107,8 +108,8 @@ const withReservation =
       }),
     );
 
-/** Exclusive over every overlapping workspace while checkpoint files are restored. */
-export const withCheckpointRestoreReservation = withReservation("restore");
+/** Used while restoring or removing files in a workspace. */
+export const withExclusiveWorkspaceReservation = withReservation("exclusive");
 
-/** Waits out overlapping restores; turn startups never wait on each other. */
-export const withTurnStartReservation = withReservation("turn-start");
+/** Protects thread binding and turn startup from changes to any overlapping workspace. */
+export const withSharedWorkspaceReservation = withReservation("shared");

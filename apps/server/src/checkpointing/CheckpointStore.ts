@@ -1,4 +1,4 @@
-import { type CheckpointRef } from "@t3tools/contracts";
+import { GIT_VCS_KIND, type CheckpointRef } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -120,8 +120,8 @@ export const make = Effect.gen(function* () {
   const isGitRepository: CheckpointStore["Service"]["isGitRepository"] = Effect.fn(
     "CheckpointStore.isGitRepository",
   )(function* (cwd) {
-    if ((yield* vcsRegistry.detect({ cwd, requestedKind: "git" })) !== null) return true;
-    const git = yield* vcsRegistry.get("git");
+    if ((yield* vcsRegistry.detect({ cwd, requestedKind: GIT_VCS_KIND })) !== null) return true;
+    const git = yield* vcsRegistry.get(GIT_VCS_KIND);
     return (yield* git.detectRepository(cwd)) !== null;
   });
 

@@ -86,8 +86,13 @@ vi.mock("../state/use-atom-command", () => ({
     },
 }));
 vi.mock("../state/use-atom-query-runner", () => ({
-  useAtomQueryRunner: (family: unknown) => async (environmentId: string) =>
-    family === "threadFamily"
+  useAtomQueryRunner: (family: unknown) => async (environmentId: string) => {
+    if (family === "worktreeThreadIds")
+      return AsyncResult.success({
+        threadIds: [target.threadId],
+        worktreeRoot: "/worktrees/thread",
+      });
+    return family === "threadFamily"
       ? state.familyLookupFails
         ? AsyncResult.failure(Cause.fail(new Error("Family lookup failed")))
         : AsyncResult.success({ threads: state.familyThreads })
@@ -97,10 +102,14 @@ vi.mock("../state/use-atom-query-runner", () => ({
             authenticated: true,
             scopes: [...(state.scopes.get(environmentId) ?? [])],
             auth: { serverUpdateScope: "environment:maintain" },
-          }),
+          });
+  },
 }));
 vi.mock("../state/orchestration", () => ({
-  orchestrationEnvironment: { threadFamily: "threadFamily" },
+  orchestrationEnvironment: {
+    threadFamily: "threadFamily",
+    worktreeThreadIds: "worktreeThreadIds",
+  },
 }));
 vi.mock("../state/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/server")>();
@@ -483,13 +492,19 @@ describe("thread action permissions", () => {
       .get(secondary)!
       .add(AuthOrchestrationOperateScope)
       .add(AuthSourceControlWriteScope);
-    state.threads[0]!.worktreePath = "/worktrees/thread";
+    state.threads[0]!.worktreePath = "/worktrees/thread/my-project";
+    state.serverConfig.shellThreadFamilies = true;
     state.afterRequest = () => state.scopes.get(secondary)!.delete(AuthSourceControlWriteScope);
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const result = await useThreadActions().deleteThread(target);
       expect(result._tag).toBe("Success");
       expect(state.requests.map((request) => request.action)).toEqual(["stopSession", "delete"]);
+      expect(
+        state.confirm.mock.calls.some(([message]) =>
+          message.split("\n").includes("/worktrees/thread"),
+        ),
+      ).toBe(true);
       expect(state.toasts).toContain("Failed to delete worktree");
       expect(state.localEffects).toContain("clear-terminal-ui");
     } finally {

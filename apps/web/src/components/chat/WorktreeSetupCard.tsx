@@ -1,3 +1,8 @@
+import { useAtomValue } from "@effect/atom-react";
+import type { EnvironmentId, WorktreeFolderChoice } from "@t3tools/contracts";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { vcsEnvironment } from "../../state/vcs";
+import { WorktreeBaseBranchPicker } from "../WorktreeBaseBranchPicker";
 import { T, msg, useGT, useMessages } from "gt-react";
 import { type MessageResolver } from "~/i18n/messages";
 import { type WorktreeSetupSnapshot, type WorktreeSetupStage } from "@t3tools/contracts";
@@ -324,14 +329,84 @@ function CollapsedSummaryRow({ snapshot }: { snapshot: WorktreeSetupSnapshot }) 
   );
 }
 
+function MissingProjectFolder({
+  snapshot,
+  environmentId,
+  onCancel,
+}: {
+  snapshot: WorktreeSetupSnapshot;
+  environmentId: EnvironmentId;
+  onCancel: (() => void) | null;
+}) {
+  const gt = useGT();
+  const mayChoose = useAtomValue(vcsEnvironment.chooseWorktreeFolder.permissionAtom(environmentId));
+  const choose = useAtomCommand(vcsEnvironment.chooseWorktreeFolder);
+  const [busy, setBusy] = useState(false);
+  const request = snapshot.folderChoice;
+  if (!request || !snapshot.worktreePath) return null;
+  const respond = async (choice: WorktreeFolderChoice) => {
+    setBusy(true);
+    await choose({
+      environmentId,
+      input: { threadId: snapshot.threadId, requestId: request.requestId, choice },
+    }).finally(() => setBusy(false));
+  };
+  return (
+    <div className="my-2 ml-6 space-y-2 rounded-lg border border-warning/35 bg-warning-surface px-3 py-3">
+      <p className="flex items-center gap-2 text-sm font-medium">
+        <CircleAlertIcon aria-hidden className="size-4 text-warning-foreground" />
+        <T>Project folder missing</T>
+      </p>
+      <p className="text-sm">
+        {gt(
+          "This checkout of {branch} does not contain {folder}. Choose another base branch, or run the setup script and agent from the worktree root.",
+          { branch: snapshot.baseRef ?? "HEAD", folder: request.relativePath },
+        )}
+      </p>
+      <p className="text-xs text-muted-foreground">
+        <T>Worktree root</T> <code className="select-text break-all">{snapshot.worktreePath}</code>
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <div>
+          <WorktreeBaseBranchPicker
+            environmentId={environmentId}
+            cwd={snapshot.worktreePath}
+            value={snapshot.baseRef ?? ""}
+            startFromOrigin={false}
+            excludedRefs={[snapshot.baseRef, snapshot.branch]}
+            triggerLabel={gt("Choose another branch")}
+            disabled={!mayChoose || busy}
+            onValueChange={(baseRef) => void respond({ type: "branch", baseRef })}
+          />
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!mayChoose || busy}
+          onClick={() => void respond({ type: "root" })}
+        >
+          <T>Use worktree root</T>
+        </Button>
+        {onCancel && (
+          <Button size="sm" variant="ghost-muted" disabled={busy} onClick={onCancel}>
+            <T>Cancel</T>
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function WorktreeSetupCard({
   snapshot,
   onCancel,
   onWorkLocally,
   onOpenTerminal,
   embedded = false,
+  environmentId,
 }: WorktreeSetupCardProps & {
   embedded?: boolean;
+  environmentId?: EnvironmentId;
 }) {
   const gt = useGT();
   const running = snapshot.phase === "running";
@@ -360,6 +435,14 @@ export function WorktreeSetupCard({
                 setupEndedAt={snapshot.endedAt}
                 scriptName={snapshot.setupScript?.name ?? null}
               />
+              {stage.id === "checkout" && snapshot.folderChoice && environmentId ? (
+                <MissingProjectFolder
+                  key={snapshot.folderChoice.requestId}
+                  snapshot={snapshot}
+                  environmentId={environmentId}
+                  onCancel={onCancel}
+                />
+              ) : null}
               {stage.id === "setup-script" && showTail ? (
                 <OutputTail lines={stage.tail} failed={stage.status === "failed"} />
               ) : null}
@@ -389,13 +472,13 @@ export function WorktreeSetupCard({
             <T>Open terminal</T>
           </Button>
         ) : null}
-        {onWorkLocally ? (
+        {onWorkLocally && !snapshot.folderChoice ? (
           <Button type="button" size="xs" variant="ghost-muted" onClick={onWorkLocally}>
             <LaptopIcon aria-hidden />
             <T>Work locally</T>
           </Button>
         ) : null}
-        {onCancel && running ? (
+        {onCancel && running && !snapshot.folderChoice ? (
           <Button type="button" size="xs" variant="ghost-muted" onClick={onCancel}>
             <XIcon aria-hidden />
             <T>Cancel</T>

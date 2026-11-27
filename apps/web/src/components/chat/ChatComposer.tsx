@@ -53,7 +53,6 @@ import {
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import * as Schema from "effect/Schema";
-import { formatComposerModelMention } from "@t3tools/client-runtime/composer-model-mentions";
 import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
@@ -210,8 +209,11 @@ import { threadContextAttachment } from "~/lib/threadContextAttachment";
 import {
   type ComposerCommandItem,
   ComposerCommandMenu,
+  ComposerModelEffortHeader,
   composerSuggestionOptionId,
 } from "./ComposerCommandMenu";
+import { useComposerModelEffortStep } from "./useComposerModelEffortStep";
+import type { ComposerModelEffortEditRequest } from "../composerContextActions";
 import {
   ComposerAttachButton,
   ComposerAttachmentFileList,
@@ -325,6 +327,8 @@ export interface ChatComposerHandle {
   openControl: (command: KeybindingCommand) => void;
   isModelPickerOpen: () => boolean;
   isCaretAtStart: () => boolean;
+  /** Opens the URL field for the selected text. False when the editor cannot link it. */
+  insertLink: () => boolean;
   compactContext: () => void;
   readSnapshot: () => {
     value: string;
@@ -767,6 +771,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     openPullRequest: (event: React.MouseEvent<HTMLElement>, url: string) => {
       openPrLink(event, url);
     },
+    // Declared with the effort menu below; chips call it only after render.
+    editModelEffort: (request: ComposerModelEffortEditRequest) => modelEffort.edit(request),
   };
   const composerContextRecords = composerContextRecordsFromDraft({
     terminalContexts: composerTerminalContexts,
@@ -1174,7 +1180,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerReviewComments.length === 0;
   const linkedEnvironments = useLinkedEnvironments(environmentId);
   const {
-    items: composerMenuItems,
+    items: triggerMenuItems,
     isLoading: isComposerMenuLoading,
     emptyState: composerMenuEmptyState,
   } = useComposerMenuItems({
@@ -1200,10 +1206,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     modelMentions: { instanceEntries: providerInstanceEntries, modelOptionsByInstance },
   });
 
-  const composerMenuOpen = Boolean(composerTrigger);
-  const composerMenuSearchKey = composerTrigger
+  const triggerMenuSearchKey = composerTrigger
     ? `${composerSuggestionListId}:${composerTrigger.kind}:${composerTrigger.query.trim().toLowerCase()}`
     : null;
+  const composerEditorValue = activePendingProgress ? activePendingProgress.customAnswer : prompt;
+  const modelEffort = useComposerModelEffortStep({
+    draftKey: composerDraftTargetKey,
+    editorValue: composerEditorValue,
+    cursor: composerCursor,
+    literal: isLiteralPendingAnswer,
+    locked: activePendingIsResponding,
+    listId: composerSuggestionListId,
+    promptRef,
+    editorRef: composerEditorRef,
+    providerInstanceEntries,
+    modelOptionsByInstance,
+    setHighlightedItemId: setComposerHighlightedItemId,
+    setHighlightedSearchKey: setComposerHighlightedSearchKey,
+  });
+  const composerMenuItems = modelEffort.items ?? triggerMenuItems;
+  const composerMenuOpen = Boolean(composerTrigger) || modelEffort.active !== null;
+  const composerMenuSearchKey = modelEffort.searchKey ?? triggerMenuSearchKey;
   const activeComposerMenuItemId = resolveComposerMenuActiveItemId({
     items: composerMenuItems,
     highlightedItemId: composerHighlightedItemId,
@@ -1986,6 +2009,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     };
   };
 
+  // Built in handlers: the replacement reads refs, which a render must not.
+  const modelEffortActions = () => modelEffort.withPrompt(applyPromptReplacement);
+
   const { onUsageLimitsCommand } = props;
   const onSelectComposerItem = (item: ComposerCommandItem) => {
     if (composerSelectLockRef.current) return;
@@ -1993,6 +2019,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     window.requestAnimationFrame(() => {
       composerSelectLockRef.current = false;
     });
+    if (item.type === "model-effort") {
+      modelEffortActions().choose(item.value);
+      return;
+    }
     const { snapshot, trigger } = resolveActiveComposerTrigger();
     if (!trigger) return;
     if (item.type === "path") {
@@ -2143,18 +2173,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     if (item.type === "model") {
       if (trigger.kind !== "path") return;
-      const replacement = `${formatComposerModelMention(item.instanceId, item.model)} `;
-      const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-        snapshot.value,
-        trigger.rangeEnd,
-        replacement,
-      );
-      const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
-        expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
-      });
-      if (applied) {
-        setComposerHighlightedItemId(null);
-      }
+      modelEffortActions().pick(item, trigger, snapshot.value, triggerMenuSearchKey);
       return;
     }
     if (item.type === "environment") {
@@ -2179,6 +2198,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
   };
   const onSelectComposerItemStable = useStableCallback(onSelectComposerItem);
+
+  const returnToModelListStable = useStableCallback(() => modelEffortActions().back());
+  const dropModelEffortStepStable = useStableCallback(modelEffort.dropOnSelection);
 
   const onComposerMenuItemHighlighted = (itemId: string | null) => {
     setComposerHighlightedItemId(itemId);
@@ -2475,6 +2497,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       submitComposer,
       promptSuggestion: offeredPromptSuggestion,
       dismissPromptSuggestion,
+      modelEffortStep: modelEffort.active && {
+        canGoBack: modelEffort.active.target.kind === "insert",
+      },
+      returnToModelList: () => modelEffortActions().back(),
+      dismissModelEffortStep: modelEffort.dismiss,
     })(key, event, isTaskItem);
 
   const {
@@ -3271,6 +3298,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       },
       compactContext: compactThreadContextStable,
       isModelPickerOpen: () => isComposerModelPickerOpen,
+      insertLink: () => composerEditorRef.current?.openLinkEditor() ?? false,
       isCaretAtStart: () => {
         const range = composerEditorRef.current?.readSelectionRange();
         return range !== undefined && range.start === 0 && range.end === 0;
@@ -3779,6 +3807,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     resolvedTheme={resolvedTheme}
                     isLoading={isComposerMenuLoading}
                     triggerKind={composerTriggerKind}
+                    header={
+                      modelEffort.active
+                        ? {
+                            label: gt("Reasoning effort for {model}", {
+                              model: modelEffort.active.model.label,
+                            }),
+                            node: (
+                              <ComposerModelEffortHeader
+                                model={modelEffort.active.model}
+                                onBack={
+                                  modelEffort.active.target.kind === "insert"
+                                    ? returnToModelListStable
+                                    : undefined
+                                }
+                              />
+                            ),
+                          }
+                        : undefined
+                    }
                     emptyStateText={composerMenuEmptyState}
                     activeItemId={activeComposerMenuItem?.id ?? null}
                     onHighlightedItemChange={onComposerMenuItemHighlightedStable}
@@ -3840,6 +3887,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     className={cn(showMobilePendingAnswerActions && "max-sm:pb-12")}
                     onChange={onPromptChangeStable}
                     onCommandKeyDown={onComposerCommandKeyStable}
+                    onVisibleSelectionChange={dropModelEffortStepStable}
                     onPageScrollKeyDown={onPageScrollKeyDown}
                     onPageScrollKeyUp={onPageScrollKeyUp}
                     onPageScrollRelease={onPageScrollRelease}

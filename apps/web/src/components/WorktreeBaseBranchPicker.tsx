@@ -20,6 +20,8 @@ export function WorktreeBaseBranchPicker({
   startFromOrigin,
   onStartFromOriginChange,
   disabled = false,
+  triggerLabel,
+  excludedRefs,
   id,
 }: {
   environmentId: EnvironmentId;
@@ -27,7 +29,9 @@ export function WorktreeBaseBranchPicker({
   value: string;
   onValueChange: (branch: string) => void;
   startFromOrigin: boolean;
-  onStartFromOriginChange: (checked: boolean) => void;
+  onStartFromOriginChange?: (checked: boolean) => void;
+  triggerLabel?: string;
+  excludedRefs?: readonly (string | null)[];
   disabled?: boolean;
   id?: string;
 }) {
@@ -64,7 +68,11 @@ export function WorktreeBaseBranchPicker({
     },
     messages,
   );
-  const branchByName = new Map(branches.refs.map((branch) => [branch.name, branch]));
+  const branchByName = new Map(
+    branches.refs
+      .filter((branch) => !excludedRefs?.includes(branch.name))
+      .map((branch) => [branch.name, branch]),
+  );
   const items = [...branchByName.keys()];
   const hasNextPage = branches.data?.nextCursor != null;
   const statusText =
@@ -103,7 +111,11 @@ export function WorktreeBaseBranchPicker({
       isFetchingNextPage={branches.isFetchingNextPage}
       onLoadNext={branches.loadNext}
       statusText={statusText}
-      originControl={{ checked: startFromOrigin, onCheckedChange: onStartFromOriginChange }}
+      originControl={
+        onStartFromOriginChange
+          ? { checked: startFromOrigin, onCheckedChange: onStartFromOriginChange }
+          : undefined
+      }
       popupProps={{ align: "start", side: "bottom", className: "flex w-80 flex-col" }}
       renderItem={(name, index) => {
         const branch = branchByName.get(name);
@@ -123,11 +135,11 @@ export function WorktreeBaseBranchPicker({
       <ComboboxTrigger
         id={id}
         disabled={disabled || !cwd}
-        render={<Button variant="outline" size="sm" />}
+        render={<Button variant={triggerLabel ? "default" : "outline"} size="sm" />}
         className="w-full justify-between "
       >
         <GitBranchIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        <MiddleTruncate value={label} className="flex-1 text-left" />
+        <MiddleTruncate value={triggerLabel ?? label} className="flex-1 text-left" />
         <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
       </ComboboxTrigger>
     </BranchPicker>

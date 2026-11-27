@@ -120,7 +120,9 @@ const layerDiscovery = (
   ).pipe(
     Layer.provideMerge(TestSourceControlHost.layer({ process: { run: runProcess } })),
     Layer.provideMerge(ServerSettings.ServerSettingsService.layerTest()),
-    Layer.provideMerge(Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({})),
+    Layer.provideMerge(
+      Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({ hasAdditionalDrivers: false }),
+    ),
     Layer.provideMerge(Layer.mock(VcsProcess.VcsProcess)({ run: runProcess })),
     Layer.provideMerge(
       ServerConfig.layerTest(process.cwd(), { prefix: "t3-source-control-discovery-" }),

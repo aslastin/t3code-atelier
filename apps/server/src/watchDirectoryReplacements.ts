@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import { nativeRealPath } from "./nativeRealPath.ts";
 import { resolveSymlinkTarget } from "@t3tools/shared/symlink";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -69,14 +70,6 @@ const watchDirectoryEntry = (path: string, ready: Deferred.Deferred<void>) => {
   );
 };
 
-// Node's JS realpath can collapse `..` before resolving a symlink in the preceding segment.
-const realPath = (entry: string) =>
-  Effect.callback<string, NodeJS.ErrnoException>((resume) => {
-    NodeFS.realpath.native(entry, (error, resolved) => {
-      resume(error ? Effect.fail(error) : Effect.succeed(resolved));
-    });
-  });
-
 const resolveWatchTarget = Effect.fn("watchDirectoryReplacements.resolveWatchTarget")(function* (
   entry: string,
 ) {
@@ -85,14 +78,14 @@ const resolveWatchTarget = Effect.fn("watchDirectoryReplacements.resolveWatchTar
   const link = yield* fs.readLink(entry).pipe(Effect.option);
   if (Option.isNone(link)) return entry;
 
-  const resolved = yield* realPath(entry).pipe(Effect.option);
+  const resolved = yield* nativeRealPath(entry).pipe(Effect.option);
   if (Option.isSome(resolved)) return resolved.value;
 
   // A dangling link needs a watch on the directory where its target should appear.
   const rawTarget = path.isAbsolute(link.value)
     ? link.value
     : `${path.dirname(entry)}${path.sep}${link.value}`;
-  const parent = yield* realPath(path.dirname(rawTarget)).pipe(Effect.option);
+  const parent = yield* nativeRealPath(path.dirname(rawTarget)).pipe(Effect.option);
   const unresolved = Option.isSome(parent)
     ? path.join(parent.value, path.basename(rawTarget))
     : entry;

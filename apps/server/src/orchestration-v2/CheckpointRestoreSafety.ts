@@ -19,6 +19,8 @@ const UNFINISHED_RUN_STATUSES = new Set(["queued", "preparing", "starting", "run
 export const SHARED_WORKSPACE_RESTORE_MESSAGE =
   "File restore requires an isolated worktree. This workspace may contain changes from another thread or a side chat. Rewind the conversation without restoring files instead, or delete side chats you no longer need.";
 
+import { resolveWorkspaceLocation } from "../workspace/workspaceLease.ts";
+
 // Check isolation at admission and rollback; checkpoints restore whole checkouts, which may become shared.
 export const isCheckpointRestoreIsolated = Effect.fn("orchestrationV2.isCheckpointRestoreIsolated")(
   function* (
@@ -32,6 +34,7 @@ export const isCheckpointRestoreIsolated = Effect.fn("orchestrationV2.isCheckpoi
       readonly projects: ProjectStore.ProjectStoreV2["Service"];
       readonly path: Path.Path;
     },
+    replacedCheckoutRoot?: string,
   ) {
     const { fileSystem, projections, projects, path } = dependencies;
     const contains = (parent: string, child: string) => {
@@ -46,18 +49,13 @@ export const isCheckpointRestoreIsolated = Effect.fn("orchestrationV2.isCheckpoi
     if (!shared && worktreePath !== null) {
       // Storage cleanup may have removed the worktree; rollback recreates it.
       const resolve = (target: string) =>
-        fileSystem.realPath(target).pipe(
-          Effect.catchIf(
-            (error) => error.reason._tag === "NotFound",
-            (_error) => Effect.succeed(path.resolve(target)),
-          ),
-        );
+        resolveWorkspaceLocation(fileSystem, path, path.resolve(target));
       const cwd = yield* resolve(scope.cwd);
       const worktreeCwd = yield* resolve(worktreePath);
       shared = cwd !== worktreeCwd;
       if (!shared) {
         const restored = [
-          cwd,
+          replacedCheckoutRoot === undefined ? cwd : yield* resolve(replacedCheckoutRoot),
           ...(yield* Effect.forEach(taskFolder?.repositories ?? [], (repository) =>
             resolve(repository.worktreePath),
           )),
@@ -197,14 +195,8 @@ export const isCheckpointRestoreIsolated = Effect.fn("orchestrationV2.isCheckpoi
           for (const candidate of paths) {
             if (checkedPaths.has(candidate)) continue;
             checkedPaths.add(candidate);
-            const otherCwd = yield* fileSystem.realPath(candidate).pipe(
-              Effect.catchIf(
-                (error) => error.reason._tag === "NotFound",
-                (_error) => Effect.succeed(null),
-              ),
-            );
+            const otherCwd = yield* resolve(candidate);
             if (
-              otherCwd !== null &&
               restored.some((folder) => contains(folder, otherCwd) || contains(otherCwd, folder))
             ) {
               shared = true;

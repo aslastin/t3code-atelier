@@ -80,6 +80,7 @@ function layer(input: {
     ),
     Layer.provide(
       Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
+        hasAdditionalDrivers: false,
         get: () => Effect.die("unexpected VCS registry get"),
         resolve: () => Effect.die("unexpected VCS registry resolve"),
         detect: (request) =>
@@ -256,7 +257,10 @@ describe("ReviewService", () => {
       const claimed = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-claimed-" });
       yield* fs.makeDirectory(`${bound}/sub`);
 
-      const review = (cwd: string) =>
+      yield* fs.makeDirectory(`${bound}/.git`);
+      yield* fs.makeDirectory(`${project}/.git`);
+      yield* fs.makeDirectory(`${project}/sub`);
+      const review = (cwd: string, subfolder = false) =>
         Effect.gen(function* () {
           const service = yield* ReviewService.ReviewService;
           return yield* service.getDiffPreview({ cwd });
@@ -265,10 +269,10 @@ describe("ReviewService", () => {
             layer({
               workspaceRoot,
               baseDir,
-              projectRoots: [project],
+              projectRoots: [subfolder ? `${project}/sub` : project],
               gitWorktrees: [project, bound, deleted],
               threadWorktrees: [
-                { worktreePath: bound },
+                { worktreePath: subfolder ? `${bound}/sub` : bound },
                 { worktreePath: claimed },
                 { worktreePath: deleted, deleted: true },
                 { worktreePath: "t3-review-relative" },
@@ -281,6 +285,11 @@ describe("ReviewService", () => {
       for (const cwd of [bound, `${bound}/sub`]) {
         assert.strictEqual((yield* review(cwd)).cwd, cwd);
       }
+      assert.strictEqual((yield* review(`${bound}/sub`, true)).cwd, `${bound}/sub`);
+      assert.strictEqual(
+        (yield* review(bound, true).pipe(Effect.flip))._tag,
+        "VcsRepositoryDetectionError",
+      );
       for (const cwd of [deleted, unbound, claimed, `${process.cwd()}/t3-review-relative`]) {
         const error = yield* review(cwd).pipe(Effect.flip);
         assert.strictEqual(error._tag, "VcsRepositoryDetectionError");

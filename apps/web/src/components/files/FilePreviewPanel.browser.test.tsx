@@ -1,10 +1,16 @@
 import { DEFAULT_THEMES, preloadHighlighter } from "@pierre/diffs";
 import { EnvironmentId, ThreadId, type ProjectReadFileResult } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
-import { StrictMode, type ReactNode } from "react";
+import { StrictMode, useRef, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { cdp, userEvent } from "vite-plus/test/browser";
+import { cdp, page, userEvent } from "vite-plus/test/browser";
 import { act, fakeTimers, render } from "../../../test/render";
+import { useComposerDraftStore } from "~/composerDraftStore";
+import {
+  ComposerPromptEditorTiptap,
+  type ComposerPromptEditorHandle,
+} from "../ComposerPromptEditorTiptap";
+import { composerContextRecordsFromDraft } from "../composerContextPresentation";
 import appCss from "~/index.css?inline";
 import { isMacPlatform } from "~/lib/utils";
 import {
@@ -33,10 +39,16 @@ vi.mock(import("~/state/session"), async (original) => ({
   readEnvironmentScope: () => true,
   useEnvironmentScope: () => true,
 }));
-vi.mock(import("~/state/filesystem"), async (original) => ({
-  ...(await original()),
-  useFilesystemReadAccess: () => ({ canReadFiles: true, isPending: false, error: null }),
-}));
+vi.mock(import("~/state/filesystem"), async (original) => {
+  const actual = await original();
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const browse = Atom.make(AsyncResult.success({ parentPath: "/tmp", entries: [] }));
+  return {
+    ...actual,
+    filesystemEnvironment: { ...actual.filesystemEnvironment, browse: (() => browse) as never },
+    useFilesystemReadAccess: () => ({ canReadFiles: true, isPending: false, error: null }),
+  };
+});
 vi.mock(import("~/state/use-atom-command"), async (original) => ({
   ...(await original()),
   useAtomCommand: (() => state.writeFile) as never,
@@ -238,6 +250,145 @@ function deepActiveElement() {
   while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
   return active;
 }
+
+function FileCommentComposer() {
+  const draft = useComposerDraftStore((store) => store.getComposerDraft(threadRef));
+  return (
+    <ComposerPromptEditorTiptap
+      editorRef={useRef<ComposerPromptEditorHandle>(null)}
+      value={draft?.prompt ?? ""}
+      cursor={draft?.prompt.length ?? 0}
+      contextRecords={composerContextRecordsFromDraft(draft ?? { terminalContexts: [] })}
+      skills={[]}
+      disabled={false}
+      placeholder=""
+      ariaLabel="Prompt"
+      onPaste={() => {}}
+      onChange={() => {}}
+    />
+  );
+}
+
+describe("read-only source comments", () => {
+  it("adds a selected range from a host file to the composer prompt", async () => {
+    using _settings = setup();
+    const reset = () =>
+      useComposerDraftStore.setState(useComposerDraftStore.getInitialState(), true);
+    reset();
+    using _draft = { [Symbol.dispose]: reset };
+    const filePath = "/tmp/notes.txt";
+    const contents = "first\nsecond\nthird\nfourth";
+    state.file = {
+      relativePath: "~/notes.txt",
+      contents,
+      byteLength: contents.length,
+      truncated: false,
+    };
+    const panel = () => (
+      <div style={{ width: 560, height: 400, display: "flex", flexDirection: "column" }}>
+        {filePreview("~/notes.txt")}
+        <FileCommentComposer />
+      </div>
+    );
+    await using screen = await render(panel());
+    const number = (line: number) =>
+      screen.container
+        .querySelector("diffs-container")
+        ?.shadowRoot?.querySelector<HTMLElement>(`[data-column-number="${line}"]`);
+    await vi.waitFor(() => expect(number(3)).toBeInstanceOf(HTMLElement));
+    const frame = window.frameElement?.getBoundingClientRect();
+    const drag = (type: "mousePressed" | "mouseMoved" | "mouseReleased", line: number) => {
+      const rect = number(line)!.getBoundingClientRect();
+      return cdp().send("Input.dispatchMouseEvent", {
+        type,
+        x: rect.right - 4 + (frame?.left ?? 0),
+        y: rect.top + rect.height / 2 + (frame?.top ?? 0),
+        button: "left",
+        buttons: type === "mouseReleased" ? 0 : 1,
+        clickCount: 1,
+      });
+    };
+    await drag("mousePressed", 1);
+    await drag("mouseReleased", 1);
+    await userEvent.fill(
+      screen.getByRole("textbox", { name: "Comment on lines L1", exact: true }),
+      "Earlier comment",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Comment", exact: true }));
+    await drag("mousePressed", 2);
+    await drag("mouseMoved", 3);
+    await drag("mouseReleased", 3);
+    const draftField = screen.getByRole("textbox", {
+      name: "Comment on lines L2 to L3",
+      exact: true,
+    });
+    await userEvent.fill(draftField, "Explain this.");
+    const textarea = screen.container.querySelector("textarea")!;
+    textarea.setSelectionRange(1, 4);
+    await userEvent.click(screen.getByRole("button", { name: "Delete comment", exact: true }));
+    await expect.element(draftField).toHaveValue("Explain this.");
+    expect(draftField.element()).toBe(textarea);
+    expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([1, 4]);
+    state.file = { ...state.file!, absolutePath: filePath, contents: "replaced", byteLength: 8 };
+    await screen.rerender(panel());
+    await expect
+      .element(screen.getByRole("textbox", { name: /Comment on lines/ }))
+      .toHaveValue("Explain this.");
+    await userEvent.click(screen.getByRole("button", { name: "Comment", exact: true }));
+
+    const draft = useComposerDraftStore.getState().getComposerDraft(threadRef)!;
+    expect(draft.reviewComments).toMatchObject([
+      { filePath, rangeLabel: "L2 to L3", text: "Explain this.", diff: "second\nthird" },
+    ]);
+    await expect
+      .element(screen.getByRole("textbox", { name: "Prompt" }))
+      .toHaveTextContent("notes.txt L2 to L3");
+    await vi.waitFor(() => expect(number(3)).toBeNull());
+    await drag("mousePressed", 1);
+    await drag("mouseReleased", 1);
+    await expect
+      .element(screen.getByRole("textbox", { name: "Comment on lines L1" }))
+      .toBeVisible();
+    await userEvent.fill(
+      screen.getByRole("textbox", { name: "Comment on lines L1" }),
+      "Old first line",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Comment", exact: true }));
+    await expect.element(screen.getByText("Old first line", { exact: true })).toBeVisible();
+    const beforeEdit = useComposerDraftStore.getState().getComposerDraft(threadRef)!;
+    await userEvent.click(screen.getByRole("button", { name: "Edit comment", exact: true }));
+    const edit = screen.getByRole("textbox", { name: "Comment on lines L1" });
+    await userEvent.fill(edit, "Edited first line");
+    await userEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
+    await expect.element(screen.getByText("Edited first line", { exact: true })).toBeVisible();
+    const afterEdit = useComposerDraftStore.getState().getComposerDraft(threadRef)!;
+    expect(afterEdit.prompt).toBe(beforeEdit.prompt);
+    expect(afterEdit.reviewComments.map(({ id, text }) => ({ id, text }))).toEqual(
+      beforeEdit.reviewComments.map(({ id, text }) => ({
+        id,
+        text: text === "Old first line" ? "Edited first line" : text,
+      })),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /notes\.txt L1\. Show details/ }));
+    await expect
+      .element(page.getByRole("dialog").getByText("Edited first line", { exact: true }))
+      .toBeVisible();
+    state.file = { ...state.file, contents: "inserted\nreplaced", byteLength: 17 };
+    await screen.rerender(panel());
+    await expect
+      .element(screen.getByText("Edited first line", { exact: true }))
+      .not.toBeInTheDocument();
+    expect(useComposerDraftStore.getState().getComposerDraft(threadRef)!.reviewComments).toEqual(
+      afterEdit.reviewComments,
+    );
+    expect(afterEdit.reviewComments.at(-1)).toMatchObject({
+      text: "Edited first line",
+      rangeLabel: "L1",
+      diff: "replaced",
+    });
+    expect(state.writeFile).not.toHaveBeenCalled();
+  });
+});
 
 describe("source file focus", () => {
   it("hands panel focus to the file's editor, which owns mod+f", async () => {

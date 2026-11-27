@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { OrchestratorRuntimeModeAboveCeilingError } from "../../../orchestration-v2/Orchestrator.ts";
 import { outputRequestProblem } from "../../../orchestration-v2/runOutput.ts";
@@ -27,6 +28,11 @@ import * as ProjectCloneTracker from "../../../project/ProjectCloneTracker.ts";
 import { mutateProjectWithClone } from "../../../project/ProjectMutation.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
+import { isWithinRoot } from "../../../workspace/KnownWorkspaces.ts";
+import {
+  worktreeProjectFolder,
+  worktreeRootForProject,
+} from "../../../workspace/worktreeProjectPath.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
@@ -100,12 +106,39 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
     Effect.flatMap((paths) => Effect.forEach(paths, real)),
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
-  if (!worktrees.includes(yield* real(worktreePath)))
+  const path = yield* Path.Path;
+  const folder = yield* real(worktreePath);
+  const root = yield* worktreeRootForProject(fileSystem, path, folder, workspaceRoot);
+  if (
+    !worktrees.includes(root) ||
+    (root !== folder &&
+      !(yield* fileSystem.stat(folder).pipe(
+        Effect.map((entry) => entry.type === "Directory"),
+        Effect.orElseSucceed(() => false),
+      )))
+  )
     return yield* new OrchestratorMcpFailure({
       code: "invalid_request",
       message:
         "worktreePath must be one of the project's git worktrees. t3_worktree_list shows them.",
     });
+  const requested = path.resolve(worktreePath);
+  const binding =
+    requested === worktreePath || (yield* real(requested)) === folder ? requested : folder;
+  if (folder !== root) {
+    if (binding === folder) return folder;
+    const boundRoot = yield* worktreeRootForProject(fileSystem, path, binding, workspaceRoot);
+    return (yield* real(boundRoot)) === root ? binding : folder;
+  }
+  const realProject = yield* real(workspaceRoot);
+  const source = worktrees
+    .filter((candidate) => isWithinRoot(path, realProject, candidate))
+    .toSorted((a, b) => b.length - a.length)[0];
+  if (source === undefined) return binding;
+  return (
+    (yield* worktreeProjectFolder(fileSystem, path, path.relative(source, realProject), binding)) ??
+    binding
+  );
 });
 
 /** The composer falls back to the project's t3.json when no setting picks the mode. */
@@ -308,16 +341,18 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
                   }),
                 ),
               );
-        if (project !== undefined && input.workspaceStrategy?.type === "existing_worktree")
-          yield* assertProjectWorktree(project.workspaceRoot, input.workspaceStrategy.worktreePath);
+        const existingFolder =
+          project !== undefined && input.workspaceStrategy?.type === "existing_worktree"
+            ? yield* assertProjectWorktree(
+                project.workspaceRoot,
+                input.workspaceStrategy.worktreePath,
+              )
+            : undefined;
         if (!replaying && input.modelSelection !== undefined) {
           const { instanceId, model } = input.modelSelection;
           const registry = yield* ProviderRegistry.ProviderRegistry;
           // The thread runs in this folder, whose own provider config can add models.
-          const cwd =
-            input.workspaceStrategy?.type === "existing_worktree"
-              ? input.workspaceStrategy.worktreePath
-              : project?.workspaceRoot;
+          const cwd = existingFolder ?? project?.workspaceRoot;
           const requireModel = (
             providers: ReadonlyArray<ServerProvider>,
           ): Effect.Effect<void, OrchestratorMcpFailure> => {
@@ -365,7 +400,9 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           (projectSettings.defaultThreadEnvMode ??
             (yield* projectFileThreadEnvMode(project.workspaceRoot))) === "worktree"
             ? yield* defaultWorktreeStrategy(project.workspaceRoot)
-            : input.workspaceStrategy;
+            : existingFolder !== undefined && input.workspaceStrategy?.type === "existing_worktree"
+              ? { ...input.workspaceStrategy, worktreePath: existingFolder }
+              : input.workspaceStrategy;
         // An omitted startFromOrigin follows the new-worktree setting, as the composer and
         // t3_worktree_handoff do. Otherwise a stale local branch silently becomes the base.
         const strategy =

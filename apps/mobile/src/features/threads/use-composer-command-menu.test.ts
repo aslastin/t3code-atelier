@@ -22,10 +22,12 @@ vi.mock("../../state/server", () => ({
 
 import type { ModelOption } from "../../lib/modelOptions";
 import {
+  buildComposerModelEffortItems,
   buildComposerModelItems,
   buildComposerSlashCommandItems,
   resolveComposerCommandSelection,
   resolveComposerMenuSelection,
+  resolveComposerModelEffortSelection,
 } from "./use-composer-command-menu";
 
 describe("resolveComposerMenuSelection", () => {
@@ -162,6 +164,67 @@ describe("mobile model mentions", () => {
       ["model:opencode:traex/gpt-6.1", "OpenCode · Traex"],
       ["model:traex:gpt-6.1", "Traex"],
     ]);
+  });
+
+  it("offers a model's effort levels after Default, then rewrites or undoes the inserted mention", () => {
+    const [model] = buildComposerModelItems(
+      [
+        option("traex:gpt-6.1", {
+          capabilities: {
+            optionDescriptors: [
+              {
+                id: "reasoningEffort",
+                label: "Reasoning",
+                type: "select",
+                options: [
+                  { id: "low", label: "Low" },
+                  { id: "high", label: "High", isDefault: true },
+                ],
+              },
+            ],
+          },
+        }),
+      ],
+      "gpt",
+      [provider("traex")],
+    );
+    if (model?.type !== "model") throw new Error("expected a model item");
+    const levels = buildComposerModelEffortItems(model, "Default");
+    expect(levels.map((item) => item.label)).toEqual(["Default", "Low", "High"]);
+    // OpenCode's literal `default` variant, labelled like Default, says what it writes.
+    const [, literal] = buildComposerModelEffortItems(
+      { ...model, effort: { optionId: "variant", choices: [{ id: "default", label: "Default" }] } },
+      "Default",
+    );
+    expect(literal?.description).toBe("variant=default");
+    const inserted = resolveComposerCommandSelection({
+      draftMessage: "Ask @gpt then",
+      trigger: { rangeStart: 4, rangeEnd: 8 },
+      item: model,
+    });
+    const step = {
+      model,
+      ownerKey: "draft",
+      draftMessage: inserted.text,
+      start: 4,
+      source: "model:traex/gpt-6.1",
+      query: "@gpt",
+    };
+    const pick = (index: number) => {
+      const level = levels[index];
+      if (level?.type !== "model-effort") throw new Error("expected a level");
+      return resolveComposerModelEffortSelection(step, level);
+    };
+    expect(inserted.text).toBe("Ask model:traex/gpt-6.1  then");
+    expect(pick(0)).toEqual({ text: "Ask model:traex/gpt-6.1  then", cursor: 24 });
+    expect(pick(2)).toEqual({
+      text: "Ask model:traex/gpt-6.1?reasoningEffort=high  then",
+      cursor: 45,
+    });
+    expect(resolveComposerModelEffortSelection(step, null)).toEqual({
+      text: "Ask @gpt then",
+      cursor: 8,
+    });
   });
 
   it.each([

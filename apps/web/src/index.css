@@ -176,6 +176,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 }
 
 @theme inline {
+  /* The paged viewer draws Pierre's gutter button outside its shadow root. */
+  --color-file-comment-gutter: var(--diffs-modified-color-override, light-dark(#009fff, #69b1ff));
   /* Two steps below Tailwind's text-xs (12px) for dense UI: metadata rows,
      badges, counters, keyboard hints and diagnostics tables. 2xs is 11px,
      3xs is 10px. Provider icon overlays use 4xs (8px) and 5xs (7px) to fit
@@ -2532,6 +2534,23 @@ code {
 /* Delimiters of source restored by undo or redo, once the caret leaves it. */
 .composer-rich-marker-hidden {
   display: none;
+}
+
+/* Links read as they do in a sent message. A click places the caret; it does not follow. */
+.composer-tiptap a.composer-link,
+.composer-link-source {
+  color: var(--info-foreground);
+  text-decoration: none;
+}
+
+.composer-tiptap a.composer-link {
+  cursor: text;
+}
+
+/* The text Insert Link will turn into a link, kept visible while focus is in the URL field. */
+.composer-link-pending {
+  background-color: color-mix(in oklab, var(--ring) 28%, transparent);
+  border-radius: 0.2em;
 }
 
 /* Selected chips (node selection from arrowing into or clicking a chip). */

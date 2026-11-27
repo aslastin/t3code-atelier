@@ -362,6 +362,7 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
 
           expect(result).toEqual({
             relativePath,
+            absolutePath: (yield* Path.Path).join(home, ".claude", "CLAUDE.md"),
             contents: "# Notes\n",
             byteLength: 8,
             truncated: false,
@@ -523,6 +524,9 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
           });
 
           expect(result.contents).toBe("beside the target\n");
+          expect(result.absolutePath).toBe(
+            yield* fs.realPath(path.join(root, "target", "parent.md")),
+          );
         }),
     );
 

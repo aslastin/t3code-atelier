@@ -1,5 +1,5 @@
 import { msg } from "gt-i18n";
-import { translatableMessage } from "../errors/translatable.ts";
+import { translatableMessage, withI18nMessage } from "../errors/translatable.ts";
 import { remapComposerContextAttachments } from "@t3tools/shared/composerContextReferences";
 import {
   type ThreadLinkedPullRequest,
@@ -18,6 +18,7 @@ import {
   type OrchestrationV2SourcePlanRef,
   type ProjectId,
   type ProjectIconOverride,
+  type ProjectRemovalFolder,
   type ProjectScript,
   type ProjectTrackedFolder,
   type ProviderApprovalDecision,
@@ -88,10 +89,10 @@ export interface UpdateProjectInput extends CommandMetadata {
   readonly archived?: boolean;
 }
 
-export interface DeleteProjectInput extends CommandMetadata {
-  readonly projectId: ProjectId;
-  readonly force?: boolean;
-}
+export type DeleteProjectInput = CommandMetadata & { readonly projectId: ProjectId } & (
+    | { readonly force?: boolean; readonly expectedFolder?: never }
+    | { readonly force: true; readonly expectedFolder: ProjectRemovalFolder }
+  );
 
 export interface CreateThreadInput extends CommandMetadata {
   readonly threadId: ThreadId;
@@ -449,6 +450,12 @@ const mutateProject = Effect.fn("EnvironmentCommands.mutateProject")(function* (
         readonly commandId: CommandId;
         readonly projectId: ProjectId;
         readonly force?: boolean;
+      }
+    | {
+        readonly type: "project.removeReviewed";
+        readonly commandId: CommandId;
+        readonly projectId: ProjectId;
+        readonly expectedFolder: ProjectRemovalFolder;
       },
 ) {
   return yield* request(WS_METHODS.projectsMutate, mutation);
@@ -504,9 +511,26 @@ export const updateProject = Effect.fn("EnvironmentCommands.updateProject")(func
 export const deleteProject = Effect.fn("EnvironmentCommands.deleteProject")(function* (
   input: DeleteProjectInput,
 ) {
+  const commandId = yield* allocateCommandId(input);
+  if (input.expectedFolder !== undefined)
+    return yield* mutateProject({
+      type: "project.removeReviewed",
+      commandId,
+      projectId: input.projectId,
+      expectedFolder: input.expectedFolder,
+    }).pipe(
+      Effect.mapError((error) =>
+        error._tag === "ProjectMutationError" && error.reason === "clone_running"
+          ? withI18nMessage(
+              error,
+              msg("Wait for the repository to finish cloning before removing this project."),
+            )
+          : error,
+      ),
+    );
   return yield* mutateProject({
     type: "project.delete",
-    commandId: yield* allocateCommandId(input),
+    commandId,
     projectId: input.projectId,
     ...(input.force === undefined ? {} : { force: input.force }),
   });

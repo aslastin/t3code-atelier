@@ -5,7 +5,7 @@ import { expect, it, vi } from "vite-plus/test";
 const checkout = vi.hoisted(() => ({
   projectRoot: "",
   worktreePath: null as string | null,
-  branches: [] as Array<{ name: string; worktreePath: string | null }>,
+  branches: [] as Array<{ name: string; worktreePath: string | null; current: boolean }>,
 }));
 
 vi.mock("@react-navigation/native", () => ({ useNavigation: () => ({}) }));
@@ -59,11 +59,11 @@ import { GitBranchesSheet } from "./GitBranchesSheet";
 it("recognizes both the main checkout and a linked worktree as this thread's checkout", () => {
   const directory = "/repo";
   const linked = "/repo-linked";
-  checkout.projectRoot = directory;
+  checkout.projectRoot = `${directory}/my-project`;
   checkout.branches = [
-    { name: "feature/available", worktreePath: null },
-    { name: "feature/linked", worktreePath: linked },
-    { name: "main", worktreePath: directory },
+    { name: "feature/available", worktreePath: null, current: false },
+    { name: "feature/linked", worktreePath: linked, current: false },
+    { name: "main", worktreePath: directory, current: true },
   ];
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const container = document.createElement("div");
@@ -90,7 +90,11 @@ it("recognizes both the main checkout and a linked worktree as this thread's che
       { name: "main", subtitle: "Checked out in this thread", disabled: false },
     ]);
 
-    checkout.worktreePath = linked;
+    checkout.worktreePath = `${linked}/my-project`;
+    checkout.branches = checkout.branches.map((ref) => ({
+      ...ref,
+      current: ref.worktreePath === linked,
+    }));
     expect(rows()).toEqual([
       { name: "feature/available", subtitle: "Local branch", disabled: false },
       { name: "feature/linked", subtitle: "Checked out in this thread", disabled: false },

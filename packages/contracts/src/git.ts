@@ -9,7 +9,7 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { SourceControlProviderError, SourceControlProviderInfo } from "./sourceControl.ts";
-import { VcsDriverKind } from "./vcs.ts";
+import { VcsDriverCapabilities, VcsDriverKind, VcsUnsupportedOperationError } from "./vcs.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const GitFilePath = Schema.String.check(Schema.isNonEmpty());
@@ -89,11 +89,14 @@ export const VcsRef = Schema.Struct({
   current: Schema.Boolean,
   isDefault: Schema.Boolean,
   worktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  projectPath: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyStringSchema)),
 });
 export type VcsRef = typeof VcsRef.Type;
 
 const VcsWorktree = Schema.Struct({
   path: TrimmedNonEmptyStringSchema,
+  /** Working directory for a subfolder project, or null if the checkout omits it. */
+  projectPath: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   refName: TrimmedNonEmptyStringSchema,
 });
 const GitResolvedPullRequest = Schema.Struct({
@@ -143,6 +146,7 @@ export const GitRunStackedActionInput = Schema.Struct({
 export type GitRunStackedActionInput = typeof GitRunStackedActionInput.Type;
 
 export const VcsListRefsInput = Schema.Struct({
+  projectCwd: Schema.optional(TrimmedNonEmptyStringSchema),
   cwd: TrimmedNonEmptyStringSchema,
   query: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(256))),
   cursor: Schema.optional(NonNegativeInt),
@@ -181,6 +185,7 @@ export type GitPreparePullRequestThreadInput = typeof GitPreparePullRequestThrea
 export const VcsRemoveWorktreeInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   path: TrimmedNonEmptyStringSchema,
+  onlyIfUnused: Schema.optional(Schema.Boolean),
   force: Schema.optional(Schema.Boolean),
 });
 export type VcsRemoveWorktreeInput = typeof VcsRemoveWorktreeInput.Type;
@@ -221,6 +226,7 @@ const VcsStatusChangeRequest = Schema.Struct({
 });
 
 const VcsStatusLocalShape = {
+  capabilities: Schema.optional(VcsDriverCapabilities),
   isRepo: Schema.Boolean,
   sourceControlProvider: Schema.optional(SourceControlProviderInfo),
   hasPrimaryRemote: Schema.Boolean,
@@ -308,6 +314,7 @@ export const GitPreparePullRequestThreadResult = Schema.Struct({
   pullRequest: GitResolvedPullRequest,
   branch: TrimmedNonEmptyStringSchema,
   worktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  projectFolderMissing: Schema.optionalKey(Schema.Boolean),
   /** False when local commits or edits prevented a reused worktree from reaching the PR head. */
   isOnPullRequestHead: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(true))),
 });
@@ -375,6 +382,7 @@ export const GitCommandFailureReason = Schema.Literals([
 export type GitCommandFailureReason = typeof GitCommandFailureReason.Type;
 
 export class GitCommandError extends Schema.TaggedError<GitCommandError>()("GitCommandError", {
+  vcs: Schema.optional(VcsDriverKind),
   operation: Schema.String,
   command: Schema.String,
   cwd: Schema.String,
@@ -433,10 +441,16 @@ export class GitPullRequestMaterializationError extends Schema.TaggedError<GitPu
   }
 }
 
+export const VcsWorkflowCommandError = Schema.Union([
+  GitCommandError,
+  VcsUnsupportedOperationError,
+]);
+export type VcsWorkflowCommandError = typeof VcsWorkflowCommandError.Type;
+
 export const GitManagerServiceError = Schema.Union([
   GitManagerError,
   GitPullRequestMaterializationError,
-  GitCommandError,
+  VcsWorkflowCommandError,
   SourceControlProviderError,
   TextGenerationError,
 ]);

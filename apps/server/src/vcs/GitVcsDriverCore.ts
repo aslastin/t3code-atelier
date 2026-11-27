@@ -53,7 +53,13 @@ import {
   unsetInheritedRepositoryEnv,
 } from "./VcsProcess.ts";
 import { makeWorktreeCheckoutCache } from "./worktreeCheckoutCache.ts";
+import { worktreeRemovalChecks } from "./worktreeRemovalChecks.ts";
 import { removeLinkedWorktree } from "./worktreeRemoval.ts";
+import {
+  relativeProjectFolder,
+  worktreeProjectFolder,
+  worktreeRootForProject,
+} from "../workspace/worktreeProjectPath.ts";
 import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
 import {
   parseRemoteNames,
@@ -5426,11 +5432,31 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         limit: input.limit,
       });
 
+      let selectedRefs = refs.refs;
+      if (input.projectCwd && worktreeRoot && selectedRefs.some((ref) => ref.current)) {
+        const source = yield* resolveRepositoryPaths(input.projectCwd).pipe(
+          Effect.orElseSucceed(() => null),
+        );
+        if (source?.worktreeRoot && source.gitCommonDir === repositoryPaths.gitCommonDir) {
+          const projectPath = yield* relativeProjectFolder(
+            fileSystem,
+            path,
+            source.worktreeRoot,
+            input.projectCwd,
+          ).pipe(
+            Effect.flatMap((relative) =>
+              worktreeProjectFolder(fileSystem, path, relative, worktreeRoot),
+            ),
+            Effect.orElseSucceed(() => null),
+          );
+          selectedRefs = selectedRefs.map((ref) => (ref.current ? { ...ref, projectPath } : ref));
+        }
+      }
       return {
         ...(repositoryPaths.isAtRepositoryRoot === undefined
           ? {}
           : { isAtRepositoryRoot: repositoryPaths.isAtRepositoryRoot }),
-        refs: [...refs.refs],
+        refs: [...selectedRefs],
         isRepo: true,
         hasPrimaryRemote: snapshot.hasPrimaryRemote,
         nextCursor: refs.nextCursor,
@@ -5439,26 +5465,50 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
+  const worktreeProjectPrefix = Effect.fn("GitVcsDriver.worktreeProjectPrefix")(
+    function* (cwd: string, repositoryRoot?: string | null) {
+      if (repositoryRoot)
+        return yield* relativeProjectFolder(fileSystem, path, repositoryRoot, cwd);
+      if (yield* fileSystem.exists(path.join(cwd, ".git"))) return "";
+      const prefix = yield* runGitStdout("GitVcsDriver.createWorktree.projectPrefix", cwd, [
+        "rev-parse",
+        "--show-prefix",
+      ]);
+      return prefix.replace(/\/?\n$/, "");
+    },
+    Effect.orElseSucceed(() => ""),
+  );
+
   // A new worktree has no files yet, so t3.json and its pattern file come from the ref itself.
-  const readWorktreeSparsePatterns = Effect.fn("readWorktreeSparsePatterns")(function* (
+  const readWorktreeProjectFile = Effect.fn("readWorktreeProjectFile")(function* (
     cwd: string,
     refName: string,
+    fileName: string,
   ) {
     // `git show` does not read a lone - as the previous checkout either.
     const ref = refName === "-" ? "@{-1}" : refName;
     const projectFile = yield* executeGit(
       "GitVcsDriver.createWorktree.readProjectFile",
       cwd,
-      ["show", `${ref}:${T3_PROJECT_FILE_NAME}`],
+      ["show", `${ref}:${fileName}`],
       { allowNonZeroExit: true },
     );
     if (projectFile.exitCode !== 0) return null;
     const file = parseT3ProjectFile(projectFile.stdout);
     if (file === null) {
-      yield* Effect.logWarning("t3.json is invalid; checking out the full worktree", { cwd, ref });
+      yield* Effect.logWarning("Ignoring invalid worktree project file", { cwd, ref });
       return null;
     }
-    if (file.worktreeSparsePatternsPath === undefined) return null;
+    return file;
+  });
+  const readWorktreeSparsePatterns = Effect.fn("readWorktreeSparsePatterns")(function* (
+    cwd: string,
+    refName: string,
+    fileName: string,
+  ) {
+    const file = yield* readWorktreeProjectFile(cwd, refName, fileName);
+    if (!file?.worktreeSparsePatternsPath) return null;
+    const ref = refName === "-" ? "@{-1}" : refName;
     // Git reads <ref>:./path from the working directory, so keep the path repository-relative.
     const patternsPath = file.worktreeSparsePatternsPath.replace(/^(?:\.\/)+/, "");
     const patterns = patternsPath.split("/").includes("..")
@@ -5606,7 +5656,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     // Later steps run git inside the worktree, so resolve a relative path the way worktree add does.
     worktreePath = path.resolve(input.cwd, worktreePath);
     // Read before the branch exists, so a missing pattern file leaves nothing behind.
-    const sparsePatterns = yield* readWorktreeSparsePatterns(input.cwd, input.refName);
+    const relative = yield* worktreeProjectPrefix(input.cwd, options?.repositoryRoot);
+    const projectFileName = path.join(relative, T3_PROJECT_FILE_NAME).split(path.sep).join("/");
+    const sparsePatterns = yield* readWorktreeSparsePatterns(
+      input.cwd,
+      input.refName,
+      projectFileName,
+    );
     const newRefName = input.newRefName;
     // Older Git still creates worktrees normally, but cannot prove ownership for cancellation.
     const addHelp = newRefName
@@ -5630,6 +5686,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "git branch failed",
       );
     }
+    const initialCommit =
+      relative && newRefName && options?.onMissingProjectFolder
+        ? (yield* resolveCommit({ cwd: input.cwd, revision: `refs/heads/${newRefName}` })).commitSha
+        : null;
     const checkoutRef = newRefName ?? input.refName;
     const progress = options?.progress;
     const onCheckoutProgress = progress?.onCheckoutProgress;
@@ -5799,22 +5859,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           options?.submodules ?? null,
           options?.submodules != null
             ? null
-            : // Read HEAD for the same reason: sparse patterns can leave t3.json out too.
-              yield* executeGit(
-                "GitVcsDriver.createWorktree.readProjectFile",
-                worktreePath,
-                ["show", `HEAD:${T3_PROJECT_FILE_NAME}`],
-                { allowNonZeroExit: true },
-              ).pipe(
-                Effect.flatMap((result) => {
-                  if (result.exitCode !== 0) return Effect.succeed(null);
-                  const file = parseT3ProjectFile(result.stdout);
-                  return file === null
-                    ? Effect.logWarning("t3.json is invalid; initializing submodules recursively", {
-                        worktreePath,
-                      }).pipe(Effect.as(null))
-                    : Effect.succeed(file);
-                }),
+            : yield* readWorktreeProjectFile(worktreePath, "HEAD", projectFileName).pipe(
                 Effect.orElseSucceed(() => null),
               ),
         );
@@ -5956,9 +6001,90 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       );
     }
 
+    const projectPath = relative
+      ? yield* worktreeProjectFolder(fileSystem, path, path.normalize(relative), worktreePath)
+      : undefined;
+    if (projectPath === null && initialCommit && newRefName && options?.onMissingProjectFolder) {
+      const root = worktreePath;
+      const identity = runGitStdout("GitVcsDriver.pendingWorktree.identity", root, [
+        "rev-parse",
+        "--show-toplevel",
+        "--absolute-git-dir",
+      ]);
+      const initialIdentity = yield* identity;
+      const changed = new GitCommandError({
+        operation: "GitVcsDriver.pendingWorktree",
+        cwd: root,
+        command: "git worktree",
+        detail: `The checkout contains local work or no longer matches the checkout created for this thread.`,
+      });
+      const verify = Effect.fn("GitVcsDriver.pendingWorktree.verify")(function* (
+        ownedBranch: string,
+      ) {
+        const [head, branch, registration] = yield* Effect.all([
+          resolveCommit({ cwd: root, revision: "HEAD" }),
+          runGitStdout("GitVcsDriver.pendingWorktree.branch", root, ["symbolic-ref", "HEAD"]),
+          identity,
+        ]);
+        if (
+          head.commitSha !== initialCommit ||
+          branch.trim() !== `refs/heads/${ownedBranch}` ||
+          registration !== initialIdentity
+        )
+          return yield* changed;
+      });
+      const discard = Effect.fn("GitVcsDriver.discardPendingWorktree")(function* (
+        ownedBranch: string,
+      ) {
+        const checks = worktreeRemovalChecks(execute, fileSystem, path);
+        const retention = { worktreeKeepWhen: "all-files" } as const;
+        const submodules = yield* checks.submoduleRemoval(root, retention);
+        if (
+          submodules.reason !== null ||
+          (yield* checks
+            .localChangesReason(root, retention)
+            .pipe(Effect.mapError(() => changed))) !== null
+        )
+          return yield* changed;
+        yield* verify(ownedBranch);
+        yield* removeWorktree({ cwd: input.cwd, path: root, force: submodules.force });
+        // An external commit between removing the directory and deleting its ref keeps the branch.
+        yield* withSharedConfigLock(
+          input.cwd,
+          Effect.gen(function* () {
+            yield* runGit("GitVcsDriver.discardPendingWorktree.ref", input.cwd, [
+              "update-ref",
+              "-d",
+              `refs/heads/${ownedBranch}`,
+              initialCommit,
+            ]);
+            const removed = yield* executeGitWithStableDiagnostics(
+              "GitVcsDriver.discardPendingWorktree.config",
+              input.cwd,
+              ["config", "--local", "--remove-section", `branch.${ownedBranch}`],
+              { allowNonZeroExit: true },
+            );
+            if (removed.exitCode !== 0 && !removed.stderr.includes("no such section"))
+              return yield* new GitCommandError({
+                operation: "GitVcsDriver.discardPendingWorktree.config",
+                cwd: input.cwd,
+                command: "git config --remove-section",
+                detail: removed.stderr.trim(),
+              });
+          }),
+        );
+      });
+      yield* options.onMissingProjectFolder({
+        root,
+        relativePath: relative,
+        verify: verify(newRefName),
+        discard,
+      });
+    }
     return {
       worktree: {
         path: worktreePath,
+        ...(projectPath === undefined ? {} : { projectPath }),
         refName: targetBranch,
       },
     };
@@ -6366,7 +6492,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     // Git also matches a worktree by its short name, which can name a different
     // folder than this path. Resolving it once keeps Git, the Windows deletion
     // in removeLinkedWorktree, and the leftover cleanup below on one directory.
-    const target = path.resolve(input.cwd, input.path);
+    const target = yield* worktreeRootForProject(
+      fileSystem,
+      path,
+      path.resolve(input.cwd, input.path),
+      input.cwd,
+    );
     const result = yield* removeLinkedWorktree({
       operation: "GitVcsDriver.removeWorktree",
       cwd: input.cwd,

@@ -52,7 +52,7 @@ import * as PreviewAgentActivity from "../preview/PreviewAgentActivity.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import {
-  withCheckpointRestoreReservation,
+  withExclusiveWorkspaceReservation,
   withWorkspaceLease,
 } from "../workspace/workspaceLease.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
@@ -303,7 +303,7 @@ it.each([
   expect(harness.createWorktree).toHaveBeenCalledTimes(input.recreated ? 1 : 0);
 });
 
-const restoreLeaseExists = vi.fn(() => Effect.succeed(false));
+const restoreLeaseExists = vi.fn((_path: string) => Effect.succeed(false));
 const restoreLeaseCreateWorktree = vi.fn(() => Effect.succeed({} as never));
 const layerRestoreLeaseTest = layerThreadWorktreeRestore.pipe(
   Layer.provide(
@@ -340,7 +340,7 @@ effectIt.effect("restores a missing worktree before a send only under the worksp
           worktreePath,
           branch: "feature/restore",
         }).pipe(Effect.forkChild({ startImmediately: true }));
-        expect(restoreLeaseExists).not.toHaveBeenCalled();
+        expect(restoreLeaseExists).not.toHaveBeenCalledWith(worktreePath);
         return restoring;
       }),
     ).pipe(Effect.flatMap(Fiber.join));
@@ -2976,7 +2976,7 @@ effectIt.effect.each([
       );
       // The reservation CheckpointRollbackServiceV2.execute holds around its
       // isolation check, provider rollback, and git restore of `restorePath`.
-      const restore = yield* withCheckpointRestoreReservation(
+      const restore = yield* withExclusiveWorkspaceReservation(
         fileSystem,
         yield* Path.Path,
         restorePath,

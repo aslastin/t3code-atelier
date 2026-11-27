@@ -116,6 +116,7 @@ export interface TimelineRowActivityState {
   isRevertingCheckpoint: boolean;
   awaitingUser: boolean;
   isPreparingWorktree: boolean;
+  awaitingWorktreeFolder: boolean;
   providerStartingLabel: string | null;
   latestRunId: RunId | null;
   backgroundWorktreeSetup: WorktreeSetupSnapshot | null;

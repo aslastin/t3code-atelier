@@ -658,8 +658,14 @@ it.effect.each(["branch", "detached", "nested", "aliased-root", "aliased-nested"
           location === "detached" ? [] : [initialBranch],
         );
         assert.equal(spawnedArgs.filter((args) => args.includes("--git-common-dir")).length, 1);
-        const refs = yield* driver.listRefs({ cwd: worktreePath });
-        assert.isTrue(refs.refs.find((ref) => ref.name === "feature/cold")?.current);
+        if (isNested) yield* fs.makeDirectory(path.join(worktreePath, "nested"));
+        const refs = yield* driver.listRefs({ cwd: worktreePath, projectCwd: creationCwd });
+        const current = refs.refs.find((ref) => ref.current);
+        assert.equal(current?.name, "feature/cold");
+        assert.equal(
+          current?.projectPath && (yield* fs.realPath(current.projectPath)),
+          yield* fs.realPath(isNested ? path.join(worktreePath, "nested") : worktreePath),
+        );
         assert.equal(
           yield* git(worktreePath, ["rev-parse", "HEAD"]),
           yield* git(cwd, ["rev-parse", "HEAD"]),
@@ -7655,7 +7661,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* writeTextFile(repo, "sparse-patterns.txt", "/*\n!/assets/\n");
         yield* writeTextFile(
           repo,
-          "t3.json",
+          "src/t3.json",
           `{ "worktreeSparsePatternsPath": "./sparse-patterns.txt" }`,
         );
         yield* git(repo, ["add", "."]);
@@ -7664,7 +7670,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* git(repo, ["checkout", "-q", initialBranch]);
         const driver = yield* GitVcsDriver.GitVcsDriver;
         const worktrees = yield* makeTmpDir("git-worktrees-");
-        // A project opened at a subdirectory still reads both files from the repository root.
+        // The project owns t3.json. Its sparse pattern path is repository-relative.
         const cwd = pathService.join(repo, "src");
 
         const assertSparse = Effect.fn(function* (worktreePath: string, branch: string) {
@@ -7841,10 +7847,104 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         }),
     );
 
+    it.effect(
+      "removes the containing worktree when the project became a submodule on the worktree branch",
+      () =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const physical = yield* makeTmpDir();
+          const alias = path.join(yield* makeTmpDir(), "worktrees");
+          NodeFS.symlinkSync(physical, alias, "junction");
+          const cwd = path.join(alias, "repo");
+          NodeFS.mkdirSync(cwd);
+          const { initialBranch } = yield* initRepoWithCommit(cwd);
+          yield* writeTextFile(cwd, "my-project/tracked.txt", "tracked");
+          yield* git(cwd, ["add", "."]);
+          yield* git(cwd, ["commit", "-m", "add project"]);
+          const nested = yield* makeTmpDir("git-submodule-");
+          yield* initRepoWithCommit(nested);
+          const root = path.join(alias, "feature");
+          yield* git(cwd, ["worktree", "add", "-b", "feature/module", root, initialBranch]);
+          yield* git(root, ["rm", "-r", "my-project"]);
+          yield* git(root, [
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            nested,
+            "my-project",
+          ]);
+          yield* git(root, ["commit", "-m", "replace directory with submodule"]);
+          const driver = yield* GitVcsDriver.GitVcsDriver;
+          yield* driver.removeWorktree({
+            cwd: path.join(cwd, "my-project"),
+            path: path.join(root, "my-project"),
+            force: true,
+          });
+          assert.isFalse(NodeFS.existsSync(root));
+          assert.notInclude(
+            yield* git(cwd, ["worktree", "list", "--porcelain"]),
+            "refs/heads/feature/module",
+          );
+        }),
+    );
+
+    it.effect(
+      "discards a paused checkout with clean submodules and keeps ignored drafts inside them",
+      () =>
+        withGitFileProtocol(
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const path = yield* Path.Path;
+            const repo = yield* makeTmpDir();
+            const { initialBranch } = yield* initRepoWithCommit(repo);
+            const nested = yield* makeTmpDir();
+            yield* initRepoWithCommit(nested);
+            yield* writeTextFile(nested, ".gitignore", "node_modules/\n");
+            yield* git(nested, ["add", ".gitignore"]);
+            yield* git(nested, ["commit", "-m", "ignore dependencies"]);
+            yield* git(repo, ["submodule", "add", nested, "library"]);
+            yield* git(repo, ["commit", "-m", "add library"]);
+            const cwd = path.join(repo, "my-project");
+            yield* fs.makeDirectory(cwd);
+            const root = path.join(yield* makeTmpDir(), "feature");
+            const pending =
+              yield* Deferred.make<
+                Parameters<
+                  NonNullable<GitVcsDriver.CreateWorktreeOptions["onMissingProjectFolder"]>
+                >[0]
+              >();
+            const driver = yield* GitVcsDriver.GitVcsDriver;
+            const { worktree } = yield* driver.createWorktree(
+              { cwd, path: root, newRefName: "feature", refName: initialBranch },
+              {
+                repositoryRoot: repo,
+                onMissingProjectFolder: (folder) =>
+                  Deferred.succeed(pending, folder).pipe(Effect.asVoid),
+              },
+            );
+            assert.isNull(worktree.projectPath);
+            const { discard } = yield* Deferred.await(pending);
+            assert.isTrue(yield* fs.exists(path.join(root, "library", ".git")));
+            const draft = path.join(root, "library", "node_modules", "draft");
+            yield* writeTextFile(root, "library/node_modules/draft", "keep me");
+            assert.isTrue(Exit.isFailure(yield* Effect.exit(discard("feature"))));
+            assert.equal(yield* fs.readFileString(draft), "keep me");
+            yield* fs.remove(path.dirname(draft), { recursive: true });
+            yield* discard("feature");
+            assert.isFalse(yield* fs.exists(root));
+            assert.equal(yield* git(repo, ["branch", "--list", "feature"]), "");
+          }),
+        ),
+    );
+
     it.effect("keeps a worktree whose untracked files status is configured to hide", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
         const { initialBranch } = yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, "my-project/tracked.txt", "tracked");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "add project"]);
         const pathService = yield* Path.Path;
         const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "hidden");
         const driver = yield* GitVcsDriver.GitVcsDriver;
@@ -7858,7 +7958,11 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* writeTextFile(worktreePath, "notes.txt", "draft\n");
         assert.equal(yield* git(worktreePath, ["status", "--porcelain"]), "");
 
-        const result = yield* Effect.result(driver.removeWorktree({ cwd, path: worktreePath }));
+        const removal = {
+          cwd: pathService.join(cwd, "my-project"),
+          path: pathService.join(worktreePath, "my-project"),
+        };
+        const result = yield* Effect.result(driver.removeWorktree(removal));
 
         assert.isTrue(Result.isFailure(result));
         const fileSystem = yield* FileSystem.FileSystem;
@@ -7866,6 +7970,10 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           yield* fileSystem.readFileString(pathService.join(worktreePath, "notes.txt")),
           "draft\n",
         );
+        yield* fileSystem.remove(pathService.join(worktreePath, "notes.txt"));
+        yield* driver.removeWorktree(removal);
+        assert.isFalse(yield* fileSystem.exists(worktreePath));
+        assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), worktreePath);
       }),
     );
 

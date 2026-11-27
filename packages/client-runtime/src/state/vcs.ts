@@ -360,6 +360,10 @@ export function createVcsEnvironmentAtoms<R, E>(
       tag: WS_METHODS.subscribeWorktreeSetup,
       idleTtlMs: VCS_STATUS_IDLE_TTL_MS,
     }),
+    chooseWorktreeFolder: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:choose-worktree-folder",
+      tag: WS_METHODS.worktreeSetupChooseFolder,
+    }),
     cancelWorktreeSetup: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:cancel-worktree-setup",
       tag: WS_METHODS.worktreeSetupCancel,

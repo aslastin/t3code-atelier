@@ -64,6 +64,7 @@ import {
   normalizeThreadPullRequestKey,
   threadPullRequestKeyOf,
 } from "../sourceControl/threadPullRequests.ts";
+import { worktreeProjectFolder } from "../workspace/worktreeProjectPath.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 
 import { GitManagerError, GitPullRequestMaterializationError } from "@t3tools/contracts";
@@ -3397,7 +3398,7 @@ export const make = Effect.gen(function* () {
     };
     return yield* Effect.gen(function* () {
       const normalizedReference = normalizePullRequestReference(input.reference);
-      const rootWorktreePath = yield* canonicalizeExistingPath(input.cwd);
+
       const pullRequestSummary = yield* (yield* sourceControlProvider(input.cwd)).getChangeRequest({
         cwd: input.cwd,
         reference: normalizedReference,
@@ -3428,6 +3429,27 @@ export const make = Effect.gen(function* () {
         };
       }
 
+      const sourceFolder = yield* canonicalizeExistingPath(input.cwd);
+      const rootWorktreePath = (yield* fileSystem
+        .exists(path.join(sourceFolder, ".git"))
+        .pipe(Effect.orElseSucceed(() => false)))
+        ? sourceFolder
+        : yield* gitCore
+            .execute({
+              operation: "GitManager.preparePullRequestThread.repositoryRoot",
+              cwd: sourceFolder,
+              args: ["rev-parse", "--show-toplevel"],
+            })
+            .pipe(Effect.flatMap((result) => canonicalizeExistingPath(result.stdout.trimEnd())));
+      const projectRelative = path.relative(rootWorktreePath, sourceFolder);
+      const worktreeBinding = (root: string, folder: string | null | undefined) => ({
+        worktreePath: folder ?? root,
+        ...(folder === null ? { projectFolderMissing: true } : {}),
+      });
+      const existingWorktreeBinding = (root: string) =>
+        worktreeProjectFolder(fileSystem, path, projectRelative, root).pipe(
+          Effect.map((folder) => worktreeBinding(root, folder)),
+        );
       const ensureExistingWorktreeUpstream = Effect.fn("ensureExistingWorktreeUpstream")(function* (
         worktreePath: string,
       ) {
@@ -3473,7 +3495,7 @@ export const make = Effect.gen(function* () {
           return {
             pullRequest,
             branch: localPullRequestBranch,
-            worktreePath,
+            ...(yield* existingWorktreeBinding(worktreePath)),
             isOnPullRequestHead: false,
           };
         }
@@ -3536,14 +3558,15 @@ export const make = Effect.gen(function* () {
         );
 
         // Setup can disrupt other threads using this worktree; rerun only when the checkout moved.
+        const binding = yield* existingWorktreeBinding(worktreePath);
         if (refreshed.moved) {
-          yield* maybeRunSetupScript(worktreePath);
+          yield* maybeRunSetupScript(binding.worktreePath);
         }
 
         return {
           pullRequest,
           branch: localPullRequestBranch,
-          worktreePath,
+          ...binding,
           isOnPullRequestHead: refreshed.onTarget,
         };
       });
@@ -3664,6 +3687,7 @@ export const make = Effect.gen(function* () {
           },
           {
             ...(onWorktreeClaimed ? { progress: { onWorktreeClaimed } } : {}),
+            repositoryRoot: rootWorktreePath,
             ...(yield* readWorktreeCreationSettings),
             submodules: yield* projectSettingsFor(input).pipe(
               Effect.map(({ settings }) => settings.worktreeSubmodules),
@@ -3716,11 +3740,12 @@ export const make = Effect.gen(function* () {
             Effect.asVoid,
           ),
         );
-        yield* maybeRunSetupScript(worktree.worktree.path);
+        const binding = worktreeBinding(worktree.worktree.path, worktree.worktree.projectPath);
+        yield* maybeRunSetupScript(binding.worktreePath);
         return {
           pullRequest,
           branch: worktree.worktree.refName,
-          worktreePath: worktree.worktree.path,
+          ...binding,
           isOnPullRequestHead,
         };
       }
@@ -3755,12 +3780,13 @@ export const make = Effect.gen(function* () {
 
       const worktree = yield* createPullRequestWorktree();
       yield* ensureExistingWorktreeUpstream(worktree.worktree.path);
-      yield* maybeRunSetupScript(worktree.worktree.path);
+      const binding = worktreeBinding(worktree.worktree.path, worktree.worktree.projectPath);
+      yield* maybeRunSetupScript(binding.worktreePath);
 
       return {
         pullRequest,
         branch: worktree.worktree.refName,
-        worktreePath: worktree.worktree.path,
+        ...binding,
         isOnPullRequestHead: true,
       };
     }).pipe(

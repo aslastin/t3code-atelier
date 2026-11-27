@@ -127,7 +127,16 @@ import { basenameOfPath } from "~/pierre-icons";
 import { WorkspaceEntryTooltip } from "./chat/WorkspaceEntryIcon";
 import { FileTagChipContent } from "./chat/FileTagChip";
 import { SkillChipPopover, skillPopoverDescription } from "./chat/SkillInlineText";
+import { ComposerLinkEditor } from "./chat/ComposerLinkEditor";
+import {
+  applyComposerLink,
+  canLinkSelection,
+  ComposerLinkExtension,
+  linkableRange,
+  setPendingLink,
+} from "~/composer-link";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
+import type { ComposerModelMentionEffort } from "@t3tools/client-runtime/composer-model-mentions";
 import { ModelMentionChip, modelMentionKey, modelMentionKeysAtom } from "./chat/ModelMentionChip";
 import { getTimelinePageScrollKey } from "./chat/pageScrollController";
 import { ContextChip } from "./ContextChip";
@@ -153,11 +162,24 @@ import {
 } from "./composerAttachmentInsertion";
 import type { ComposerDraftContextRecords } from "./composerContextPresentation";
 
+/** The key name the editor reports for the line's back arrow, `←` or, right to left, `→`. */
+export const COMPOSER_MENU_BACK_KEY = "ComposerMenuBack";
+
 export interface ComposerPromptEditorHandle {
   focus: () => void;
   focusAt: (cursor: number) => void;
   focusAtEnd: () => void;
   readSelectionRange: () => { start: number; end: number };
+  /**
+   * Swaps the model chip whose source starts at prompt offset `start` for plain `text`, caret after
+   * it, without rebuilding the document, which would turn an `@` search before a space into a chip.
+   */
+  replaceModelMention: (
+    start: number,
+    source: string,
+    text: string,
+    options: { removeFollowingSpace: boolean },
+  ) => boolean;
   captureAttachmentInsertion: () => ComposerAttachmentInsertion | undefined;
   requestCitationComment: (request: ComposerCitationCommentRequest) => void;
   readSnapshot: () => {
@@ -167,6 +189,8 @@ export interface ComposerPromptEditorHandle {
     contextIds: string[];
   };
   isCaretOnVisualEdge: (edge: "start" | "end") => boolean;
+  /** Opens the URL field under the selection. False in plain text or where a link cannot go. */
+  openLinkEditor: () => boolean;
 }
 
 export interface ComposerPromptEditorProps {
@@ -357,21 +381,76 @@ const ComposerSkillExtension = Node.create({
   },
 });
 
-function ComposerModelNodeView({ node }: NodeViewProps) {
+function ComposerModelNodeView({ node, editor, getPos }: NodeViewProps) {
   const actions = use(ComposerContextActionsContext);
+  const instanceId = String(node.attrs.instanceId);
+  const model = String(node.attrs.model);
+  const effort = (node.attrs.effort as ComposerModelMentionEffort | null) ?? undefined;
+  const { editModelEffort } = actions;
   return (
     <NodeViewWrapper as="span" className={CHIP_NODE_SELECTION_CLASS_NAME}>
       <ModelMentionChip
         environmentId={actions.environmentId}
-        instanceId={String(node.attrs.instanceId)}
-        model={String(node.attrs.model)}
+        instanceId={instanceId}
+        model={model}
+        effort={effort}
         source={String(node.attrs.source)}
+        onEditEffort={
+          editModelEffort && editor.isEditable
+            ? () => {
+                const pos = getPos();
+                if (pos === undefined) return;
+                const source = String(node.attrs.source);
+                // The caret after the chip and its space keeps Enter out of any code block it sat in.
+                const after = pos + node.nodeSize;
+                const { doc } = editor.state;
+                const spaced =
+                  after < doc.content.size && doc.textBetween(after, after + 1) === " "
+                    ? after + 1
+                    : after;
+                editor.chain().focus().setTextSelection(spaced).run();
+                const openedDoc = editor.state.doc;
+                const chipAt = () => {
+                  // A remount, such as a rich-text toggle, leaves this editor behind.
+                  if (editor.isDestroyed) return null;
+                  const current = editor.state.doc.nodeAt(pos);
+                  return current?.type.name === "composer-model" && current.attrs.source === source
+                    ? current
+                    : null;
+                };
+                editModelEffort({
+                  instanceId,
+                  model,
+                  effort: effort ?? null,
+                  // Any edit, Undo, or moving or extending the caret leaves the menu behind.
+                  isCurrent: () =>
+                    !editor.isDestroyed &&
+                    editor.state.doc === openedDoc &&
+                    editor.state.selection.empty &&
+                    editor.state.selection.from === spaced,
+                  // Edits the chip in place, so a chip with no space after it stays a chip.
+                  apply: (nextSource, nextEffort) => {
+                    const current = chipAt();
+                    if (!current) return false;
+                    editor.view.dispatch(
+                      editor.state.tr.setNodeMarkup(pos, undefined, {
+                        ...current.attrs,
+                        effort: nextEffort,
+                        source: nextSource,
+                      }),
+                    );
+                    return true;
+                  },
+                });
+              }
+            : undefined
+        }
       />
     </NodeViewWrapper>
   );
 }
 
-/** `model:<instance>/<model>` from the `@` menu; `source` is the exact prompt text. */
+/** `model:<instance>/<model>[?<option>=<value>]` from the `@` menu; `source` is the exact prompt text. */
 const ComposerModelExtension = Node.create({
   name: "composer-model",
   group: "inline",
@@ -382,6 +461,7 @@ const ComposerModelExtension = Node.create({
     return {
       instanceId: { default: "" },
       model: { default: "" },
+      effort: { default: null },
       source: { default: "" },
     };
   },
@@ -888,6 +968,7 @@ function createComposerExtensions(richText: boolean) {
     ...(richText
       ? [
           ComposerMarkdownSourceExtension,
+          ComposerLinkExtension,
           ComposerItalicExtension,
           ComposerBoldExtension,
           ComposerStrikeExtension,
@@ -1045,6 +1126,9 @@ function ComposerPromptEditorTiptapInner(
   const [openCitation, setOpenCitation] = useState<OpenCitationComment | null>(null);
   const citationDraftRef = useRef<{ key: string; comment: string } | null>(null);
   const [isEmpty, setIsEmpty] = useState(value.length === 0);
+  const [linkEditorOpen, setLinkEditorOpen] = useState(false);
+  // The draft the URL field was opened for; a replaced or read-only draft is not linked.
+  const linkEditorDocRef = useRef<TiptapEditor["state"]["doc"] | null>(null);
 
   const citationCommentActions = {
     openComment: openCitation,
@@ -1179,6 +1263,15 @@ function ComposerPromptEditorTiptapInner(
         handleKeyDown: (view, event) => {
           // In a right-to-left line the start is on the right.
           const backArrow = caretLineDirection(view.state) === "rtl" ? "ArrowRight" : "ArrowLeft";
+          // A menu step, like the `@` menu's effort levels, takes Back before the caret moves.
+          if (
+            event.key === backArrow &&
+            readCallbacks().onCommandKeyDown?.(COMPOSER_MENU_BACK_KEY, event)
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            return true;
+          }
           const boundary = event.metaKey
             ? event.key === "ArrowLeft" || event.key === "ArrowRight"
               ? "lineboundary"
@@ -1519,6 +1612,12 @@ function ComposerPromptEditorTiptapInner(
                     markAsClipboardEdit(tr, "paste");
                     return true;
                   })
+                  // Replace the selection first: parsing shown Markdown can remove selected
+                  // source, like a link's address, and leave the paste beside it.
+                  .command(({ tr }) => {
+                    if (!tr.selection.empty) tr.deleteSelection();
+                    return true;
+                  })
                   // Pasted chips and lines would split shown Markdown, so parse it first.
                   .command(collapseShownMarkdownSource)
                   .insertContent(content)
@@ -1826,6 +1925,30 @@ function ComposerPromptEditorTiptapInner(
         readSnapshot();
         return selectionRangeRef.current;
       },
+      replaceModelMention: (start, source, text, { removeFollowingSpace }) => {
+        if (!editor || editor.isDestroyed) return false;
+        const run = serializeEditorDoc(editor.state.doc).runs.find(
+          (candidate) =>
+            candidate.kind === "token" &&
+            candidate.nodeName === "composer-model" &&
+            candidate.mdStart + candidate.openLen === start,
+        );
+        const node = run ? editor.state.doc.nodeAt(run.pmPos) : null;
+        if (!run || node?.attrs.source !== source) return false;
+        const after = run.pmPos + node.nodeSize;
+        const { doc } = editor.state;
+        const end =
+          removeFollowingSpace &&
+          after < doc.content.size &&
+          doc.textBetween(after, after + 1) === " "
+            ? after + 1
+            : after;
+        const tr = editor.state.tr.replaceWith(run.pmPos, end, editor.schema.text(text));
+        tr.setSelection(TextSelection.create(tr.doc, run.pmPos + text.length));
+        editor.view.dispatch(tr.scrollIntoView());
+        editor.view.focus();
+        return true;
+      },
       captureAttachmentInsertion: () =>
         editor ? captureComposerAttachmentInsertion(editor) : undefined,
       requestCitationComment: (request) => {
@@ -1852,6 +1975,14 @@ function ComposerPromptEditorTiptapInner(
         }
       },
       readSnapshot,
+      openLinkEditor: () => {
+        if (!editor || !richText || !editor.isEditable) return false;
+        if (!canLinkSelection(editor.state)) return false;
+        setPendingLink(editor, linkableRange(editor.state.doc, editor.state.selection));
+        linkEditorDocRef.current = editor.state.doc;
+        setLinkEditorOpen(true);
+        return true;
+      },
       isCaretOnVisualEdge: (edge) => {
         const snapshot = readSnapshot();
         if (snapshot.value.length === 0) return true;
@@ -1883,8 +2014,29 @@ function ComposerPromptEditorTiptapInner(
           : edgeRect.bottom - caretRect.bottom < threshold;
       },
     }),
-    [editor, focusAt, literalText, readSnapshot],
+    [editor, focusAt, literalText, readSnapshot, richText],
   );
+
+  const closeLinkEditor = (restoreSelection: boolean) => {
+    setLinkEditorOpen(false);
+    linkEditorDocRef.current = null;
+    if (!editor || editor.isDestroyed) return;
+    setPendingLink(editor, null);
+    if (restoreSelection) editor.view.focus();
+  };
+  // Read when the field positions itself, so it follows the text as the editor scrolls.
+  const linkEditorAnchor = editor
+    ? {
+        contextElement: editor.view.dom,
+        getBoundingClientRect: () => {
+          const { from, to } = editor.state.selection;
+          const start = editor.view.coordsAtPos(from, 1);
+          const end = editor.view.coordsAtPos(to, -1);
+          const width = start.top === end.top ? Math.max(0, end.left - start.left) : 0;
+          return new DOMRect(start.left, start.top, width, end.bottom - start.top);
+        },
+      }
+    : null;
 
   const handleCopyCut = (event: React.ClipboardEvent, cut: boolean) => {
     const build = buildContextClipboardFragment;
@@ -1967,6 +2119,21 @@ function ComposerPromptEditorTiptapInner(
               onCopyCapture={(event) => handleCopyCut(event, false)}
               onCutCapture={(event) => handleCopyCut(event, true)}
             />
+            {linkEditorOpen && editor && linkEditorAnchor ? (
+              <ComposerLinkEditor
+                anchor={linkEditorAnchor}
+                onApply={(href) => {
+                  if (!editor.isEditable || editor.state.doc !== linkEditorDocRef.current) {
+                    closeLinkEditor(false);
+                    return true;
+                  }
+                  if (!applyComposerLink(editor, href)) return false;
+                  closeLinkEditor(false);
+                  return true;
+                }}
+                onClose={closeLinkEditor}
+              />
+            ) : null}
             {isEmpty && contextRecords.size === 0 && placeholder ? (
               <div
                 className={cn(

@@ -1,4 +1,7 @@
-import { collectComposerModelMentions } from "@t3tools/client-runtime/composer-model-mentions";
+import {
+  collectComposerModelMentions,
+  type ComposerModelMentionEffort,
+} from "@t3tools/client-runtime/composer-model-mentions";
 import type { AssistantCitation } from "@t3tools/contracts";
 import { collectAssistantCitations } from "@t3tools/shared/assistantCitations";
 import { collectComposerContextReferences } from "@t3tools/shared/composerContextReferences";
@@ -27,6 +30,7 @@ export type ComposerPromptSegment =
       type: "model";
       instanceId: string;
       model: string;
+      effort?: ComposerModelMentionEffort | undefined;
       source: string;
     }
   | {
@@ -159,6 +163,7 @@ function splitPromptTextIntoComposerSegments(text: string): ComposerPromptSegmen
         type: "model",
         instanceId: match.instanceId,
         model: match.model,
+        effort: match.effort,
         source: match.source,
       });
     } else {

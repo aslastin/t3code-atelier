@@ -945,6 +945,7 @@ function ThreadRouteContent(
       composer.selectedThreadActivityRun?.status === "preparing" ||
       selectedThread?.runtime?.status === "preparing" ||
       selectedThread?.worktreePath != null ||
+      selectedThreadDetail?.runs.length === 0 ||
       (selectedThreadCreation?.message.creation?.workspaceMode === "worktree" &&
         selectedThreadCreation.outcome == null),
     runs: selectedThreadDetail?.runs ?? [],
@@ -1168,6 +1169,7 @@ function ThreadRouteContent(
           worktreeSetup={
             worktreeSetup
               ? {
+                  environmentId: selectedThread.environmentId,
                   snapshot: worktreeSetup,
                   turnStarted: setupTurnStartedAt !== null,
                   onCancel: handleCancelWorktreeSetup,
