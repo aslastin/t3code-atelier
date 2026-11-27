@@ -45,9 +45,12 @@ const sameContents = (a, b) => {
     return true;
   }
 };
-// The mode Kite recorded for the base copy, as Git's 100755.
-const executable = (file) =>
-  (fs.statSync(path.join(kite, "base", file)).mode & 0o111) !== 0 ? { executable: true } : {};
+// The mode Kite recorded for the base copy, as Git's 100755 or 120000.
+const executable = (file) => {
+  const target = path.join(kite, "base", file);
+  if (fs.lstatSync(target).isSymbolicLink()) return { symlink: true };
+  return (fs.statSync(target).mode & 0o111) !== 0 ? { executable: true } : {};
+};
 const changes = () => {
   const base = path.join(kite, "base");
   const baseFiles = new Set(walk(base));
@@ -216,6 +219,9 @@ switch (command) {
     out({ patch: patch(snapshotDir(from), snapshotDir(to)) });
     break;
   }
+  case "snapshot-drop":
+    fs.rmSync(snapshotDir(args[0]), { recursive: true, force: true });
+    break;
   case "snapshot-restore": {
     const [revision] = args;
     for (const file of walk(root)) fs.rmSync(path.join(root, file));
@@ -267,7 +273,9 @@ switch (command) {
     const [revision, file] = args;
     const target = path.join(kite, "base", file);
     if (revision !== baseRevision() || !fs.existsSync(target)) fail("no such file");
-    process.stdout.write(fs.readFileSync(target));
+    process.stdout.write(
+      fs.lstatSync(target).isSymbolicLink() ? fs.readlinkSync(target) : fs.readFileSync(target),
+    );
     break;
   }
   default:
@@ -323,6 +331,7 @@ export function writeFakeVcsPlugin(directory: string, options: FakeVcsPluginOpti
           checkpointCapture: [kite, "snapshot"],
           checkpointDiff: [kite, "snapshot-diff", "{fromRevision}", "{toRevision}"],
           checkpointRestore: [kite, "snapshot-restore", "{revision}"],
+          checkpointDelete: [kite, "snapshot-drop", "{revision}"],
           changedFiles: [kite, "changed"],
           readFile: [kite, "show", "{revision}", "{path}"],
         },

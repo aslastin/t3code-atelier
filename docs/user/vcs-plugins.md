@@ -104,8 +104,8 @@ Every command except `readFile` prints one JSON object on stdout. Optional field
 | `checkpointDiff`    | `{fromRevision}`, `{toRevision}`  | `{ "patch" }`, a Git-format patch. Must fail when either revision cannot be read.                                                                                                       |
 | `checkpointRestore` | `{revision}`                      | Anything.                                                                                                                                                                               |
 | `checkpointDelete`  | `{revision}`                      | Anything. Optional.                                                                                                                                                                     |
-| `changedFiles`      |                                   | `{ "revision", "files": [{ "path", "status": "modified" \| "added" \| "deleted", "executable"? }] }`. Mark a file `executable` at `revision`, so a restored copy keeps the bit.         |
-| `readFile`          | `{revision}`, `{path}`            | The file's bytes. Exit with a non-zero code when the file does not exist at that revision.                                                                                              |
+| `changedFiles`      |                                   | `{ "revision", "files": [{ "path", "status": "modified" \| "added" \| "deleted", "executable"?, "symlink"? }] }`; both flags are as at `revision`.                                      |
+| `readFile`          | `{revision}`, `{path}`            | The file's bytes, or a link's target. Exit with a non-zero code when it does not exist at that revision.                                                                                |
 
 Paths are relative to the repository root and use `/`. With `capabilities.worktrees`,
 `worktreeCreate`, `worktreeRemove` and `worktreeList` are required, and **New worktree** is offered for the
@@ -152,7 +152,11 @@ a new thread starts from the top of the list again.
   snapshots can be compared only when `changedFiles` reported the same `revision` for both.
 - `full` copies the whole thread folder into that Git repository. It reads every file, so on a
   network or FUSE mount it downloads the whole folder. Only list it if that is acceptable. A Git
-  repository inside the folder is kept as its commit alone, so a rollback never removes it.
+  repository inside the folder is kept as its commit alone.
+
+With `changed-files` and `full`, a rollback never removes a repository inside the folder. If it
+would have to write a file where a folder holding one now stands, it is refused before anything
+changes.
 
 If no listed strategy works, the turn has no checkpoint. Its changes cannot be shown or rolled
 back, and the conversation says why.

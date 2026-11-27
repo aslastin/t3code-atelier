@@ -187,6 +187,8 @@ export const VcsPluginChangedFilesOutput = Schema.Struct({
       status: VcsPluginChangedFileStatus,
       /** The file at `revision` is executable, so a restored copy is too. */
       executable: Schema.optionalKey(Schema.Boolean),
+      /** The path at `revision` is a symbolic link, and `readFile` prints its target. */
+      symlink: Schema.optionalKey(Schema.Boolean),
     }),
   ),
 });

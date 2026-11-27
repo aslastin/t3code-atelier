@@ -347,7 +347,7 @@ describe("ManifestVcsDriver", () => {
 
   it.live("captures, diffs and restores native snapshots", () =>
     Effect.gen(function* () {
-      const { driver, repository } = yield* setup({ checkpoints: ["native"] });
+      const { driver, repository, sql } = yield* setup({ checkpoints: ["native"] });
       const checkpoints = driver!.checkpoints;
       yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
       NodeFS.writeFileSync(`${repository}/a.txt`, "edited\n");
@@ -395,6 +395,27 @@ describe("ManifestVcsDriver", () => {
         format: "numstat",
       });
       assert.strictEqual(quoted, "1\t0\tcafé.txt\0");
+
+      // A snapshot the plugin gave two checkpoints stays until the last of them is deleted.
+      const [shared] = yield* sql<{ readonly revision: string }>`
+        SELECT revision FROM atelier_vcs_plugin_checkpoint_records
+        WHERE checkpoint_ref = ${ref("2")}
+      `;
+      yield* sql`
+        INSERT INTO atelier_vcs_plugin_checkpoint_records
+          (repository_root, checkpoint_ref, plugin_id, strategy, revision, created_at)
+        SELECT repository_root, ${ref("2-again")}, plugin_id, strategy, revision, created_at
+        FROM atelier_vcs_plugin_checkpoint_records WHERE checkpoint_ref = ${ref("2")}
+      `;
+      yield* checkpoints.deleteCheckpointRefs({ cwd: repository, checkpointRefs: [ref("2")] });
+      assert.isTrue(
+        yield* checkpoints.verifyRestorable!({ cwd: repository, checkpointRef: ref("2-again") }),
+      );
+      yield* checkpoints.deleteCheckpointRefs({
+        cwd: repository,
+        checkpointRefs: [ref("2-again")],
+      });
+      assert.isFalse(NodeFS.existsSync(`${repository}/.kite/snapshots/${shared!.revision}`));
 
       assert.isTrue(
         yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("0") }),
@@ -621,6 +642,18 @@ describe("ManifestVcsDriver", () => {
       assert.isFalse(
         yield* checkpoints.hasCheckpointRef({ cwd: repository, checkpointRef: ref("0") }),
       );
+
+      // A link the VCS tracks comes back as a link, not a copy of what it points to.
+      NodeFS.rmSync(`${repository}/.kite/broken-show`);
+      NodeFS.writeFileSync(`${repository}/a.txt`, "one\n");
+      for (const copy of [`${repository}/.kite/base/alias`, `${repository}/alias`])
+        NodeFS.symlinkSync("sub/b.txt", copy);
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("1") });
+      NodeFS.rmSync(`${repository}/alias`);
+      assert.isTrue(
+        yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("1") }),
+      );
+      assert.strictEqual(NodeFS.readlinkSync(`${repository}/alias`), "sub/b.txt");
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
@@ -656,6 +689,14 @@ describe("ManifestVcsDriver", () => {
       });
       assert.isFalse(NodeFS.existsSync(`${repository}/generated/own.txt`));
       assert.isTrue(NodeFS.existsSync(`${repository}/generated/nested/keep.txt`));
+      // A repository made in an added folder keeps its files and history.
+      NodeFS.mkdirSync(`${repository}/generated/clone/.git`, { recursive: true });
+      NodeFS.writeFileSync(`${repository}/generated/clone/.git/HEAD`, "ref: refs/heads/main\n");
+      NodeFS.writeFileSync(`${repository}/generated/clone/work.txt`, "work\n");
+      yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("0") });
+      assert.isTrue(NodeFS.existsSync(`${repository}/generated/clone/.git/HEAD`));
+      assert.isTrue(NodeFS.existsSync(`${repository}/generated/clone/work.txt`));
+      NodeFS.rmSync(`${repository}/generated`, { recursive: true });
 
       // Exclusions are relative to the scope's folder.
       yield* checkpoints.captureCheckpoint({ cwd: `${repository}/sub`, checkpointRef: ref("2") });
@@ -712,16 +753,29 @@ describe("ManifestVcsDriver", () => {
       NodeFS.rmSync(`${repository}/bundle`);
       NodeFS.mkdirSync(`${repository}/bundle/child`, { recursive: true });
       NodeFS.writeFileSync(`${repository}/bundle/child/theirs.txt`, "theirs\n");
-      yield* checkpoints
-        .restoreCheckpoint({
-          cwd: repository,
-          checkpointRef: ref("5"),
-          excludePaths: ["bundle/child"],
-        })
-        .pipe(Effect.flip);
+      const aroundChild = {
+        cwd: repository,
+        checkpointRef: ref("5"),
+        excludePaths: ["bundle/child"],
+      };
+      // A rollback learns that before it rewinds the conversation.
+      assert.isFalse(yield* checkpoints.verifyRestorable!(aroundChild));
+      yield* checkpoints.restoreCheckpoint(aroundChild).pipe(Effect.flip);
       assert.isTrue(NodeFS.existsSync(`${repository}/bundle/child/theirs.txt`));
       NodeFS.rmSync(`${repository}/bundle`, { recursive: true });
       NodeFS.rmSync(`${repository}/.kite/base/bundle`);
+
+      // Nor is a file the checkpoint saved checked out over a folder holding a repository.
+      NodeFS.writeFileSync(`${repository}/bundle`, "saved\n");
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("5b") });
+      NodeFS.rmSync(`${repository}/bundle`);
+      NodeFS.mkdirSync(`${repository}/bundle/child/.git`, { recursive: true });
+      NodeFS.writeFileSync(`${repository}/bundle/child/work.txt`, "work\n");
+      const overRepository = { cwd: repository, checkpointRef: ref("5b") };
+      assert.isFalse(yield* checkpoints.verifyRestorable!(overRepository));
+      yield* checkpoints.restoreCheckpoint(overRepository).pipe(Effect.flip);
+      assert.isTrue(NodeFS.existsSync(`${repository}/bundle/child/work.txt`));
+      NodeFS.rmSync(`${repository}/bundle`, { recursive: true });
 
       // A project in a new folder: the plugin names only the folder around it.
       NodeFS.mkdirSync(`${repository}/fresh/app`, { recursive: true });
@@ -764,7 +818,7 @@ describe("ManifestVcsDriver", () => {
 
   it.live("full stages the whole folder, but never the VCS's own metadata", () =>
     Effect.gen(function* () {
-      const { driver, repository, sql } = yield* setup({ checkpoints: ["full"] });
+      const { driver, repository, sql, home } = yield* setup({ checkpoints: ["full"] });
       const checkpoints = driver!.checkpoints;
       yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
       NodeFS.writeFileSync(`${repository}/a.txt`, "edited\n");
@@ -817,6 +871,21 @@ describe("ManifestVcsDriver", () => {
       assert.isTrue(NodeFS.existsSync(`${tool}/.git/HEAD`));
       NodeFS.rmSync(`${repository}/vendor`, { recursive: true });
 
+      // Nor is one inside a folder that stands where the snapshot has a file.
+      NodeFS.writeFileSync(`${repository}/bundle`, "saved\n");
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("4") });
+      NodeFS.rmSync(`${repository}/bundle`);
+      NodeFS.mkdirSync(`${repository}/bundle/child`, { recursive: true });
+      NodeChildProcess.execFileSync("git", ["init", "-q"], { cwd: `${repository}/bundle/child` });
+      NodeFS.writeFileSync(`${repository}/bundle/child/work.txt`, "work\n");
+      for (const excludePaths of [[], ["bundle/child"]]) {
+        const restore = { cwd: repository, checkpointRef: ref("4"), excludePaths };
+        assert.isFalse(yield* checkpoints.verifyRestorable!(restore));
+        yield* checkpoints.restoreCheckpoint(restore).pipe(Effect.flip);
+        assert.isTrue(NodeFS.existsSync(`${repository}/bundle/child/work.txt`));
+      }
+      NodeFS.rmSync(`${repository}/bundle`, { recursive: true });
+
       // A folder that has its own checkpoints now keeps its files, though this snapshot has them.
       NodeFS.writeFileSync(`${repository}/sub/b.txt`, "changed\n");
       yield* checkpoints.restoreCheckpoint({
@@ -835,13 +904,28 @@ describe("ManifestVcsDriver", () => {
       const owned = yield* recorded;
       assert.sameMembers(
         owned.map((record) => record.checkpointRef),
-        ["0", "1", "2", "3"].map(ref),
+        ["0", "1", "2", "3", "4"].map(ref),
+      );
+      // Even after cleanup removed the checkout itself.
+      NodeFS.renameSync(repository, `${repository}-gone`);
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => NodeFS.renameSync(`${repository}-gone`, repository)),
       );
       yield* checkpoints.deleteCheckpointRefs({
-        cwd: repository,
+        cwd: owned[0]!.repositoryRoot,
         checkpointRefs: owned.map((record) => CheckpointRef.make(record.checkpointRef)),
       });
       assert.isEmpty(yield* recorded);
+      const shadows = NodeFS.readdirSync(`${home}`, { recursive: true })
+        .map(String)
+        .filter((entry) => /vcs-plugin-checkpoints[\\/][^\\/]+\.git$/.test(entry));
+      assert.lengthOf(shadows, 1);
+      const refs = NodeChildProcess.execFileSync(
+        "git",
+        [`--git-dir=${home}/${shadows[0]}`, "for-each-ref", "refs/t3/"],
+        { encoding: "utf8" },
+      );
+      assert.strictEqual(refs, "");
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 });

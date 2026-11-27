@@ -75,6 +75,7 @@ interface ChangedFile {
   readonly path: string;
   readonly status: VcsPluginChangedFileStatus;
   readonly executable?: boolean;
+  readonly symlink?: boolean;
 }
 
 interface CheckpointRecord {
@@ -170,17 +171,19 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       location.scope === "" ? exclude : `${location.scope}/${exclude}`,
     );
 
+  // Per plugin too: another plugin for the same folder keeps its own shadow refs.
+  const shadowOf = (realRoot: string) =>
+    path.join(
+      shadowRoot,
+      `${NodeCrypto.createHash("sha256").update(`${kind}\0${realRoot}`).digest("hex").slice(0, 24)}.git`,
+    );
+
   const locate = Effect.fn("pluginCheckpoints.locate")(function* (cwd: string) {
     const root = yield* context.repositoryRoot(cwd);
     const realRoot = yield* fs.realPath(root).pipe(Effect.orElseSucceed(() => root));
     const realCwd = yield* fs.realPath(cwd).pipe(Effect.orElseSucceed(() => cwd));
     const scope = path.relative(realRoot, realCwd).split(path.sep).join("/");
-    // Per plugin too: another plugin for the same folder keeps its own shadow refs.
-    const key = NodeCrypto.createHash("sha256")
-      .update(`${kind}\0${realRoot}`)
-      .digest("hex")
-      .slice(0, 24);
-    return { root: realRoot, scope, shadow: path.join(shadowRoot, `${key}.git`) } as Location;
+    return { root: realRoot, scope, shadow: shadowOf(realRoot) } as Location;
   });
 
   // Plain Git against a bare repository under T3 home, with the plugin's repository as work tree.
@@ -192,12 +195,14 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       readonly stdin?: string;
       readonly maxOutputBytes?: number;
       readonly truncate?: boolean;
+      /** For a ref change after the checkout is gone. */
+      readonly cwd?: string;
     },
   ) {
     const result = yield* vcsProcess.run({
       operation: "pluginCheckpoints.git",
       command: "git",
-      cwd: location.root,
+      cwd: options?.cwd ?? location.root,
       args: [
         `--git-dir=${location.shadow}`,
         `--work-tree=${location.root}`,
@@ -585,7 +590,8 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
               "diffCheckpoints",
               `${runner.label} could not read ${file.path} at its base revision.`,
             );
-          const mode = file.executable === true ? "100755" : "100644";
+          const mode =
+            file.symlink === true ? "120000" : file.executable === true ? "100755" : "100644";
           entries.push(`${mode} ${yield* writeBlob(location, bytes)}\t${file.path}`);
         }
         if (entries.length > 0)
@@ -683,17 +689,23 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         ).pipe(Effect.asVoid);
 
   // A folder on the way that became a link would take the change outside the checkout.
-  const refuseLinkedParent = Effect.fnUntraced(function* (location: Location, file: string) {
+  const linkedParentProblem = Effect.fnUntraced(function* (location: Location, file: string) {
     const parts = file.split("/");
     for (let index = 1; index < parts.length; index++) {
       const parent = parts.slice(0, index).join("/");
       if (Option.isSome(yield* fs.readLink(path.join(location.root, parent)).pipe(Effect.option)))
-        return yield* unsupported(
-          "restoreCheckpoint",
-          `${parent} is now a symbolic link, so ${file} cannot be restored safely.`,
-        );
+        return `${parent} is now a symbolic link, so ${file} cannot be restored safely.`;
     }
+    return undefined;
   });
+  const refuseLinkedParent = (location: Location, file: string) =>
+    linkedParentProblem(location, file).pipe(
+      Effect.flatMap((problem) =>
+        problem === undefined
+          ? Effect.void
+          : Effect.fail(unsupported("restoreCheckpoint", problem)),
+      ),
+    );
 
   const removePath = (location: Location, file: string) =>
     refuseLinkedParent(location, file).pipe(
@@ -704,17 +716,134 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       ),
     );
 
-  // Removes `file`, but never a nested scope's files below it.
+  const repositoryFolders = new Set([".git", ...context.metadataFolders]);
+  /**
+   * Repositories inside `folder`, repository-relative, `folder` itself included; null when the
+   * folder cannot be read. Their files and history were never saved, so a restore keeps them.
+   */
+  const nestedRepositories = Effect.fnUntraced(function* (location: Location, folder: string) {
+    const absolute = path.join(location.root, folder);
+    if (Option.isSome(yield* fs.readLink(absolute).pipe(Effect.option))) return [];
+    const info = yield* fs.stat(absolute).pipe(Effect.option);
+    if (Option.isNone(info) || info.value.type !== "Directory") return [];
+    const entries = yield* fs
+      .readDirectory(absolute, { recursive: true })
+      .pipe(Effect.orElseSucceed(() => null));
+    if (entries === null) return null;
+    const roots = new Set<string>();
+    for (const entry of entries) {
+      const parts = entry.split(path.sep);
+      const at = parts.findIndex((part) => repositoryFolders.has(part));
+      if (at !== -1) roots.add([folder, ...parts.slice(0, at)].join("/"));
+    }
+    return [...roots];
+  });
+
+  // Checked before anything changes. Writing a file where a folder now is removes the folder,
+  // with all it holds.
+  const restoreProblem = Effect.fnUntraced(function* (
+    location: Location,
+    change: { readonly write: ReadonlyArray<string>; readonly remove: ReadonlyArray<string> },
+    excludes: ReadonlyArray<string>,
+  ) {
+    for (const file of [...change.write, ...change.remove]) {
+      const problem = yield* linkedParentProblem(location, file);
+      if (problem !== undefined) return problem;
+    }
+    for (const file of change.write) {
+      if (excludes.some((exclude) => exclude.startsWith(`${file}/`)))
+        return `${file} is now a folder holding a nested folder with its own checkpoints, so its file cannot be restored.`;
+      const nested = yield* nestedRepositories(location, file);
+      if (nested === null)
+        return `${file} is now a folder that cannot be read, so its file cannot be restored.`;
+      if (nested.length > 0)
+        return `${file} is now a folder holding a repository of its own, so its file cannot be restored.`;
+    }
+    return undefined;
+  });
+
+  // Removes `file`, but never a nested scope's files or a repository below it.
   const removeKeeping = Effect.fnUntraced(function* (
     location: Location,
     file: string,
     excludes: ReadonlyArray<string>,
   ) {
-    if (!excludes.some((exclude) => exclude.startsWith(`${file}/`)))
+    const nested = yield* nestedRepositories(location, file);
+    if (nested === null || nested.includes(file)) return;
+    const kept = [...excludes, ...nested];
+    if (!kept.some((exclude) => exclude.startsWith(`${file}/`)))
       return yield* removePath(location, file);
     for (const entry of yield* listFiles(location, file)) {
-      if (inScope(entry, "", excludes)) yield* removePath(location, entry);
+      if (inScope(entry, "", kept)) yield* removePath(location, entry);
     }
+  });
+
+  /** What a `full` restore changes: paths to remove, and paths to check out from the target. */
+  const fullPlan = Effect.fn("pluginCheckpoints.fullPlan")(function* (
+    location: Location,
+    target: CheckpointRecord,
+    excludes: ReadonlyArray<string>,
+  ) {
+    const current = yield* withIndex(location, (index) =>
+      stageFull(location, index, excludes).pipe(Effect.andThen(commitIndex(location, index))),
+    );
+    const changes = yield* git(location, [
+      "diff-tree",
+      "-r",
+      "-z",
+      "--no-renames",
+      current,
+      target.revision,
+    ]);
+    const parts = changes.split("\0").filter((part) => part.length > 0);
+    const remove: string[] = [];
+    const write: string[] = [];
+    for (let index = 0; index + 1 < parts.length; index += 2) {
+      // ":<old mode> <new mode> <old id> <new id> <status>", then the path.
+      const [oldMode, newMode, , , status] = parts[index]!.slice(1).split(" ");
+      const file = parts[index + 1]!;
+      // A nested scope's files stay its own, even where the older snapshot still has them.
+      if (!inScope(file, location.scope, excludes)) continue;
+      // A repository inside is staged as its commit alone; its files and history were never
+      // saved, so it is never removed or replaced.
+      if (oldMode === GITLINK_MODE || newMode === GITLINK_MODE) continue;
+      if (status === "D") remove.push(file);
+      else write.push(file);
+    }
+    return { remove, write };
+  });
+
+  /** What a `changed-files` restore changes, or why it cannot. */
+  const changedFilesPlan = Effect.fn("pluginCheckpoints.changedFilesPlan")(function* (
+    location: Location,
+    cwd: string,
+    target: CheckpointRecord,
+    excludes: ReadonlyArray<string>,
+  ) {
+    const current = yield* changedFiles(location, cwd, excludes);
+    if (current.revision !== target.baseRevision)
+      return {
+        problem: `The ${runner.label} revision changed since this checkpoint, so its files cannot be restored.`,
+      } as const;
+    const kept = (file: string) => inScope(file, location.scope, excludes);
+    const overlay = (yield* listTreeFiles(location, target.revision)).filter(kept);
+    const targetFiles = (target.files ?? []).filter((file) => kept(file.path));
+    const targetPaths = new Set(targetFiles.map((file) => file.path));
+    // Paths the checkpoint left at their base state that changed since.
+    const reverted = current.files.filter((file) => !targetPaths.has(file.path));
+    const baseFiles = reverted.filter((file) => file.status !== "added");
+    const problem = yield* restoreProblem(
+      location,
+      {
+        write: [...baseFiles.map((file) => file.path), ...overlay],
+        remove: [
+          ...targetFiles.filter((file) => file.status === "deleted"),
+          ...reverted.filter((file) => file.status === "added"),
+        ].map((file) => file.path),
+      },
+      excludes,
+    );
+    return { problem, current, overlay, targetFiles, targetPaths, reverted, baseFiles } as const;
   });
 
   const restoreCheckpoint: VcsCheckpointOps["restoreCheckpoint"] = Effect.fn(
@@ -744,63 +873,18 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       return true;
     }
     if (target.strategy === "full") {
-      const current = yield* withIndex(location, (index) =>
-        stageFull(location, index, excludes).pipe(Effect.andThen(commitIndex(location, index))),
-      );
-      const changes = yield* git(location, [
-        "diff-tree",
-        "-r",
-        "-z",
-        "--no-renames",
-        current,
-        target.revision,
-      ]);
-      const parts = changes.split("\0").filter((part) => part.length > 0);
-      const write: string[] = [];
-      for (let index = 0; index + 1 < parts.length; index += 2) {
-        // ":<old mode> <new mode> <old id> <new id> <status>", then the path.
-        const [oldMode, newMode, , , status] = parts[index]!.slice(1).split(" ");
-        const file = parts[index + 1]!;
-        // A nested scope's files stay its own, even where the older snapshot still has them.
-        if (!inScope(file, location.scope, excludes)) continue;
-        // A repository inside is staged as its commit alone; its files and history were never
-        // saved, so it is never removed or replaced.
-        if (oldMode === GITLINK_MODE || newMode === GITLINK_MODE) continue;
-        if (status === "D") yield* removePath(location, file);
-        else write.push(file);
-      }
-      yield* checkoutFrom(location, target.revision, write);
+      const plan = yield* fullPlan(location, target, excludes);
+      const problem = yield* restoreProblem(location, plan, excludes);
+      if (problem !== undefined) return yield* unsupported("restoreCheckpoint", problem);
+      for (const file of plan.remove) yield* removePath(location, file);
+      yield* checkoutFrom(location, target.revision, plan.write);
       return true;
     }
-    const current = yield* changedFiles(location, input.cwd, excludes);
-    if (current.revision !== target.baseRevision)
-      return yield* unsupported(
-        "restoreCheckpoint",
-        `The ${runner.label} revision changed since this checkpoint, so its files cannot be restored.`,
-      );
-    const kept = (file: string) => inScope(file, location.scope, excludes);
-    const overlay = (yield* listTreeFiles(location, target.revision)).filter(kept);
-    const overlaySet = new Set(overlay);
-    const targetFiles = (target.files ?? []).filter((file) => kept(file.path));
-    const targetPaths = new Set(targetFiles.map((file) => file.path));
-    for (const file of targetFiles) {
-      if (file.status === "deleted") yield* removeKeeping(location, file.path, excludes);
-    }
-    for (const file of current.files) {
-      if (targetPaths.has(file.path)) {
-        // A folder the checkpoint added may have gained files since.
-        if (file.status === "added") {
-          for (const extra of yield* listFiles(location, file.path)) {
-            if (!overlaySet.has(extra) && kept(extra)) yield* removePath(location, extra);
-          }
-        }
-        continue;
-      }
-      // The checkpoint left this path at its base state.
-      if (file.status === "added") {
-        yield* removeKeeping(location, file.path, excludes);
-        continue;
-      }
+    const plan = yield* changedFilesPlan(location, input.cwd, target, excludes);
+    if (plan.problem !== undefined) return yield* unsupported("restoreCheckpoint", plan.problem);
+    // Every base file reads back before anything is changed.
+    const baseBytes = new Map<string, Uint8Array>();
+    for (const file of plan.baseFiles) {
       const bytes = yield* readBaseFile(location, input.cwd, target.baseRevision!, file.path);
       // A modified or deleted path existed at its base, so no answer is a failed read.
       if (bytes === null)
@@ -808,42 +892,59 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           "restoreCheckpoint",
           `${runner.label} could not read ${file.path} at its base revision.`,
         );
-      yield* refuseLinkedParent(location, file.path);
-      if (excludes.some((exclude) => exclude.startsWith(`${file.path}/`)))
-        return yield* unsupported(
-          "restoreCheckpoint",
-          `${file.path} is now a folder holding a nested folder with its own checkpoints, so its file cannot be restored.`,
-        );
+      baseBytes.set(file.path, bytes);
+    }
+    const overlaySet = new Set(plan.overlay);
+    for (const file of plan.targetFiles) {
+      if (file.status === "deleted") yield* removeKeeping(location, file.path, excludes);
+    }
+    for (const file of plan.current.files) {
+      // A folder the checkpoint added may have gained files since.
+      if (plan.targetPaths.has(file.path) && file.status === "added") {
+        const nested = (yield* nestedRepositories(location, file.path)) ?? [file.path];
+        for (const extra of yield* listFiles(location, file.path)) {
+          if (!overlaySet.has(extra) && inScope(extra, location.scope, [...excludes, ...nested]))
+            yield* removePath(location, extra);
+        }
+      }
+    }
+    for (const file of plan.reverted) {
+      if (file.status === "added") yield* removeKeeping(location, file.path, excludes);
+    }
+    for (const file of plan.baseFiles) {
       const destination = path.join(location.root, file.path);
+      const bytes = baseBytes.get(file.path)!;
       // Replaced, not written through: the path may now be a link to another file. A regular
       // file keeps its mode, such as the executable bit.
       const previous = yield* fs.stat(destination).pipe(Effect.option);
       const isLink = Option.isSome(yield* fs.readLink(destination).pipe(Effect.option));
       yield* removePath(location, file.path);
       yield* fs.makeDirectory(path.dirname(destination), { recursive: true }).pipe(
-        Effect.andThen(fs.writeFile(destination, bytes)),
         Effect.andThen(
-          fs.stat(destination).pipe(
-            Effect.flatMap((info) => {
-              // The mode the VCS recorded wins; without one, the file keeps the mode it had.
-              const kept =
-                Option.isSome(previous) && !isLink && previous.value.type === "File"
-                  ? previous.value.mode
-                  : info.mode;
-              const mode =
-                file.executable === true
-                  ? kept | 0o111
-                  : file.executable === false
-                    ? kept & ~0o111
-                    : kept;
-              return mode === info.mode ? Effect.void : fs.chmod(destination, mode);
-            }),
-          ),
+          file.symlink === true
+            ? fs.symlink(new TextDecoder().decode(bytes), destination)
+            : fs.writeFile(destination, bytes).pipe(
+                Effect.andThen(fs.stat(destination)),
+                Effect.flatMap((info) => {
+                  // The mode the VCS recorded wins; without one, the file keeps the mode it had.
+                  const kept =
+                    Option.isSome(previous) && !isLink && previous.value.type === "File"
+                      ? previous.value.mode
+                      : info.mode;
+                  const mode =
+                    file.executable === true
+                      ? kept | 0o111
+                      : file.executable === false
+                        ? kept & ~0o111
+                        : kept;
+                  return mode === info.mode ? Effect.void : fs.chmod(destination, mode);
+                }),
+              ),
         ),
         Effect.mapError(storageError("pluginCheckpoints.restore", location.root)),
       );
     }
-    yield* checkoutFrom(location, target.revision, overlay);
+    yield* checkoutFrom(location, target.revision, plan.overlay);
     return true;
   });
 
@@ -907,14 +1008,18 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       Effect.as(true),
       Effect.orElseSucceed(() => false),
     );
-    if (!stored || record.strategy === "full") return stored;
+    if (!stored) return false;
+    // The same refusals as the restore, before the conversation is rewound.
+    if (record.strategy === "full") {
+      const plan = yield* fullPlan(location, record, excludes).pipe(Effect.option);
+      if (Option.isNone(plan)) return false;
+      return (yield* restoreProblem(location, plan.value, excludes)) === undefined;
+    }
     // Changed-files files restore only onto the base revision they were taken from, and the
     // paths left at their base must still read back from the plugin.
-    const current = yield* changedFiles(location, input.cwd, excludes).pipe(Effect.option);
-    if (Option.isNone(current) || current.value.revision !== record.baseRevision) return false;
-    const recorded = new Set((record.files ?? []).map((file) => file.path));
-    for (const file of current.value.files) {
-      if (recorded.has(file.path) || file.status === "added") continue;
+    const plan = yield* changedFilesPlan(location, input.cwd, record, excludes).pipe(Effect.option);
+    if (Option.isNone(plan) || plan.value.problem !== undefined) return false;
+    for (const file of plan.value.baseFiles) {
       const bytes = yield* readBaseFile(location, input.cwd, record.baseRevision!, file.path).pipe(
         Effect.orElseSucceed(() => null),
       );
@@ -926,12 +1031,27 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
   const deleteCheckpointRefs: VcsCheckpointOps["deleteCheckpointRefs"] = Effect.fn(
     "pluginCheckpoints.deleteCheckpointRefs",
   )(function* (input) {
-    const location = yield* locate(input.cwd);
+    // A checkout removed since keeps its records under the root it had, which cleanup passes.
+    const gone = !(yield* fs.exists(input.cwd).pipe(Effect.orElseSucceed(() => true)));
+    const location: Location = gone
+      ? { root: input.cwd, scope: "", shadow: shadowOf(input.cwd) }
+      : yield* locate(input.cwd);
     for (const checkpointRef of input.checkpointRefs) {
       const record = yield* readRecord(location, checkpointRef);
       if (record === null) continue;
       if (record.strategy === "native") {
-        if (runner.has("checkpointDelete"))
+        // Identical content can come back as the same snapshot for another checkpoint; the
+        // plugin cannot run in a folder that is gone.
+        const shared = yield* sql`
+          SELECT 1 FROM atelier_vcs_plugin_checkpoint_records
+          WHERE repository_root = ${location.root} AND plugin_id = ${kind}
+            AND strategy = 'native' AND revision = ${record.revision}
+            AND checkpoint_ref != ${checkpointRef}
+          LIMIT 1
+        `.pipe(
+          Effect.mapError(storageError("pluginCheckpoints.deleteCheckpointRefs", location.root)),
+        );
+        if (shared.length === 0 && !gone && runner.has("checkpointDelete"))
           yield* runner
             .run("checkpointDelete", {
               cwd: input.cwd,
@@ -939,7 +1059,11 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
             })
             .pipe(Effect.ignore);
       } else {
-        yield* git(location, ["update-ref", "-d", checkpointRef]).pipe(Effect.ignore);
+        yield* git(
+          location,
+          ["update-ref", "-d", checkpointRef],
+          gone ? { cwd: shadowRoot } : {},
+        ).pipe(Effect.ignore);
       }
       yield* sql`
         DELETE FROM atelier_vcs_plugin_checkpoint_records
