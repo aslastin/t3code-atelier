@@ -174,11 +174,14 @@ export const makePluginCommandRunner = Effect.fn("pluginCommandRunner.make")(fun
   const runJson: PluginCommandRunner["runJson"] = (command, schema, options) =>
     run(command, options).pipe(
       Effect.flatMap((output) =>
-        Schema.decodeEffect(Schema.fromJsonString(schema))(
-          options.anyOutput === true && !output.stdout.trimStart().startsWith("{")
-            ? "{}"
-            : output.stdout,
-        ).pipe(
+        Schema.decodeEffect(Schema.fromJsonString(schema))(output.stdout).pipe(
+          Effect.catchTags({
+            // The command already succeeded; output that is not the optional JSON says nothing.
+            SchemaError: (error) =>
+              options.anyOutput === true
+                ? Schema.decodeEffect(Schema.fromJsonString(schema))("{}")
+                : Effect.fail(error),
+          }),
           Effect.catchTags({
             SchemaError: (error) => {
               const detail = output.stdout.trim() === "" ? "stdout was empty" : error.message;

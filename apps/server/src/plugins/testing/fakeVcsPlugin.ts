@@ -259,7 +259,7 @@ switch (command) {
     fs.appendFileSync(log, message.split("\n")[0] + "\n");
     const count = fs.readFileSync(log, "utf8").split("\n").filter(Boolean).length;
     // A test makes the commit print what a CLI prints for people, not JSON.
-    if (fs.existsSync(path.join(kite, "plain-commit"))) process.stdout.write("Committed.\n");
+    if (fs.existsSync(path.join(kite, "plain-commit"))) process.stdout.write("{main} committed.\n");
     else out({ commitSha: "kite-" + count, subject: message.split("\n")[0] });
     break;
   }

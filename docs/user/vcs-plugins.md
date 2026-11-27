@@ -92,6 +92,8 @@ repository inside keeps its own search. Searching through the plugin is planned 
 - A command succeeds when it exits with 0; its stderr is then ignored, so warnings there are
   harmless. When it fails, T3 Code shows the last line it wrote to stderr, up to 200 characters,
   as the reason. Make that line say what went wrong, and keep secrets out of it.
+- A command fails when it writes more than 1 MB to stdout or to stderr; checkpoint diffs,
+  `changedFiles` and `readFile` may print more. Keep progress output quiet.
 - Long text, such as a commit message, is passed as a file.
 - Output that does not match the contract below is an error. Settings shows the last one on the
   plugin's row. A field, command, or checkpoint strategy this server does not know is ignored and
