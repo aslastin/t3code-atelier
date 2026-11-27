@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type {
   BackgroundBooleanState,
+  EnvironmentId,
   ResourceAttributionEntry,
   ResourceTelemetryAggregate,
   ResourceTelemetryHistoryBucket,
@@ -45,7 +46,6 @@ import {
 import { cn } from "../../lib/utils";
 import { formatBytes } from "../../lib/formatBytes";
 import { ensureLocalApi } from "../../localApi";
-import type { EnvironmentPresentation } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -65,7 +65,6 @@ import {
   visibleResourceTelemetryProcesses,
 } from "./ResourceTelemetryDiagnostics.logic";
 import { SettingsSection } from "./settingsLayout";
-import { DiagnosticsIntervalTime } from "./DiagnosticsIntervalTime";
 
 const HISTORY_WINDOWS = [
   { label: "5m", windowMs: 5 * 60_000, bucketMs: 15_000 },
@@ -396,96 +395,79 @@ function HistoryWindowSelector({
 
 function ResourceHistoryChart({
   buckets,
-  bucketMs,
 }: {
   buckets: ReadonlyArray<ResourceTelemetryHistoryBucket>;
-  bucketMs: number;
 }) {
   const gt = useGT();
-  const maxCpu = Math.ceil(resourceHistoryCpuScaleMax(buckets));
-  const maxIo = Math.max(
-    1,
-    ...buckets.map((bucket) => Math.max(bucket.ioReadBytes, bucket.ioWriteBytes)),
-  );
-  const plots = [
-    {
-      id: "cpu",
-      max: maxCpu,
-      scale: `0–${maxCpu}%`,
-      series: [{ key: "avgCpuPercent", label: <T>CPU average</T>, color: "bg-foreground/65" }],
-    },
-    {
-      id: "io",
-      max: maxIo,
-      scale: gt("0–{bytes} per {seconds} s interval", {
-        bytes: formatBytes(maxIo),
-        seconds: bucketMs / 1_000,
-      }),
-      series: [
-        { key: "ioReadBytes", label: <T>I/O reads</T>, color: "bg-info/70" },
-        { key: "ioWriteBytes", label: <T>I/O writes</T>, color: "bg-warning/80" },
-      ],
-    },
-  ] as const;
+  const maxCpu = resourceHistoryCpuScaleMax(buckets);
+  const maxIo = Math.max(1, ...buckets.map((bucket) => bucket.ioReadBytes + bucket.ioWriteBytes));
 
   return (
-    <div className="space-y-3 border-t border-border/60 px-4 py-4 sm:px-5">
-      {plots.map(({ id, max, scale, series }) => (
-        <div key={id}>
-          <div className="mb-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-3xs text-muted-foreground">
-            {series.map(({ key, label, color }) => (
-              <span key={key} className="inline-flex items-center gap-1.5">
-                <span className={cn("h-1.5 w-3 rounded-full", color)} /> {label}
-              </span>
-            ))}
-            <span className="ms-auto tabular-nums">{scale}</span>
-          </div>
-          <div className="flex h-16 items-end gap-1 overflow-hidden rounded-lg border border-border/40 bg-muted/8 px-2 py-1">
-            {buckets.map((bucket) => (
-              <Tooltip key={DateTime.formatIso(bucket.startedAt)}>
-                <TooltipTrigger
-                  render={
-                    <div className="flex h-full min-w-0 flex-1 items-end gap-px">
-                      {series.map(({ key, color }) => {
-                        const height = resourceHistoryBarHeight({
-                          value: bucket[key],
-                          max,
-                          minimumVisiblePercent: id === "cpu" ? 2 : 1,
-                        });
-                        return (
-                          <span
-                            key={key}
-                            className={cn("min-w-0 flex-1 rounded-t-sm", color)}
-                            style={{ height: `${height}%` }}
-                          />
-                        );
-                      })}
-                    </div>
-                  }
-                />
-                <TooltipPopup side="top" className="text-left">
-                  <DiagnosticsIntervalTime bucket={bucket} />
-                  {id === "cpu" ? (
-                    <>
-                      <div>
-                        {gt("CPU avg {percent}%", { percent: bucket.avgCpuPercent.toFixed(1) })}
-                      </div>
-                      <div>
-                        {gt("CPU peak {percent}%", { percent: bucket.maxCpuPercent.toFixed(1) })}
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div>{gt("Read {bytes}", { bytes: formatBytes(bucket.ioReadBytes) })}</div>
-                      <div>{gt("Write {bytes}", { bytes: formatBytes(bucket.ioWriteBytes) })}</div>
-                    </>
-                  )}
-                </TooltipPopup>
-              </Tooltip>
-            ))}
-          </div>
-        </div>
-      ))}
+    <div className="border-t border-border/60 px-4 py-4 sm:px-5">
+      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-3xs text-muted-foreground/65">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-1.5 w-3 rounded-full bg-foreground/70" /> <T>CPU average</T>
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-1.5 w-3 rounded-full bg-info/70" /> <T>I/O reads</T>
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-1.5 w-3 rounded-full bg-warning/80" /> <T>I/O writes</T>
+        </span>
+      </div>
+      <div className="flex h-32 items-end gap-1 overflow-hidden rounded-lg border border-border/40 bg-muted/8 px-2 pt-3 pb-2">
+        {buckets.map((bucket) => {
+          const cpuHeight = resourceHistoryBarHeight({
+            value: bucket.avgCpuPercent,
+            max: maxCpu,
+            minimumVisiblePercent: 2,
+          });
+          const readHeight = resourceHistoryBarHeight({
+            value: bucket.ioReadBytes,
+            max: maxIo,
+            minimumVisiblePercent: 1,
+          });
+          const writeHeight = resourceHistoryBarHeight({
+            value: bucket.ioWriteBytes,
+            max: maxIo,
+            minimumVisiblePercent: 1,
+          });
+          return (
+            <Tooltip key={DateTime.formatIso(bucket.startedAt)}>
+              <TooltipTrigger
+                render={
+                  <div className="grid h-full min-w-1 flex-1 grid-cols-3 items-end gap-px">
+                    <span
+                      className="block rounded-t-sm bg-foreground/65"
+                      style={{ height: `${cpuHeight}%` }}
+                    />
+                    <span
+                      className="block rounded-t-sm bg-info/70"
+                      style={{ height: `${readHeight}%` }}
+                    />
+                    <span
+                      className="block rounded-t-sm bg-warning/80"
+                      style={{ height: `${writeHeight}%` }}
+                    />
+                  </div>
+                }
+              />
+              <TooltipPopup side="top" className="text-left">
+                <div className="space-y-0.5">
+                  <div>
+                    {gt("CPU avg {percent}%", { percent: bucket.avgCpuPercent.toFixed(1) })}
+                  </div>
+                  <div>
+                    {gt("CPU peak {percent}%", { percent: bucket.maxCpuPercent.toFixed(1) })}
+                  </div>
+                  <div>{gt("Read {bytes}", { bytes: formatBytes(bucket.ioReadBytes) })}</div>
+                  <div>{gt("Write {bytes}", { bytes: formatBytes(bucket.ioWriteBytes) })}</div>
+                </div>
+              </TooltipPopup>
+            </Tooltip>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -899,19 +881,22 @@ function AttributionTable({ entries }: { entries: ReadonlyArray<ResourceAttribut
   );
 }
 
-type ResourceTelemetryDiagnosticsProps = {
-  environment: Pick<EnvironmentPresentation, "environmentId" | "label"> | null;
-};
-
-export function ResourceTelemetryDiagnostics(props: ResourceTelemetryDiagnosticsProps) {
+export function ResourceTelemetryDiagnostics({
+  environmentId,
+}: {
+  environmentId: EnvironmentId | null;
+}) {
   // Pending signals and retries belong to one environment, so a switch starts fresh.
   return (
-    <ResourceTelemetryDiagnosticsBody key={props.environment?.environmentId ?? ""} {...props} />
+    <ResourceTelemetryDiagnosticsBody key={environmentId ?? ""} environmentId={environmentId} />
   );
 }
 
-function ResourceTelemetryDiagnosticsBody({ environment }: ResourceTelemetryDiagnosticsProps) {
-  const environmentId = environment?.environmentId ?? null;
+function ResourceTelemetryDiagnosticsBody({
+  environmentId,
+}: {
+  environmentId: EnvironmentId | null;
+}) {
   const messages = useMessages();
   const gt = useGT();
   const registry = useContext(RegistryContext);
@@ -1108,17 +1093,14 @@ function ResourceTelemetryDiagnosticsBody({ environment }: ResourceTelemetryDiag
       >
         <div className="overflow-hidden rounded-[inherit]">
           <div className="flex flex-col gap-3 border-b border-border/60 bg-linear-to-r from-muted/45 via-muted/20 to-transparent px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-            <div className="min-w-0">
-              {environment && (
-                <div className="text-xs font-semibold wrap-anywhere text-foreground">
-                  {gt("T3 processes in {environment}", { environment: environment.label })}
-                </div>
-              )}
+            <div>
+              <div className="text-3xs font-semibold uppercase tracking-widest text-muted-foreground/70">
+                <T>T3 system footprint</T>
+              </div>
               <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
                 <T>
-                  Includes this server and its child processes, such as providers, terminals, and
-                  the resource monitor. Desktop processes are included when available from this
-                  environment.
+                  Live native counters for the server, providers, terminals, desktop processes, and
+                  the monitor itself.
                 </T>
               </p>
             </div>
@@ -1410,10 +1392,7 @@ function ResourceTelemetryDiagnosticsBody({ environment }: ResourceTelemetryDiag
               <span>{history.error}</span>
             </div>
           ) : null}
-          <ResourceHistoryChart
-            buckets={history.data?.buckets ?? []}
-            bucketMs={history.data?.bucketMs ?? selectedWindow.bucketMs}
-          />
+          <ResourceHistoryChart buckets={history.data?.buckets ?? []} />
           <HistoryProcessTable processes={history.data?.topProcesses ?? []} />
         </div>
       </SettingsSection>

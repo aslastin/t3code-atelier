@@ -54,8 +54,7 @@ export interface SettingsSearchItem {
   readonly id: string;
   readonly title: string;
   readonly to: SettingsPath;
-  /** Defaults to the result id. Use null to open a page without focusing a row. */
-  readonly targetId?: string | null;
+  readonly targetId?: string;
   readonly searchTerms?: ReadonlyArray<string>;
   readonly scope?: SettingsSearchScope;
   readonly desktopOnly?: boolean;
@@ -173,13 +172,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   {
     heading: msg("More"),
     headingHidden: true,
-    paths: [
-      "/settings/maintenance",
-      "/settings/diagnostics",
-      "/settings/labs",
-      "/settings/about",
-      "/settings/archived",
-    ],
+    paths: ["/settings/maintenance", "/settings/labs", "/settings/about", "/settings/archived"],
   },
 ];
 
@@ -988,7 +981,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "telemetry-export",
     title: msg("Send telemetry"),
-    to: "/settings/diagnostics",
+    to: "/settings/maintenance",
     targetId: "telemetry-export",
     scope: "environment-defaults",
     searchTerms: [
@@ -1000,8 +993,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "diagnostics",
     title: msg("Diagnostics"),
-    to: "/settings/diagnostics",
-    targetId: null,
+    to: "/settings/maintenance",
     searchTerms: [msg("logs traces processes resource history failures spans cpu memory")],
   },
   {
@@ -1535,6 +1527,7 @@ const RENAMED_SETTINGS_PATHS: Readonly<Record<string, SettingsPath>> = {
   "/settings/beta": "/settings/labs",
 };
 const SPLIT_SETTINGS_PATHS: ReadonlySet<string> = new Set([
+  "/settings/diagnostics",
   "/settings/general",
   "/settings/appearance",
   "/settings/source-control",
@@ -1543,6 +1536,7 @@ const SPLIT_SETTINGS_PATHS: ReadonlySet<string> = new Set([
 ]);
 // Section anchors that moved but are not search results themselves.
 const MOVED_SECTION_ANCHORS: Readonly<Record<string, SettingsPath>> = {
+  "telemetry-endpoints": "/settings/maintenance",
   "authorized-clients": "/settings/access",
   "text-generation": "/settings/threads",
   about: "/settings/about",
@@ -1561,11 +1555,12 @@ export function movedSettingsPath(pathname: string, hash: string): SettingsPath 
 }
 
 export function getSettingsSearchTargetScope(targetId: string) {
+  const rowId = targetId === "telemetry-endpoints" ? "telemetry-export" : targetId;
   const items: readonly SettingsSearchItem[] = SETTINGS_SEARCH_ITEMS;
   const item =
-    items.find((candidate) => candidate.id === targetId) ??
-    items.find((candidate) => candidate.targetId === targetId);
-  return item && item.targetId !== null
+    items.find((candidate) => candidate.id === rowId) ??
+    items.find((candidate) => candidate.targetId === rowId);
+  return item
     ? {
         title: item.title,
         scope: item.scope ?? SETTINGS_CATEGORY_SCOPES[item.to],
@@ -1692,13 +1687,12 @@ export function searchSettings(
 
   return settingsForThisPlatform(items)
     .flatMap((item, index) => {
-      const titles = [
-        normalizeSearchText(decodeMsg(item.title)),
-        normalizeSearchText(translate(item.title)),
-      ];
+      const title = normalizeSearchText(decodeMsg(item.title));
       const fields = [
-        ...titles,
+        title,
         normalizeSearchText(SETTINGS_SECTION_LABELS[item.to]),
+        // The labels as displayed, so search also works in the active language.
+        normalizeSearchText(translate(item.title)),
         normalizeSearchText(translate(SETTINGS_SECTION_LABELS[item.to])),
         ...(item.searchTerms ?? []).map(normalizeSearchText),
         ...(item.searchTerms ?? []).map((term) => normalizeSearchText(translate(term))),
@@ -1706,17 +1700,18 @@ export function searchSettings(
       if (!queryTokens.every((token) => fields.some((field) => field.includes(token)))) return [];
 
       const exactPhraseField = fields.findIndex((field) => field.includes(normalizedQuery));
-      const rank = titles.includes(normalizedQuery)
-        ? 5
-        : titles.some((title) => title.startsWith(normalizedQuery))
-          ? 4
-          : titles.some((title) => title.includes(normalizedQuery))
-            ? 3
-            : titles.some((title) => queryTokens.every((token) => title.includes(token)))
-              ? 2
-              : exactPhraseField >= 0
-                ? 1
-                : 0;
+      const rank =
+        title === normalizedQuery
+          ? 5
+          : title.startsWith(normalizedQuery)
+            ? 4
+            : title.includes(normalizedQuery)
+              ? 3
+              : queryTokens.every((token) => title.includes(token))
+                ? 2
+                : exactPhraseField >= 0
+                  ? 1
+                  : 0;
       return [{ item, index, rank }];
     })
     .toSorted(

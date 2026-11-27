@@ -284,14 +284,13 @@ function ScopeMenu({
   );
 }
 
-export function EnvironmentScopeMenu({
+function EnvironmentScopeMenu({
   value,
   groups,
   environments,
   onChange,
   singleEnvironment,
-  ariaLabel,
-}: SettingsScopeMenuProps & { ariaLabel?: string }) {
+}: SettingsScopeMenuProps) {
   const messages = useMessages();
   const gt = useGT();
   const resolved = resolveSettingsScope(value, groups, environments, messages);
@@ -311,7 +310,7 @@ export function EnvironmentScopeMenu({
     : environments;
   return (
     <ScopeMenu
-      ariaLabel={ariaLabel ?? gt("Environment scope")}
+      ariaLabel={gt("Environment scope")}
       icon={
         selected ? (
           <EnvironmentMachineIcon

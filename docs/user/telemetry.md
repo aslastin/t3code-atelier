@@ -1,6 +1,6 @@
 # Telemetry in T3 Code Atelier
 
-Open **Settings > Diagnostics** and select an environment. **What to send** shows the available channels and whether each can send. Select the channels you want, then turn on **Send telemetry**. Switching it off takes effect immediately and remembers your choices and receiver addresses.
+Open **Settings > Maintenance** and find **Send telemetry** in the **Diagnostics** section. Choose one environment or **All environments**. Open **What to send**, select the channels you want, then turn on **Send telemetry**. Switching it off takes effect immediately and remembers your choices and receiver addresses.
 
 A fresh installation starts with every channel off. When you upgrade, a receiver you previously configured in settings or through the environment continues receiving its configured signals. Product analytics and T3 Connect tracing each require an explicit choice.
 

@@ -50,11 +50,6 @@ import { formatCpuTime } from "./ResourceTelemetryDiagnostics.logic";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { useEnvironments } from "../../state/environments";
-import { EnvironmentScopeMenu } from "./SettingsScopeSentence";
-import { settingsScopeEnvironmentLabel } from "./settingsScopeAxis";
-import { DiagnosticsIntervalTime } from "./DiagnosticsIntervalTime";
-import { TelemetrySettings } from "./TelemetrySettings";
 
 const NUMBER_FORMAT = new Intl.NumberFormat();
 
@@ -515,7 +510,6 @@ function ProcessResourceHistoryChart({
 }: {
   buckets: ReadonlyArray<{
     readonly startedAt: DateTime.Utc;
-    readonly endedAt: DateTime.Utc;
     readonly avgCpuPercent: number;
     readonly maxCpuPercent: number;
   }>;
@@ -554,7 +548,6 @@ function ProcessResourceHistoryChart({
                 }
               />
               <TooltipPopup side="top">
-                <DiagnosticsIntervalTime bucket={bucket} />
                 {gt("Avg {average}%, peak {peak}%", {
                   average: bucket.avgCpuPercent.toFixed(1),
                   peak: bucket.maxCpuPercent.toFixed(1),
@@ -781,20 +774,15 @@ function DiagnosticsRefreshButton({
 }
 
 export function DiagnosticsSettingsPanel() {
-  const { environment, scope } = useSettingsScope();
+  const { environment } = useSettingsScope();
   // Signals and pending UI state belong to one environment, so a scope switch starts fresh.
-  return (
-    <DiagnosticsSettingsBody
-      key={JSON.stringify([environment?.environmentId, scope.kind, ...scope.environmentIds])}
-    />
-  );
+  return <DiagnosticsSettingsBody key={environment?.environmentId ?? ""} />;
 }
 
 function DiagnosticsSettingsBody() {
   const gt = useGT();
   const m = useMessages();
-  const { environment, scope, groups, search, selectScope, singleEnvironment } = useSettingsScope();
-  const { environments } = useEnvironments();
+  const { environment } = useSettingsScope();
   const environmentId = environment?.environmentId ?? null;
   const canMaintainEnvironment = useEnvironmentScope(environmentId, AuthEnvironmentMaintainScope);
   const observability = environment?.serverConfig?.observability;
@@ -987,34 +975,9 @@ function DiagnosticsSettingsBody() {
     ? Option.getOrElse(data.partialFailure, () => false)
     : false;
 
-  const source = environment && (
-    <div className="space-y-1 px-3 sm:px-4">
-      <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
-        {gt("Diagnostics environment")}
-        <EnvironmentScopeMenu
-          ariaLabel={gt("Diagnostics environment")}
-          value={search}
-          singleEnvironment={singleEnvironment}
-          groups={groups}
-          environments={environments}
-          onChange={selectScope}
-        />
-      </div>
-      {(scope.kind === "all" || (scope.kind === "project" && scope.environmentId === null)) && (
-        <p className="text-xs text-muted-foreground">
-          {gt(
-            "Showing diagnostics for {environment}. The first connected environment in this selection is used, with priority given to the primary environment.",
-            { environment: settingsScopeEnvironmentLabel(environment, environments) },
-          )}
-        </p>
-      )}
-    </div>
-  );
   if (!canReadDiagnostics) {
     return (
       <SettingsPageContainer>
-        <TelemetrySettings />
-        {source}
         <p className="text-sm text-muted-foreground">
           {environmentId === null
             ? gt("Connect an environment to see diagnostics.")
@@ -1028,12 +991,10 @@ function DiagnosticsSettingsBody() {
 
   return (
     <SettingsPageContainer width="expanded" className="gap-10">
-      <TelemetrySettings />
-      {source}
-      <ResourceTelemetryDiagnostics environment={environment} />
+      <ResourceTelemetryDiagnostics environmentId={environmentId} />
 
       <SettingsSection
-        title={gt("Live server child processes")}
+        title={gt("Live Processes")}
         headerAction={
           <div className="flex items-center gap-1.5">
             <DiagnosticsLastChecked checkedAt={processData?.readAt ?? null} />
@@ -1099,7 +1060,7 @@ function DiagnosticsSettingsBody() {
       </SettingsSection>
 
       <SettingsSection
-        title={gt("Server process history")}
+        title={gt("Resource History")}
         headerAction={
           <div className="flex items-center gap-1.5">
             <ResourceHistoryWindowSelector

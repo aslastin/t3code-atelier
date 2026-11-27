@@ -190,12 +190,20 @@ function SettingsRouteLayout() {
 export const Route = createFileRoute("/_chat/settings")({
   validateSearch: validateSettingsRouteSearch,
   search: { middlewares: [retainSettingsScope] },
-  beforeLoad: async ({ location }) => {
+  beforeLoad: async ({ location, search }) => {
     if (location.pathname === "/settings") {
       throw redirect({ to: "/settings/general", replace: true });
     }
     const moved = movedSettingsPath(location.pathname, location.hash);
-    if (moved) throw redirect({ to: moved, search: true, hash: true, replace: true });
+    if (moved) {
+      throw redirect({
+        to: moved,
+        search: true,
+        hash:
+          location.hash === "telemetry-endpoints" && !search.machine ? "telemetry-export" : true,
+        replace: true,
+      });
+    }
   },
   component: SettingsRouteLayout,
 });

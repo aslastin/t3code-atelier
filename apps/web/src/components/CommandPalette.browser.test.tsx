@@ -78,14 +78,14 @@ function makeProject(title: string): Project {
 }
 
 describe("CommandPalette open intents", () => {
-  it("opens the telemetry row by anchor and the Diagnostics page without one", async () => {
+  it("opens telemetry and diagnostics at their respective rows in Maintenance", async () => {
     setup();
     await using screen = await render(<CommandPalette>{null}</CommandPalette>);
     openCommandPalette({ query: "Send telemetry" });
     await page.getByRole("option", { name: /^Send telemetry/ }).click();
     await vi.waitFor(() =>
       expect(screen.router?.state.location).toMatchObject({
-        pathname: "/settings/diagnostics",
+        pathname: "/settings/maintenance",
         hash: "telemetry-export",
       }),
     );
@@ -94,8 +94,8 @@ describe("CommandPalette open intents", () => {
     await page.getByRole("option", { name: /^Diagnostics/ }).click();
     await vi.waitFor(() =>
       expect(screen.router?.state.location).toMatchObject({
-        pathname: "/settings/diagnostics",
-        hash: "",
+        pathname: "/settings/maintenance",
+        hash: "diagnostics",
       }),
     );
   });

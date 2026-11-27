@@ -50,7 +50,6 @@ vi.mock("../components/settings/settingsLayout", () => ({
 }));
 
 vi.mock("../state/environments", () => ({ usePrimaryEnvironment: () => null }));
-vi.mock("../hooks/useSettings", () => ({ useClientSettings: () => "locale" }));
 vi.mock("../state/session", () => ({
   readEnvironmentScope: () => true,
   useEnvironmentScope: () => true,
@@ -70,7 +69,6 @@ class MonitorError extends Schema.TaggedError<MonitorError>()("MonitorError", {
 }) {}
 
 const environmentId = EnvironmentId.make("remote");
-const environment = { environmentId, label: "Remote host" };
 const startError = "The resource monitor is not available.";
 const historyError = "Resource history could not start.";
 
@@ -187,7 +185,7 @@ describe("resource monitor retry", () => {
     using fixture = setup();
     await using screen = await render(
       <RegistryContext.Provider value={fixture.registry}>
-        <ResourceTelemetryDiagnostics environment={environment} />
+        <ResourceTelemetryDiagnostics environmentId={environmentId} />
       </RegistryContext.Provider>,
     );
     await expect.element(screen.getByText(startError, { exact: true })).toBeVisible();
@@ -207,22 +205,20 @@ describe("resource monitor retry", () => {
     "refreshes the changed history window only in the retry environment (switch environment: %s)",
     async (switchEnvironment) => {
       using fixture = setup({ holdRetry: true });
-      const view = (selected: typeof environment) => (
+      const view = (selectedEnvironment: EnvironmentId) => (
         <RegistryContext.Provider value={fixture.registry}>
-          <ResourceTelemetryDiagnostics environment={selected} />
+          <ResourceTelemetryDiagnostics environmentId={selectedEnvironment} />
         </RegistryContext.Provider>
       );
-      await using screen = await render(view(environment));
+      await using screen = await render(view(environmentId));
       await expect.element(screen.getByText(historyError, { exact: true })).toBeVisible();
       await screen.getByRole("button", { name: "Retry monitor" }).click();
       await expect.element(screen.getByRole("button", { name: "Retry monitor" })).toBeDisabled();
-      const selected = switchEnvironment
-        ? { environmentId: EnvironmentId.make("other"), label: "Other host" }
-        : environment;
-      if (switchEnvironment) await screen.rerender(view(selected));
+      const selectedEnvironment = switchEnvironment ? EnvironmentId.make("other") : environmentId;
+      if (switchEnvironment) await screen.rerender(view(selectedEnvironment));
       await screen.getByRole("button", { name: "5m", exact: true }).click();
       await expect.element(screen.getByText(historyError, { exact: true })).toBeVisible();
-      const selectedKey = `${selected.environmentId}:300000`;
+      const selectedKey = `${selectedEnvironment}:300000`;
       expect(fixture.registry.get(fixture.historyQueries(selectedKey))._tag).toBe("Failure");
       fixture.historyReads.mockClear();
 
@@ -256,7 +252,7 @@ describe("resource monitor retry", () => {
     using fixture = setup({ retryFails: true });
     await using screen = await render(
       <RegistryContext.Provider value={fixture.registry}>
-        <ResourceTelemetryDiagnostics environment={environment} />
+        <ResourceTelemetryDiagnostics environmentId={environmentId} />
       </RegistryContext.Provider>,
     );
     await expect.element(screen.getByText(startError, { exact: true })).toBeVisible();

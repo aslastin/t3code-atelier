@@ -17,7 +17,7 @@ import {
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { Switch } from "../ui/switch";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { SettingsSection, useSettingsSearchTargetId } from "./settingsLayout";
+import { SettingsSearchTarget, useSettingsSearchTargetId } from "./settingsLayout";
 import { TelemetryExportSettings } from "./TelemetryExportSettings";
 
 import {
@@ -212,42 +212,40 @@ export function TelemetrySettings() {
   };
 
   return (
-    <SettingsSection title={gt("Send telemetry")} hideTitle id="telemetry-export">
-      <div className="px-4 py-2 sm:px-5">
-        <div className="flex flex-wrap items-center justify-between gap-x-4">
-          <div className="min-w-48 flex-1">{row("enabled", gt("Send telemetry"))}</div>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            aria-expanded={expanded}
-            aria-controls="telemetry-channels"
-            onClick={() => setExpanded(!expanded)}
-          >
-            {gt("What to send")}
-          </Button>
-        </div>
-        <div id="telemetry-channels">
-          {expanded && (
-            <div className="border-t border-border/60">
-              {row("analytics", m(channels.analytics))}
-              {row("connect", m(channels.connect))}
-              {row("otlp", m(channels.otlp))}
-            </div>
-          )}
-          <div role="status" className="text-xs text-muted-foreground">
-            {targets.map(({ env, issue }) => {
-              const outcome = issue ?? report.get(env.environmentId);
-              return outcome ? (
-                <p key={env.environmentId}>
-                  {env.label} · {m(outcomes[outcome])}
-                </p>
-              ) : null;
-            })}
-          </div>
-          {expanded && (scope.kind === "all" || targets[0]?.status) && <TelemetryExportSettings />}
-        </div>
+    <SettingsSearchTarget id="telemetry-export" className="px-4 py-2 sm:px-5">
+      <div className="flex flex-wrap items-center justify-between gap-x-4">
+        <div className="min-w-48 flex-1">{row("enabled", gt("Send telemetry"))}</div>
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          aria-expanded={expanded}
+          aria-controls="telemetry-channels"
+          onClick={() => setExpanded(!expanded)}
+        >
+          {gt("What to send")}
+        </Button>
       </div>
-    </SettingsSection>
+      <div id="telemetry-channels">
+        {expanded && (
+          <div className="border-t border-border/60">
+            {row("analytics", m(channels.analytics))}
+            {row("connect", m(channels.connect))}
+            {row("otlp", m(channels.otlp))}
+          </div>
+        )}
+        <div role="status" className="text-xs text-muted-foreground">
+          {targets.map(({ env, issue }) => {
+            const outcome = issue ?? report.get(env.environmentId);
+            return outcome ? (
+              <p key={env.environmentId}>
+                {env.label} · {m(outcomes[outcome])}
+              </p>
+            ) : null;
+          })}
+        </div>
+        {expanded && (scope.kind === "all" || targets[0]?.status) && <TelemetryExportSettings />}
+      </div>
+    </SettingsSearchTarget>
   );
 }

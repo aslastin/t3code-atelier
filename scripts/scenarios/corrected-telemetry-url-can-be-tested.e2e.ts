@@ -28,24 +28,25 @@ test(
       const origin = `http://127.0.0.1:${address.port}`;
 
       await t3.project("demo");
-      await t3.open("/settings/general");
-      const diagnostics = screen.getByRole("button", "Diagnostics", { exact: true });
-      await screen.getByRole("button", "General", { exact: true }).waitFor();
-      expect(await diagnostics.isVisible(), "Diagnostics is in the settings sidebar").toBe(true);
-      await diagnostics.tap();
+      await t3.open("/settings/maintenance");
+      const diagnostics = browser.locator("#diagnostics-section");
+      const viewDiagnostics = diagnostics.getByRole("link", "View diagnostics");
+      await viewDiagnostics.scrollIntoView();
+      await app.screenshot("maintenance-diagnostics");
+      await expect(diagnostics.getByRole("switch", "Send telemetry")).toBeVisible();
+      await viewDiagnostics.tap();
+      await expect(browser).toHaveURL(/\/settings\/diagnostics/);
+      await expect(screen.getByText("Resource monitor", { exact: true })).toBeVisible();
+      expect(await screen.getByRole("switch", "Send telemetry").count()).toBe(0);
+
+      await app.open("/settings/diagnostics#telemetry-endpoints");
+      await expect(browser).toHaveURL(/\/settings\/maintenance/);
 
       const traces = browser.locator("#otlpTracesUrl");
       const exportSection = browser.locator("#telemetry-export");
-      const diagnosticsScope = screen.getByRole("button", /^Diagnostics environment:/);
-      await diagnosticsScope.tap();
-      await screen.getByRole("menuitemradio", /Scenario/).tap();
-      await expect(exportSection.getByText("Applies to Scenario", { exact: true })).toBeVisible();
-      await diagnosticsScope.tap();
-      await screen.getByRole("menuitemradio", "All environments").tap();
       await expect(
         exportSection.getByText("Applies to All environments", { exact: true }),
       ).toBeVisible();
-      await exportSection.getByText("What to send", { exact: true }).tap();
       const environmentChoice = exportSection.getByRole("button", /Scenario/);
       expect(
         await environmentChoice.isVisible(),
@@ -53,6 +54,7 @@ test(
       ).toBe(true);
       await environmentChoice.tap();
       await traces.waitFor();
+      await expect(exportSection.getByText("Applies to Scenario", { exact: true })).toBeVisible();
       const analyticsLabel = "T3 product analytics (PostHog)";
       const analyticsRow = browser
         .locator("#telemetry-export label")
