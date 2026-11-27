@@ -396,6 +396,28 @@ describe("ManifestVcsDriver", () => {
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
+  it.live(
+    "runs a diff that names {pathsFile} with an empty file for every change, none for no files",
+    () =>
+      Effect.gen(function* () {
+        const { driver, repository } = yield* setup({
+          extraManifest: {
+            commands: {
+              status: ["./bin/kite.mjs", "status"],
+              diff: ["./bin/kite.mjs", "diff", "{pathsFile}"],
+            },
+          },
+        });
+        NodeFS.writeFileSync(`${repository}/a.txt`, "changed\n");
+        const patch = yield* driver!.workflow!.workingDiff!({ cwd: repository });
+        assert.include(patch, "+changed");
+        assert.strictEqual(
+          yield* driver!.workflow!.workingDiff!({ cwd: repository, filePaths: [] }),
+          "",
+        );
+      }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   it.live("renames a branch, picking a free name as Git does", () =>
     Effect.gen(function* () {
       const { driver, repository } = yield* setup();

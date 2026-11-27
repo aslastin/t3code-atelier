@@ -460,8 +460,10 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
     }),
     ...(commands.diff && {
       workingDiff: Effect.fn("ManifestVcsDriver.workingDiff")(function* (request) {
+        // An empty {pathsFile} asks for every change, so an empty selection never reaches it.
+        if (request.filePaths?.length === 0) return "";
         return yield* withTextFile(
-          yield* pathsFileText(request.filePaths, request.cwd),
+          (yield* pathsFileText(request.filePaths, request.cwd)) ?? "",
           (pathsFile) => text("diff", request.cwd, { pathsFile }),
         );
       }),
