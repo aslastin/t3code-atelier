@@ -4565,6 +4565,7 @@
   "c887abfd190d8b40": "이 폴더",
   "275b5fe6040f2c1c": "{files, plural, other {변경된 파일 {files}개 검토, 추가 {additions}줄, 삭제 {deletions}줄}}",
   "c4a35456c7bdc3a1": "{files, plural, other {{folders}에서 변경된 파일 {files}개 검토, 추가 {additions}줄, 삭제 {deletions}줄}}",
+  "9137615e170d3151": "이 턴의 일부 변경 사항은 표시하거나 되돌릴 수 없습니다: {reason}",
   "7a13ae3b70a050fb": "{label}(사용할 수 없음)",
   "8f033834a0194c33": "컨텍스트를 사용할 수 없음",
   "4031ea1541b3ec2b": "컨텍스트 열기",

@@ -368,6 +368,7 @@ const cleanupFixture = (
     const pluginWorktree = plugin?.outside
       ? `${repo}/kite-feature`
       : `${config.worktreesDir}/kite-feature`;
+    let nativeCheckpointRoots: ReadonlyArray<string> = [];
     let pluginStatus = {
       refName: "feature",
       files: [] as ReadonlyArray<{ readonly path: string; readonly untracked?: boolean }>,
@@ -542,44 +543,48 @@ const cleanupFixture = (
       Effect.provideService(
         SqlClient.SqlClient,
         sqlOverride ??
-          (((strings: TemplateStringsArray) =>
+          (((strings: TemplateStringsArray, ...values: ReadonlyArray<unknown>) =>
             Effect.sync(() =>
               strings.join("").includes("retained_checkpoint_threads")
                 ? []
-                : openSessionCwd !== null &&
-                    strings.join("").includes("projection_provider_sessions")
-                  ? [
-                      {
-                        payload_json: JSON.stringify({
-                          id: "session-1",
-                          driver: "codex",
-                          providerInstanceId: "codex",
-                          status: "ready",
-                          cwd: openSessionCwd,
-                          model: null,
-                          capabilities: CodexProviderCapabilitiesV2,
-                          createdAt: "2026-06-01T12:00:00.000Z",
-                          updatedAt: "2026-06-01T12:00:00.000Z",
-                          lastError: null,
-                        }),
-                      },
-                    ]
-                  : outboxStatus !== null &&
-                      strings.join("").includes("orchestration_v2_effect_outbox")
-                    ? [{ status: outboxStatus }]
-                    : strings.join("").includes("deleted_at IS NOT NULL")
-                      ? deletedThreads.map((thread) => ({
-                          payload_json: JSON.stringify(thread),
-                          workspaceRoot: repo,
-                        }))
-                      : strings.join("").includes('AS "worktreePath"')
-                        ? [
-                            ...threads.flatMap((thread) => thread.worktreePath ?? []),
-                            ...storedWorktreePaths,
-                          ].map((worktreePath) => ({ worktreePath }))
-                        : strings.join("").includes("scheduled_tasks")
-                          ? scheduledThreadIds.map((threadId) => ({ threadId }))
-                          : [],
+                : strings.join("").includes("strategy = 'native' LIMIT 1")
+                  ? nativeCheckpointRoots.includes(String(values[0]))
+                    ? [{}]
+                    : []
+                  : openSessionCwd !== null &&
+                      strings.join("").includes("projection_provider_sessions")
+                    ? [
+                        {
+                          payload_json: JSON.stringify({
+                            id: "session-1",
+                            driver: "codex",
+                            providerInstanceId: "codex",
+                            status: "ready",
+                            cwd: openSessionCwd,
+                            model: null,
+                            capabilities: CodexProviderCapabilitiesV2,
+                            createdAt: "2026-06-01T12:00:00.000Z",
+                            updatedAt: "2026-06-01T12:00:00.000Z",
+                            lastError: null,
+                          }),
+                        },
+                      ]
+                    : outboxStatus !== null &&
+                        strings.join("").includes("orchestration_v2_effect_outbox")
+                      ? [{ status: outboxStatus }]
+                      : strings.join("").includes("deleted_at IS NOT NULL")
+                        ? deletedThreads.map((thread) => ({
+                            payload_json: JSON.stringify(thread),
+                            workspaceRoot: repo,
+                          }))
+                        : strings.join("").includes('AS "worktreePath"')
+                          ? [
+                              ...threads.flatMap((thread) => thread.worktreePath ?? []),
+                              ...storedWorktreePaths,
+                            ].map((worktreePath) => ({ worktreePath }))
+                          : strings.join("").includes("scheduled_tasks")
+                            ? scheduledThreadIds.map((threadId) => ({ threadId }))
+                            : [],
             )) as unknown as SqlClient.SqlClient),
       ),
       Effect.provideService(GitManager.GitManager, {
@@ -615,6 +620,9 @@ const cleanupFixture = (
       fs,
       worktree,
       pluginWorktree,
+      setNativeCheckpointRoots: (next: ReadonlyArray<string>) => {
+        nativeCheckpointRoots = next;
+      },
       setPluginStatus: (next: typeof pluginStatus) => {
         pluginStatus = next;
       },
@@ -2213,6 +2221,19 @@ describe("VCS plugin worktrees", () => {
     { name: "a deleted thread's clean worktree", deleted: true, removed: true },
     { name: "an old thread's clean worktree", recreates: true, removed: true },
     {
+      // The plugin may keep them inside the checkout; recreating it would not bring them back.
+      name: "an old thread's worktree holding its native snapshots",
+      recreates: true,
+      native: true,
+      reason: "Its VCS plugin's snapshots of the thread's checkpoints are in it",
+    },
+    {
+      name: "a deleted thread's worktree holding its native snapshots",
+      deleted: true,
+      native: true,
+      removed: true,
+    },
+    {
       name: "a worktree with changes",
       deleted: true,
       files: [{ path: "a.txt" }],
@@ -2272,6 +2293,8 @@ describe("VCS plugin worktrees", () => {
         { recreates: row.recreates === true },
       );
       const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      if (row.native)
+        fixture.setNativeCheckpointRoots([yield* fixture.fs.realPath(fixture.pluginWorktree)]);
       if (row.gitFile)
         yield* fixture.fs.writeFileString(`${fixture.pluginWorktree}/.git`, "gitdir: elsewhere\n");
       fixture.setThreads(row.deleted ? [] : [thread]);

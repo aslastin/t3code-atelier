@@ -380,12 +380,14 @@ const make = Effect.gen(function* () {
   // A VCS plugin's checkout, even one holding a `.git`: its plugin listing the folder stands in
   // for a gitfile. It must answer to that plugin too: another VCS's checkout can sit at a path
   // still listed.
+  // Null when the repository's VCS did not answer.
   const pluginOwnsRepository = Effect.fnUntraced(function* (checkout: TaskFolderCheckout) {
     if (plugins?.hasAny() !== true) return false;
-    const kind = yield* git.localStatus({ cwd: checkout.repositoryPath }).pipe(
-      Effect.map((status) => status.capabilities?.kind),
-      Effect.orElseSucceed(() => undefined),
-    );
+    const status = yield* git
+      .localStatus({ cwd: checkout.repositoryPath })
+      .pipe(Effect.orElseSucceed(() => null));
+    if (status === null) return null;
+    const kind = status.capabilities?.kind;
     return kind !== undefined && kind !== GIT_VCS_KIND;
   });
   const listedPluginCheckout = Effect.fnUntraced(function* (checkout: TaskFolderCheckout) {
@@ -1441,6 +1443,11 @@ const make = Effect.gen(function* () {
         // Another checkout in its place is not the thread's: resuming there would work on it.
         // The plugin that owns the repository decides first, as the driver registry does.
         const owned = yield* pluginOwnsRepository(checkout);
+        if (owned === null)
+          return yield* new TaskFolderError({
+            operation: "create",
+            detail: `The VCS of ${checkout.repositoryPath} did not answer, so the checkout at ${checkout.worktreePath} cannot be confirmed. Try again.`,
+          });
         if (
           owned ? yield* listedPluginCheckout(checkout) : (yield* linkedGitDir(checkout)) !== null
         )
@@ -1450,15 +1457,6 @@ const make = Effect.gen(function* () {
           detail: `${checkout.worktreePath} holds a checkout that is not a worktree of ${checkout.repositoryPath}. Move it away to restore the thread's worktree.`,
         });
       }
-      // Files put there since are not the checkout's: a plugin's attach could write over them.
-      const present = yield* fileSystem
-        .readDirectory(checkout.worktreePath)
-        .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-      if (present.length > 0)
-        return yield* new TaskFolderError({
-          operation: "create",
-          detail: `${checkout.worktreePath} holds files that are not a checkout of ${checkout.repositoryPath}. Move them away to restore the thread's worktree.`,
-        });
       yield* fileSystem
         .makeDirectory(path.dirname(checkout.worktreePath), { recursive: true })
         .pipe(Effect.mapError(restoreFailed));

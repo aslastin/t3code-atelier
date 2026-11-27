@@ -4580,6 +4580,7 @@
   "c887abfd190d8b40": "esta pasta",
   "275b5fe6040f2c1c": "{files, plural, one {Revisar {files} arquivo alterado, {additions} adições, {deletions} exclusões} other {Revisar {files} arquivos alterados, {additions} adições, {deletions} exclusões}}",
   "c4a35456c7bdc3a1": "{files, plural, one {Revisar {files} arquivo alterado em {folders}, {additions} adições, {deletions} exclusões} other {Revisar {files} arquivos alterados em {folders}, {additions} adições, {deletions} exclusões}}",
+  "9137615e170d3151": "Algumas alterações deste turno não podem ser exibidas nem revertidas: {reason}",
   "7a13ae3b70a050fb": "{label} (indisponível)",
   "8f033834a0194c33": "Contexto indisponível",
   "4031ea1541b3ec2b": "Abrir contexto",

@@ -449,13 +449,23 @@ function ReasonText({ text }: { readonly text: string }) {
 function CheckpointUnavailableNote({
   reason,
   restorable,
+  partial = false,
 }: {
   readonly reason: string;
   readonly restorable: boolean;
+  /** Beside changes that are shown: only part of the turn is missing. */
+  readonly partial?: boolean;
 }) {
   return (
     <p className="mt-2 text-xs text-muted-foreground">
-      {restorable ? (
+      {partial ? (
+        <T>
+          Some of this turn's changes cannot be shown or rolled back:{" "}
+          <Var>
+            <ReasonText text={reason} />
+          </Var>
+        </T>
+      ) : restorable ? (
         <T>
           This turn's changes cannot be shown:{" "}
           <Var>
@@ -510,7 +520,7 @@ const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection(
       />
       {/* A repository without a snapshot beside others that changed still says why. */}
       {turnSummary.unavailableReason === undefined ? null : (
-        <CheckpointUnavailableNote reason={turnSummary.unavailableReason} restorable />
+        <CheckpointUnavailableNote reason={turnSummary.unavailableReason} restorable partial />
       )}
     </>
   );

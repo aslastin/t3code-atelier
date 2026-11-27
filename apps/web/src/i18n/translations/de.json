@@ -4376,6 +4376,15 @@
   "405a3e88ee6e62b3": "Die Änderungen dieser Runde in diesem Repository können nicht aufgelistet werden.",
   "f6958f38dc87c712": "Ab dieser Antwort forken",
   "72f8e14b1246d224": "Auf diese Antwort antworten",
+  "de266ef8cd07ffd1": [
+    "Einige Änderungen dieses Turns lassen sich weder anzeigen noch zurücksetzen:",
+    " ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
   "33802dfa98c07ca7": [
     "Die Änderungen dieses Turns lassen sich nicht anzeigen:",
     " ",

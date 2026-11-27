@@ -2833,7 +2833,7 @@ function TurnDiffStat(props: {
     <View>
       {stat}
       <Text className="px-2 pb-1 text-xs text-foreground-muted">
-        {gt("This turn's changes cannot be shown: {reason}", { reason })}
+        {gt("Some of this turn's changes cannot be shown or rolled back: {reason}", { reason })}
       </Text>
     </View>
   );

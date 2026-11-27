@@ -4374,6 +4374,15 @@
   "405a3e88ee6e62b3": "Den här omgångens ändringar i det här repot kan inte listas.",
   "f6958f38dc87c712": "Forka från det här svaret",
   "72f8e14b1246d224": "Svara på det här svaret",
+  "de266ef8cd07ffd1": [
+    "Vissa av den här turens ändringar kan inte visas eller återställas:",
+    " ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
   "33802dfa98c07ca7": [
     "Den här turens ändringar kan inte visas:",
     " ",

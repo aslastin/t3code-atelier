@@ -63,7 +63,10 @@ import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirectory.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
-import { pluginCheckpointsWithPrefixes } from "./plugins/pluginCheckpoints.ts";
+import {
+  hasNativeCheckpointsIn,
+  pluginCheckpointsWithPrefixes,
+} from "./plugins/pluginCheckpoints.ts";
 import { VcsPluginDrivers } from "./plugins/VcsPluginDrivers.ts";
 import { isNonRepositoryGitStderr } from "./vcs/GitVcsDriverCore.ts";
 import { worktreeRemovalChecks } from "./vcs/worktreeRemovalChecks.ts";
@@ -164,6 +167,12 @@ type LimitRecoverySettings = Pick<
   ServerSettings,
   "autoResumeLimitedThreads" | "snoozeLimitedThreads"
 >;
+
+// A folder a plugin marks while the project's VCS did not answer: never handed to Git.
+const UNVERIFIED_PLUGIN = "unverified" as VcsDriverKind;
+// A plugin may keep native snapshots inside the checkout; a live thread would lose them.
+const NATIVE_CHECKPOINTS_REASON =
+  "its VCS plugin's snapshots of the thread's checkpoints are in it";
 
 export function storageCleanupThreadIdle(
   thread: OrchestrationV2ThreadShell,
@@ -384,7 +393,8 @@ const make = Effect.gen(function* () {
     const project = yield* gitWorkflow
       .localStatus({ cwd: projectRoot })
       .pipe(Effect.orElseSucceed(() => null));
-    const kind = project?.capabilities?.kind;
+    if (project === null) return "unanswered" as const;
+    const kind = project.capabilities?.kind;
     const plugin = kind === undefined ? undefined : plugins?.describe(kind);
     return kind === undefined || plugin === undefined ? null : { kind, plugin };
   });
@@ -395,6 +405,16 @@ const make = Effect.gen(function* () {
     if (!gitWorkflowHasPlugins()) return null;
     // Even beside a `.git`: the plugin's marker decides which VCS owns the folder.
     const project = yield* projectPlugin(projectRoot);
+    if (project === "unanswered") {
+      // The project's VCS did not answer: a folder any plugin marks is not handed to Git.
+      for (const marker of plugins?.installedMarkers() ?? []) {
+        if (
+          yield* fs.exists(path.join(worktreePath, marker)).pipe(Effect.orElseSucceed(() => true))
+        )
+          return UNVERIFIED_PLUGIN;
+      }
+      return null;
+    }
     if (project === null) return null;
     const { kind, plugin } = project;
     let marked = false;
@@ -415,7 +435,8 @@ const make = Effect.gen(function* () {
   // that plugin's removal resolves it; null inside the project's repository itself.
   const pluginCheckoutAround = Effect.fnUntraced(function* (target: string, projectCwd: string) {
     if (!gitWorkflowHasPlugins()) return null;
-    const markers = (yield* projectPlugin(projectCwd))?.plugin.markers ?? [];
+    const project = yield* projectPlugin(projectCwd);
+    const markers = project === "unanswered" ? [] : (project?.plugin.markers ?? []);
     if (markers.length === 0) return null;
     // Physical ancestors, as the plugin's removal resolves them: a link's own name would
     // check a smaller folder than the one removed.
@@ -438,6 +459,13 @@ const make = Effect.gen(function* () {
     }
   });
   // What the plugin's status says about one of its worktrees, read fresh for each check.
+  // Recorded under the checkout's real root, as checkpoint capture resolves it.
+  const holdsNativeCheckpoints = Effect.fnUntraced(function* (checkoutPath: string) {
+    const real = yield* fs.realPath(checkoutPath).pipe(Effect.orElseSucceed(() => checkoutPath));
+    return yield* hasNativeCheckpointsIn([real, path.resolve(checkoutPath)]).pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+    );
+  });
   const pluginWorktreeState = Effect.fnUntraced(function* (
     worktreePath: string,
     branch: string | null,
@@ -612,7 +640,12 @@ const make = Effect.gen(function* () {
   );
 
   const measureWorktree = Effect.fn("storageCleanup.measureWorktree")(
-    function* (worktreePath: string, inspectRepositories: boolean | "plain-folder" = false) {
+    function* (
+      worktreePath: string,
+      // "plugin": a plugin removes the checkout with no submodule checks of its own, so a
+      // registered submodule counts as a nested repository too.
+      inspectRepositories: boolean | "plain-folder" | "plugin" = false,
+    ) {
       const root = yield* fs.realPath(worktreePath);
       const skipped = yield* sharedPnpmVirtualStore(root);
       const incomplete = { bytes: null, reason: "worktree could not be fully inspected" };
@@ -1195,6 +1228,8 @@ const make = Effect.gen(function* () {
         const checkoutPath = checkout.worktreePath;
         // A VCS plugin's checkout passes the checks its own sweep does, and the plugin removes it.
         const pluginKind = yield* pluginWorktreeKind(checkoutPath, checkout.repositoryPath);
+        if (pluginKind === UNVERIFIED_PLUGIN)
+          return { keep: "its VCS plugin did not answer", force: false, bytes: null };
         if (pluginKind !== null) {
           const state = yield* pluginWorktreeState(checkoutPath, branch, rules);
           const recoverable =
@@ -1210,9 +1245,12 @@ const make = Effect.gen(function* () {
             (recoverable
               ? null
               : `${state.label} could not recreate it for the thread's next turn`) ??
+            (!deleted && (yield* holdsNativeCheckpoints(checkoutPath))
+              ? NATIVE_CHECKPOINTS_REASON
+              : null) ??
             state.changes;
           if (pluginReason !== null) return { keep: pluginReason, force: false, bytes: null };
-          const inspection = yield* measureWorktree(checkoutPath, true);
+          const inspection = yield* measureWorktree(checkoutPath, "plugin");
           if (inspection.reason !== null)
             return { keep: inspection.reason, force: false, bytes: inspection.bytes };
           if (yield* settingsChanged)
@@ -1656,6 +1694,7 @@ const make = Effect.gen(function* () {
         // Atelier fork: a VCS plugin's worktree goes through the plugin. Only age, settling and
         // deletion apply; the merge and unchanged rules read Git history a plugin does not expose.
         const pluginKind = yield* pluginWorktreeKind(worktreePath, project.workspaceRoot);
+        if (pluginKind === UNVERIFIED_PLUGIN) return keep("its VCS plugin did not answer");
         if (pluginKind !== null) {
           if (!eligible) return keep(notDueReason);
           const pluginPathReason = yield* worktreePathReason(worktreePath, false);
@@ -1678,11 +1717,13 @@ const make = Effect.gen(function* () {
           });
           const cannotRecreate = `${first.label} could not recreate it for the thread's next turn`;
           if (yield* unrecoverable(first.recreates)) return keep(cannotRecreate);
+          if (!deleted && (yield* holdsNativeCheckpoints(worktreePath)))
+            return keep(NATIVE_CHECKPOINTS_REASON);
           if (first.changes !== null) return keep(first.changes);
           const blocked = yield* blockedSinceCheck();
           if (blocked !== null) return keep(blocked);
           // As for Git: a repository nested inside, with work of its own, keeps the folder.
-          const inspection = yield* measureWorktree(worktreePath, true);
+          const inspection = yield* measureWorktree(worktreePath, "plugin");
           if (inspection.reason !== null) return keep(inspection.reason);
           return yield* withCleanupLease(
             worktreePath,

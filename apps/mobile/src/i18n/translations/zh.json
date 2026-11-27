@@ -4569,6 +4569,7 @@
   "c887abfd190d8b40": "此文件夹",
   "275b5fe6040f2c1c": "{files, plural, other {审查 {files} 个已更改的文件，新增 {additions} 行，删除 {deletions} 行}}",
   "c4a35456c7bdc3a1": "{files, plural, other {审查 {folders} 中 {files} 个已更改的文件，新增 {additions} 行，删除 {deletions} 行}}",
+  "9137615e170d3151": "此轮的部分更改无法显示或回滚：{reason}",
   "7a13ae3b70a050fb": "{label}（不可用）",
   "8f033834a0194c33": "上下文不可用",
   "4031ea1541b3ec2b": "打开上下文",
