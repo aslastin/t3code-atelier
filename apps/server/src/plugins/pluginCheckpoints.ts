@@ -509,13 +509,22 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           ));
         files.push(present || file.status === "deleted" ? file : { ...file, status: "deleted" });
       }
+      // A folder listed as one entry is read in full, but never a repository or mount inside it.
+      const inside: string[] = [];
+      for (const file of files) {
+        if (file.status === "deleted") continue;
+        const nested = yield* nestedRepositories(location, file.path);
+        if (nested === null)
+          return yield* unsupported("captureCheckpoint", `${file.path} could not be looked at.`);
+        inside.push(...nested);
+      }
       yield* ensureShadow(location);
       const commit = yield* withIndex(location, (index) =>
         stagePaths(
           location,
           index,
           files.filter((file) => file.status !== "deleted").map((file) => file.path),
-          excludes,
+          [...excludes, ...inside],
         ).pipe(Effect.andThen(commitIndex(location, index))),
       );
       yield* git(location, ["update-ref", checkpointRef, commit]);

@@ -1002,6 +1002,16 @@ describe("ManifestVcsDriver", () => {
         NodeFS.writeFileSync(`${repository}/generated/own.txt`, "own\n");
         NodeFS.writeFileSync(`${repository}/generated/mnt/data.txt`, "data\n");
         mount = `${repository}/generated/mnt`;
+        // A snapshot of the added folder leaves out the mount inside it.
+        yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("m") });
+        const added = yield* checkpoints.diffCheckpoints({
+          cwd: repository,
+          fromCheckpointRef: ref("0"),
+          toCheckpointRef: ref("m"),
+          ignoreWhitespace: false,
+        });
+        assert.include(added, "generated/own.txt");
+        assert.notInclude(added, "data.txt");
         yield* checkpoints.restoreCheckpoint(restore);
         assert.isFalse(NodeFS.existsSync(`${repository}/generated/own.txt`));
         assert.isTrue(NodeFS.existsSync(`${repository}/generated/mnt/data.txt`));
