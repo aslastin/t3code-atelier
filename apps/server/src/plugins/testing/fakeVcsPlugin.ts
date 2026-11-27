@@ -266,6 +266,16 @@ switch (command) {
     out({ subjects: subjects.reverse() });
     break;
   }
+  case "branch-rename": {
+    const [oldRef, newRef] = args;
+    const head = path.join(kite, "HEAD");
+    if (fs.readFileSync(head, "utf8").trim() === oldRef) fs.writeFileSync(head, newRef + "\n");
+    fs.writeFileSync(
+      path.join(kite, "refs.json"),
+      JSON.stringify(readRefs().map((ref) => (ref === oldRef ? newRef : ref))),
+    );
+    break;
+  }
   case "branch-create": {
     const [ref] = args;
     fs.writeFileSync(path.join(kite, "HEAD"), ref + "\n");
@@ -334,6 +344,7 @@ export function writeFakeVcsPlugin(directory: string, options: FakeVcsPluginOpti
           diff: [kite, "diff"],
           log: [kite, "log"],
           branchCreate: [kite, "branch-create", "{newRef}"],
+          branchRename: [kite, "branch-rename", "{oldRef}", "{newRef}"],
           worktreeCreate: [kite, "worktree-add", "{path}", "{newRef}", "{baseRef}"],
           worktreeRemove: [kite, "worktree-remove", "{path}"],
           worktreeAttach: [kite, "worktree-attach", "{path}", "{ref}"],

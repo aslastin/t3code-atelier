@@ -169,6 +169,8 @@ type NewTaskFlowContextValue = {
     selection: ComposerDraftWorkspaceSelection | undefined,
   ) => ComposerDraftWorkspaceSelection;
   readonly startFromOrigin: boolean;
+  /** Atelier fork: false for a VCS plugin's repository, which cannot fetch a remote base. */
+  readonly offersStartFromRemote: boolean;
   readonly pullRequestReference: string | undefined;
   readonly draftKey: string | null;
   readonly prompt: string;
@@ -458,8 +460,11 @@ export function NewTaskFlowProvider(
     { choices: worktreeRepositoryChoices, chosen: draftRepositories },
     messages,
   );
+  const offersStartFromRemote = vcsAllows(projectGitStatus.data, "startFromRemote");
   const startFromOrigin =
-    isGitRepo && (draftStartFromOrigin ?? projectSettings.settings.newWorktreesStartFromOrigin);
+    isGitRepo &&
+    offersStartFromRemote &&
+    (draftStartFromOrigin ?? projectSettings.settings.newWorktreesStartFromOrigin);
   const defaultRuntimeMode = projectSettings.settings.defaultRuntimeMode;
   const managedPolicy = selectedEnvironmentServerConfig?.managedPolicy;
   const runtimeMode = resolveNewThreadRuntimeMode(
@@ -948,6 +953,7 @@ export function NewTaskFlowProvider(
     workspaceCwd,
     resolveWorkspaceSelection,
     startFromOrigin,
+    offersStartFromRemote,
     draftKey: selectedProjectDraftKey,
     pullRequestReference: selectedProjectDraft.workspaceSelection?.pullRequestReference,
     prompt,

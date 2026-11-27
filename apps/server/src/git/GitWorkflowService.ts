@@ -170,6 +170,8 @@ export class GitWorkflowService extends Context.Service<
       readonly oldBranch: string;
       readonly newBranch: string;
     }) => Effect.Effect<{ readonly branch: string }, GitManagerServiceError>;
+    /** Atelier fork: whether the checkout's VCS can rename a branch, as a plugin may not. */
+    readonly canRenameBranch: (cwd: string) => Effect.Effect<boolean>;
   }
 >()("t3/git/GitWorkflowService") {}
 
@@ -915,8 +917,21 @@ export const make = Effect.gen(function* () {
     }),
     renameBranch: Effect.fn("GitWorkflowService.renameBranch")(function* (input) {
       const operation = "GitWorkflowService.renameBranch";
-      return yield* route(yield* resolveWorkflow(operation, input.cwd), operation, () =>
-        git.renameBranch(input),
+      return yield* route(
+        yield* resolveWorkflow(operation, input.cwd),
+        operation,
+        () => git.renameBranch(input),
+        (ops) => ops.renameBranch?.(input),
+      );
+    }),
+    canRenameBranch: Effect.fn("GitWorkflowService.canRenameBranch")(function (cwd) {
+      return registry.detect({ cwd }).pipe(
+        Effect.map((handle) =>
+          handle === null
+            ? false
+            : handle.kind === GIT_VCS_KIND || handle.driver.workflow?.renameBranch !== undefined,
+        ),
+        Effect.orElseSucceed(() => false),
       );
     }),
   });

@@ -337,6 +337,28 @@ describe("ManifestVcsDriver", () => {
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
+  it.live("renames a branch, picking a free name as Git does", () =>
+    Effect.gen(function* () {
+      const { driver, repository } = yield* setup();
+      const workflow = driver!.workflow!;
+      yield* workflow.createBranch!({ cwd: repository, refName: "t3/1234abcd" });
+      NodeFS.writeFileSync(
+        `${repository}/.kite/refs.json`,
+        JSON.stringify(["t3/1234abcd", "fix-parser"]),
+      );
+      const renamed = yield* workflow.renameBranch!({
+        cwd: repository,
+        oldBranch: "t3/1234abcd",
+        newBranch: "fix-parser",
+      });
+      assert.strictEqual(renamed.branch, "fix-parser-1");
+      assert.strictEqual(
+        NodeFS.readFileSync(`${repository}/.kite/HEAD`, "utf8").trim(),
+        "fix-parser-1",
+      );
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   it.live("creates a worktree where T3 puts it, keeps the project subfolder, and removes it", () =>
     Effect.gen(function* () {
       const { driver, repository, home } = yield* setup();

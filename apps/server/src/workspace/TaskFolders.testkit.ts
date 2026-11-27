@@ -71,6 +71,7 @@ export const layerTaskFoldersWithGit = (state: TaskFoldersTestState) => {
           }),
         pruneWorktrees: git.pruneWorktrees,
         renameBranch: git.renameBranch,
+        canRenameBranch: (cwd) => Effect.map(isKite(cwd), (kite) => !kite),
         fetchWorktreeBaseCommit: git.fetchWorktreeBaseCommit,
         hasCommit: ({ cwd, refName }) =>
           Effect.gen(function* () {

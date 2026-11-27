@@ -377,6 +377,37 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
           .pipe(Effect.mapError(toCommandError("branchCreate", request.cwd)));
       }),
     }),
+    ...(commands.branchRename && {
+      renameBranch: Effect.fn("ManifestVcsDriver.renameBranch")(function* (request) {
+        const failed = toCommandError("branchRename", request.cwd);
+        const root = yield* repositoryRoot(request.cwd).pipe(Effect.mapError(failed));
+        const branch =
+          request.exactName === true || request.oldBranch === request.newBranch
+            ? request.newBranch
+            : freeBranchName(
+                request.newBranch,
+                (yield* listRefNames(request.cwd))
+                  .filter((ref) => !ref.isRemote && ref.name !== request.oldBranch)
+                  .map((ref) => ref.name),
+              );
+        if (branch === null)
+          return yield* new GitCommandError({
+            vcs: kind,
+            operation: `${kind}.branchRename`,
+            command: "branchRename",
+            cwd: request.cwd,
+            detail: `No free branch name like ${request.newBranch}.`,
+          });
+        if (branch === request.oldBranch) return { branch };
+        yield* runner
+          .run("branchRename", {
+            cwd: request.cwd,
+            values: { repositoryRoot: root, oldRef: request.oldBranch, newRef: branch },
+          })
+          .pipe(Effect.mapError(failed));
+        return { branch };
+      }),
+    }),
     ...(commands.diff && {
       workingDiff: Effect.fn("ManifestVcsDriver.workingDiff")(function* (request) {
         const out = yield* withTextFile(
@@ -630,3 +661,25 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
     }),
   });
 });
+
+/** As Git picks one: the name, or with a numbered suffix, unless a branch or one under it has it. */
+function freeBranchName(requested: string, existing: ReadonlyArray<string>): string | null {
+  const branches = new Set(existing.map((name) => name.toLowerCase()));
+  const blocked = new Set(branches);
+  for (const branch of branches) {
+    const segments = branch.split("/");
+    for (let index = 1; index < segments.length; index += 1)
+      blocked.add(segments.slice(0, index).join("/"));
+  }
+  const segments = requested.split("/");
+  const underBranch = segments.some(
+    (_, index) => index > 0 && branches.has(segments.slice(0, index).join("/").toLowerCase()),
+  );
+  const desired = underBranch ? segments.join("-") : requested;
+  if (!blocked.has(desired.toLowerCase())) return desired;
+  for (let suffix = 1; suffix <= 100; suffix += 1) {
+    const candidate = `${desired}-${suffix}`;
+    if (!blocked.has(candidate.toLowerCase())) return candidate;
+  }
+  return null;
+}

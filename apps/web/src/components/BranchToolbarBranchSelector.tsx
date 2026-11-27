@@ -313,6 +313,7 @@ export function BranchToolbarBranchSelector({
       : null;
   // A VCS plugin starts no branch in place and cannot switch one: only its worktrees are offered.
   const canSwitchRefs = vcsAllows(branchStatusQuery.data, "switchRef");
+  const canStartFromRemote = vcsAllows(branchStatusQuery.data, "startFromRemote");
   const canCreateBranch =
     canChangeThreadBranch &&
     canSwitchRefs &&
@@ -712,7 +713,7 @@ export function BranchToolbarBranchSelector({
       effectiveEnvMode,
       resolvedActiveBranch,
       resolvedActiveBranchIsRemote,
-      startFromOrigin,
+      startFromOrigin: startFromOrigin && canStartFromRemote,
     },
     messages,
   );
@@ -853,7 +854,7 @@ export function BranchToolbarBranchSelector({
             : "branch"
       }
       originControl={
-        isSelectingWorktreeBase
+        isSelectingWorktreeBase && canStartFromRemote
           ? { checked: startFromOrigin, onCheckedChange: onStartFromOriginChange }
           : undefined
       }

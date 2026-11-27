@@ -340,7 +340,7 @@ export function NewTaskBranchPickerRouteScreen() {
       selectionDisabled={switchingBranchName !== null}
       onSelect={selectBranch}
       worktree={
-        flow.workspaceMode === "worktree"
+        flow.workspaceMode === "worktree" && flow.offersStartFromRemote
           ? {
               startFromOrigin: flow.startFromOrigin,
               onChangeStartFromOrigin: flow.setStartFromOrigin,

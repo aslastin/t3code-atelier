@@ -138,6 +138,19 @@ export interface VcsWorkflowOps {
     { readonly cwd: string; readonly refName: string },
     void
   >;
+  /**
+   * Atelier fork: renames a branch. Unless `exactName`, a taken name gets a free variant; the
+   * name it took is returned.
+   */
+  readonly renameBranch?: WorkflowOperation<
+    {
+      readonly cwd: string;
+      readonly oldBranch: string;
+      readonly newBranch: string;
+      readonly exactName?: boolean;
+    },
+    { readonly branch: string }
+  >;
   /** Forgets worktrees whose folder is gone, before one is created at the same path again. */
   readonly pruneWorktrees?: WorkflowOperation<{ readonly cwd: string }, void>;
   readonly commit?: WorkflowOperation<

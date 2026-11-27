@@ -55,6 +55,7 @@ repository inside keeps its own search.
     "diff": ["./bin/diff.mjs"],
     "log": ["./bin/log.mjs"],
     "branchCreate": ["myvcs", "checkout", "-b", "{newRef}"],
+    "branchRename": ["myvcs", "branch", "-m", "{oldRef}", "{newRef}"],
     "worktreeCreate": ["./bin/worktree-add.mjs", "{path}", "{newRef}", "{baseRef}"],
     "worktreeRemove": ["./bin/worktree-remove.mjs", "{path}"],
     "worktreeAttach": ["./bin/worktree-attach.mjs", "{path}", "{ref}"],
@@ -104,6 +105,7 @@ Every command except `readFile` prints one JSON object on stdout. Optional field
 | `diff`              | `{pathsFile}`                     | `{ "patch" }`, the uncommitted changes as a Git-format patch, only of `{pathsFile}` when given. Optional.                                                                               |
 | `log`               |                                   | `{ "subjects": [string] }`, recent commit subjects, newest first. Optional.                                                                                                             |
 | `branchCreate`      | `{newRef}`                        | Anything. Start `{newRef}` from the checkout and switch to it, keeping uncommitted changes. Optional.                                                                                   |
+| `branchRename`      | `{oldRef}`, `{newRef}`            | Anything. Rename branch `{oldRef}` to `{newRef}`. T3 Code picks a `{newRef}` that `listRefs` does not list. Optional.                                                                   |
 | `push`              |                                   | `{ "branch"?, "upstreamBranch"? }`                                                                                                                                                      |
 | `pull`              |                                   | `{ "status": "pulled" \| "skipped_up_to_date", "refName", "upstreamRef"? }`                                                                                                             |
 | `worktreeCreate`    | `{path}`, `{newRef}`, `{baseRef}` | `{ "refName" }`. Create the checkout at `{path}`; T3 Code chooses it, as it does for Git.                                                                                               |
@@ -119,7 +121,9 @@ Every command except `readFile` prints one JSON object on stdout. Optional field
 
 Paths are relative to the repository root and use `/`. With `capabilities.worktrees`,
 `worktreeCreate`, `worktreeRemove` and `worktreeList` are required, and **New worktree** is offered for the
-plugin's repositories. Commit and push are offered only when their commands exist. Without a
+plugin's repositories. A new worktree starts on a temporary branch; with `branchRename`, T3 Code
+renames it after the thread's first message, as it does for Git, and without it the branch keeps
+its temporary name. **Start from remote** is Git-only. Commit and push are offered only when their commands exist. Without a
 typed message, T3 Code writes one as it does for Git, from the files `status` lists and, when the
 plugin has it, the patch `diff` prints. With `log`, the message follows your repository's recent
 subjects. **Commit on a new branch** needs `branchCreate`; T3 Code names the branch as it does for

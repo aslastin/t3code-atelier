@@ -1376,6 +1376,9 @@ const make = Effect.gen(function* () {
     ];
     if (cwds.length === 0 || input.oldBranch === input.newBranch)
       return { branch: input.oldBranch };
+    // Atelier fork: one name everywhere, so a checkout whose VCS cannot rename keeps them all.
+    for (const cwd of cwds)
+      if (!(yield* git.canRenameBranch(cwd))) return { branch: input.oldBranch };
     const renameFailed = fail("create", "Could not rename the branch");
     const branch =
       input.exactName === true

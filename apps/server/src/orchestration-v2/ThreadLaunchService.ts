@@ -1028,12 +1028,14 @@ const make = Effect.gen(function* () {
       }
       workspaceRecorded = true;
 
+      // Atelier fork: a VCS plugin without `branchRename` keeps the temporary branch, unnamed.
       if (
         reused === undefined &&
         worktreePath !== null &&
         branch !== null &&
         initialMessage !== undefined &&
-        (generatedTemporaryBranch || isTemporaryWorktreeBranch(branch))
+        (generatedTemporaryBranch || isTemporaryWorktreeBranch(branch)) &&
+        (createdTaskFolder !== null || (yield* git.canRenameBranch(worktreePath)))
       ) {
         const oldBranch = branch;
         const worktreeCwd = worktreePath;

@@ -13,7 +13,8 @@ export type VcsCapability =
   | "publish"
   | "pull"
   | "switchRef"
-  | "partialCommit";
+  | "partialCommit"
+  | "startFromRemote";
 
 type CapabilityStatus = Pick<VcsStatusLocalResult, "capabilities"> | null | undefined;
 
@@ -35,9 +36,11 @@ export function vcsAllows(status: CapabilityStatus, capability: VcsCapability): 
     // "Commit on a new branch": Git, or a plugin that can start a branch from the checkout.
     case "featureBranch":
       return capabilities.kind === GIT_VCS_KIND || capabilities.supportsBranchCreate === true;
-    // Publishing creates a Git remote; switching and creating refs go through Git.
+    // Publishing creates a Git remote; switching and creating refs go through Git. Starting a
+    // worktree from the remote fetches it first, which plugins cannot do yet.
     case "publish":
     case "switchRef":
+    case "startFromRemote":
       return capabilities.kind === GIT_VCS_KIND;
     case "pull":
       return capabilities.kind === GIT_VCS_KIND || capabilities.supportsPull === true;

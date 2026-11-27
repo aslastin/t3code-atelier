@@ -36,6 +36,8 @@ export const VcsPluginCommands = Schema.Struct({
   log: Schema.optionalKey(PluginArgv),
   /** Starts a branch from the checkout and switches to it, keeping uncommitted changes. */
   branchCreate: Schema.optionalKey(PluginArgv),
+  /** Renames a branch, such as a new worktree's temporary one once its thread has a name. */
+  branchRename: Schema.optionalKey(PluginArgv),
   /** Checks an existing ref out into a new worktree, to bring back one that was removed. */
   worktreeAttach: Schema.optionalKey(PluginArgv),
   worktreeList: Schema.optionalKey(PluginArgv),

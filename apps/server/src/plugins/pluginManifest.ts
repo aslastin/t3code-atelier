@@ -21,6 +21,7 @@ export const COMMAND_PLACEHOLDERS: Readonly<Record<ManifestCommandName, Readonly
   diff: ["repositoryRoot", "pathsFile"],
   log: ["repositoryRoot"],
   branchCreate: ["repositoryRoot", "newRef"],
+  branchRename: ["repositoryRoot", "oldRef", "newRef"],
   push: ["repositoryRoot"],
   pull: ["repositoryRoot"],
   worktreeCreate: ["repositoryRoot", "path", "newRef", "baseRef"],

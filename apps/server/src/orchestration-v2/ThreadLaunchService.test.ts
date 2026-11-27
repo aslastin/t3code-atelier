@@ -153,6 +153,7 @@ interface HarnessOptions {
   readonly remoteExists?: GitWorkflow.GitWorkflowService["Service"]["remoteExists"];
   readonly hasCommit?: GitWorkflow.GitWorkflowService["Service"]["hasCommit"];
   readonly renameBranch?: GitWorkflow.GitWorkflowService["Service"]["renameBranch"];
+  readonly canRenameBranch?: GitWorkflow.GitWorkflowService["Service"]["canRenameBranch"];
   readonly runSetup?: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"];
   readonly generateTitle?: TextGeneration.TextGeneration["Service"]["generateThreadTitle"];
   readonly generateBranchName?: TextGeneration.TextGeneration["Service"]["generateBranchName"];
@@ -246,6 +247,7 @@ function makeHarness(options: HarnessOptions = {}) {
       repositoryRoot: () => Effect.succeed(project.workspaceRoot),
       createWorktree,
       renameBranch,
+      canRenameBranch: options.canRenameBranch ?? (() => Effect.succeed(true)),
       fetchWorktreeBaseCommit:
         options.fetchWorktreeBaseCommit ??
         (() => Effect.succeed({ commitSha: "remote-main-sha", remoteRefName: "origin/main" })),
@@ -1512,6 +1514,29 @@ it.effect(
       assert.equal(harness.runSetup.mock.calls.length, 1);
       assert.equal(harness.renameBranch.mock.calls.length, 0);
       assert.isFalse(projection.turnItems.some((item) => item.type === "error"));
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect(
+  "keeps a temporary branch, without naming it, when the checkout's VCS cannot rename",
+  () => {
+    const harness = makeHarness({ canRenameBranch: () => Effect.succeed(false) });
+    return Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "no-rename",
+          thread: "no-rename-thread",
+          message: "Fix the parser",
+          workspace: { type: "worktree", baseRef: "main" },
+        }),
+      );
+      const projection = yield* preparationSettled(launched.threadId);
+      assert.equal(projection.runs[0]?.status, "starting");
+      assert.match(projection.thread.branch!, /^t3\/[0-9a-f]{8}$/);
+      assert.equal(harness.generateBranchName.mock.calls.length, 0);
+      assert.equal(harness.renameBranch.mock.calls.length, 0);
     }).pipe(Effect.provide(harness.layer));
   },
 );
