@@ -658,8 +658,10 @@ const make = Effect.gen(function* () {
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
 
   let lastSettings: ServerSettings | undefined;
+  let settingsReadFailed = false;
   const applyTelemetry = (settings: ServerSettings) => {
     lastSettings = settings;
+    settingsReadFailed = false;
     telemetry.update(managed.applyLocks(settings).observability);
   };
   const emitChange = (settings: ServerSettings) => {
@@ -933,9 +935,11 @@ const make = Effect.gen(function* () {
   }).pipe(
     Effect.tapError((error) => {
       if (error.operation !== "check-exists" && error.operation !== "read-file") return Effect.void;
-      if (lastSettings)
-        return emitChange({ ...lastSettings, observability: unreadableObservability });
-      return Effect.sync(() => telemetry.update(unreadableObservability));
+      settingsReadFailed = true;
+      telemetry.update(unreadableObservability);
+      return lastSettings
+        ? PubSub.publish(changesPubSub, { ...lastSettings, observability: unreadableObservability })
+        : Effect.void;
     }),
   );
 
@@ -946,6 +950,7 @@ const make = Effect.gen(function* () {
 
   const getSettingsFromCache = Cache.get(settingsCache, cacheKey).pipe(
     Effect.map((loaded) => loaded.settings),
+    Effect.tap((settings) => (settingsReadFailed ? emitChange(settings) : Effect.void)),
   );
   const reloadSettings = Cache.invalidate(settingsCache, cacheKey).pipe(
     Effect.andThen(Cache.get(settingsCache, cacheKey)),
@@ -1426,7 +1431,11 @@ const make = Effect.gen(function* () {
       updateAndPersistSettings(patch, (current) =>
         ensureSecretProviderWritesAllowed(patch, settingsPath).pipe(
           Effect.map(() =>
-            applyServerSettingsPatch(current, patch, telemetry.describe().telemetry.preferences),
+            applyServerSettingsPatch(
+              current,
+              patch,
+              telemetry.describe(current.observability).telemetry,
+            ),
           ),
         ),
       ),
@@ -1438,7 +1447,7 @@ const make = Effect.gen(function* () {
           const patched = applyServerSettingsPatch(
             current,
             patch,
-            telemetry.describe().telemetry.preferences,
+            telemetry.describe(current.observability).telemetry,
           );
           return applyProviderInstanceMutation(patched, mutation);
         }),

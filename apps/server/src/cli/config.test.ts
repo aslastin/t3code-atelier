@@ -14,11 +14,14 @@ import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import {
+  DEFAULT_SERVER_SETTINGS,
   DesktopBackendBootstrap,
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
 } from "@t3tools/contracts";
+import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import * as NetService from "@t3tools/shared/Net";
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
@@ -102,11 +105,14 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     devAllowedOrigins: [],
   } as const;
 
-  const openBootstrapFd = Effect.fn(function* (payload: DesktopBackendBootstrapValue) {
+  const openBootstrapFd = Effect.fn(function* (
+    payload: DesktopBackendBootstrapValue,
+    trailingLines = "",
+  ) {
     const fs = yield* FileSystem.FileSystem;
     const filePath = yield* fs.makeTempFileScoped({ prefix: "t3-bootstrap-", suffix: ".ndjson" });
     const encoded = yield* encodeDesktopBootstrap(payload);
-    yield* fs.writeFileString(filePath, `${encoded}\n`);
+    yield* fs.writeFileString(filePath, `${encoded}\n${trailingLines}`);
     return yield* Effect.acquireRelease(
       Effect.sync(() => NodeFS.openSync(filePath, "r")),
       // Windows cannot reopen the fd through /proc or /dev/fd, so the reader closes it.
@@ -588,6 +594,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       const startupEnv = {
         T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
         T3CODE_TELEMETRY_ENABLED: "false",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "http://localhost:4318",
         OTEL_TRACES_EXPORTER: "none",
         OTEL_METRICS_EXPORTER: "none",
         OTEL_LOGS_EXPORTER: "none",
@@ -599,6 +606,15 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         Effect.provide(NetService.layer),
       );
       const control = config.telemetry;
+      const legacyStatus = control.describe().telemetry;
+      expect(legacyStatus.preferences.otlp).toBe(true);
+      expect(
+        applyServerSettingsPatch(
+          DEFAULT_SERVER_SETTINGS,
+          { observability: { telemetry: { analytics: true } } },
+          legacyStatus,
+        ).observability.telemetry?.otlp,
+      ).toBe(true);
       control.setManaged(false);
       control.update({
         telemetry: { enabled: true, analytics: true, connect: false, otlp: true },
@@ -611,6 +627,45 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       expect(control.describe().telemetry.analytics).toBe("on");
       expect(control.describe().telemetry.otlp).toBe("exporters");
     }),
+  );
+
+  it.effect.each([
+    { line: "false\n", distroSetting: undefined, expected: "environment" },
+    { line: "true\n", distroSetting: undefined, expected: "on" },
+    { line: "true\n", distroSetting: "false", expected: "environment" },
+    { line: "", distroSetting: undefined, expected: "environment" },
+    { line: "unexpected\n", distroSetting: undefined, expected: "environment" },
+  ])(
+    "applies the WSL host decision $line with distro setting $distroSetting",
+    ({ line, distroSetting, expected }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const base = yield* fs.makeTempDirectoryScoped({ prefix: "t3-wsl-telemetry-" });
+        const fd = yield* openBootstrapFd(
+          makeDesktopBootstrap({ pendingHostTelemetry: true }),
+          line,
+        );
+        const env: NodeJS.ProcessEnv = {
+          T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
+          ...(distroSetting && { T3CODE_TELEMETRY_ENABLED: distroSetting }),
+        };
+        const config = yield* resolveServerConfig(
+          { ...minimalDesktopFlags(base), bootstrapFd: Option.some(fd) },
+          Option.none(),
+        ).pipe(
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(env))),
+          Effect.provideService(HostProcess.Environment, env),
+          Effect.provide(NetService.layer),
+        );
+        config.telemetry.setManaged(false);
+        config.telemetry.update({
+          telemetry: { enabled: true, analytics: true, connect: false, otlp: false },
+        });
+        const limits = yield* config.telemetry.subscribeLimitChanges;
+        if (config.telemetry.describe().telemetry.analytics === "pending")
+          yield* Stream.runHead(limits);
+        expect(config.telemetry.describe().telemetry.analytics).toBe(expected);
+      }),
   );
 
   it.effect("zeroes an endpoint stored in Settings when the SDK is disabled", () =>

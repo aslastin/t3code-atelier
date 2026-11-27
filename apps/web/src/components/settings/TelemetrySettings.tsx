@@ -167,7 +167,7 @@ export function TelemetrySettings() {
     const anyOn = eligible.some((t) => telemetryChoiceSelected(t, key));
     const mixed = anyOn && eligible.some((t) => !telemetryChoiceSelected(t, key));
     const next = nextTelemetryChoice(eligible, key);
-    const states = eligible.flatMap((target) => {
+    const states = targets.flatMap((target) => {
       const { env, status, blockedByDesktop } = target;
       if (!status) return [];
       const state =
@@ -180,7 +180,7 @@ export function TelemetrySettings() {
               : status[key] === "off" && !status.preferences.enabled && status.preferences[key]
                 ? gt("Selected · sending paused")
                 : m(reasons[status[key]]);
-      return [eligible.length === 1 ? state : `${env.label} · ${state}`];
+      return [targets.length === 1 ? state : `${env.label} · ${state}`];
     });
     return (
       <label key={key} className="flex items-center justify-between gap-4 py-2">

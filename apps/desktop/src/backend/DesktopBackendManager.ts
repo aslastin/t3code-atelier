@@ -79,6 +79,7 @@ export interface DesktopBackendStartConfig extends BackendProcessContext {
   readonly extendEnv: boolean;
   readonly bootstrap: DesktopBackendBootstrapValue;
   readonly bootstrapDelivery: DesktopBackendBootstrapDelivery;
+  readonly hostTelemetryDecision?: Effect.Effect<boolean>;
   readonly httpBaseUrl: URL;
   readonly captureOutput: boolean;
   readonly preflightFailure: Option.Option<PreflightFailure>;
@@ -447,7 +448,17 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
     ),
   );
   const onOutput = options.onOutput ?? (() => Effect.void);
-  const bootstrapStream = Stream.encodeText(Stream.make(`${bootstrapJson}\n`));
+  const envelope = Stream.make(`${bootstrapJson}\n`);
+  const bootstrapStream = Stream.encodeText(
+    options.hostTelemetryDecision
+      ? Stream.concat(
+          envelope,
+          Stream.fromEffect(
+            options.hostTelemetryDecision.pipe(Effect.map((allowed) => `${allowed}\n`)),
+          ),
+        )
+      : envelope,
+  );
   const additionalFds: Record<`fd${number}`, ChildProcess.AdditionalFdConfig> = {};
   if (options.bootstrapDelivery === "fd3") {
     additionalFds.fd3 = {

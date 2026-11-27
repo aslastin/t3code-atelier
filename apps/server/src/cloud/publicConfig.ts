@@ -4,7 +4,6 @@ import {
   DEFAULT_HOSTED_APP_URL,
 } from "@t3tools/shared/connectAuth";
 import { clerkFrontendApiUrlFromPublishableKey } from "@t3tools/shared/relayAuth";
-import { isRelayTracingEnabled } from "@t3tools/shared/otelEnvironment";
 import { normalizeSecureRelayUrl } from "@t3tools/shared/relayUrl";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -82,17 +81,6 @@ const buildTimeRelayClientTracing = {
       : __T3CODE_BUILD_RELAY_CLIENT_OTLP_TRACES_TOKEN__,
   ),
 } as const;
-
-export function resolveRelayClientTracingConfig(
-  env: Readonly<Record<string, string | undefined>> = process.env,
-  fallback = buildTimeRelayClientTracing,
-) {
-  if (!isRelayTracingEnabled(env)) {
-    return null;
-  }
-
-  return relayClientTracingDestination(env, fallback);
-}
 
 export function relayClientTracingDestination(
   env: Readonly<Record<string, string | undefined>>,

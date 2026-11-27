@@ -284,9 +284,21 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     lan: flags.lan ?? Option.none(),
   } satisfies CliServerFlags;
   const bootstrapFd = Option.getOrUndefined(normalizedFlags.bootstrapFd) ?? env.bootstrapFd;
+  const hostEnv = yield* HostProcess.Environment;
+  let refreshHostTelemetry: (() => void) | undefined;
   const bootstrapEnvelope =
     bootstrapFd !== undefined
-      ? yield* readBootstrapEnvelope(DesktopBackendBootstrap, bootstrapFd)
+      ? yield* readBootstrapEnvelope(DesktopBackendBootstrap, bootstrapFd, {
+          nextLine: (envelope) => {
+            if (!envelope.pendingHostTelemetry) return undefined;
+            hostEnv.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING = "1";
+            return (line) => {
+              if (line !== "true") hostEnv.T3CODE_TELEMETRY_ENABLED = "false";
+              delete hostEnv.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING;
+              refreshHostTelemetry?.();
+            };
+          },
+        })
       : Option.none();
   const bootstrap = Option.getOrUndefined(bootstrapEnvelope);
 
@@ -473,7 +485,6 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     },
   );
 
-  const hostEnv = yield* HostProcess.Environment;
   const config = ServerConfig.make(
     {
       logLevel,
@@ -546,6 +557,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
       )),
   );
 
+  refreshHostTelemetry = () => config.telemetry.refresh();
   return config;
 });
 

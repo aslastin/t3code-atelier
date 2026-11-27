@@ -6,6 +6,7 @@ import { userEvent } from "vite-plus/test/browser";
 const { state, updateSettings, checkOtlpEndpoint, checkOtlpEndpointCommand } = vi.hoisted(() => ({
   state: {
     allEnvironments: false,
+    compareConnect: false,
     listeners: new Set<() => void>(),
     observability: {} as typeof DEFAULT_SERVER_SETTINGS.observability,
     serverConfig: { environment: { capabilities: {} } } as {
@@ -28,6 +29,16 @@ function exportEnvironments() {
   };
   return [
     { environmentId: "ready", label: "Ready", connected: true, serverConfig },
+    ...(state.compareConnect
+      ? [
+          {
+            environmentId: "other",
+            label: "Other",
+            connected: true,
+            serverConfig: { ...serverConfig, observability: activeExport },
+          },
+        ]
+      : []),
     { environmentId: "offline", label: "Offline", connected: false, serverConfig },
     {
       environmentId: "legacy",
@@ -41,6 +52,11 @@ function exportEnvironments() {
 vi.mock(import("../../state/environments"), async (original) => ({
   ...(await original()),
   useEnvironments: (() => ({ environments: exportEnvironments() })) as never,
+  usePrimaryEnvironmentId: () => null,
+}));
+vi.mock(import("../../state/session"), async (original) => ({
+  ...(await original()),
+  useEnvironmentsWithScope: (environments) => new Set(environments.map((env) => env.environmentId)),
 }));
 
 vi.mock(import("@effect/atom-react"), async (original) => ({
@@ -80,11 +96,16 @@ vi.mock(import("./SettingsScopeContext"), async (original) => {
     useSettingsScope: (() => {
       const running = useSyncExternalStore(subscribe, () => state.serverConfig.observability);
       if (state.allEnvironments) {
+        const environments = exportEnvironments().map((env) => ({
+          ...env,
+          connection: { phase: env.connected ? "connected" : "disconnected" },
+        }));
         return {
-          scope: { kind: "all" },
+          scope: { kind: "all", label: "All environments" },
           groups: [],
           search: {},
-          connectedEnvironments: exportEnvironments().filter((env) => env.connected),
+          environments,
+          connectedEnvironments: environments.filter((env) => env.connected),
         };
       }
       return {
@@ -104,6 +125,7 @@ vi.mock(import("./useScopedSettings"), async (original) => ({
 }));
 
 import { TelemetryExportSettings } from "./TelemetryExportSettings";
+import { TelemetrySettings } from "./TelemetrySettings";
 
 const activeExport: ServerObservability = {
   localTracingEnabled: true,
@@ -120,12 +142,34 @@ const activeExport: ServerObservability = {
 };
 function setup() {
   state.allEnvironments = false;
+  state.compareConnect = false;
   updateSettings.mockClear();
   checkOtlpEndpoint.mockReset();
   state.serverConfig = { environment: { capabilities: {} } };
 }
 
 describe("TelemetryExportSettings", () => {
+  it("names both environments when only one supports Connect tracing", async () => {
+    setup();
+    state.allEnvironments = true;
+    state.compareConnect = true;
+    state.serverConfig.observability = {
+      ...activeExport,
+      telemetry: {
+        ...activeExport.telemetry!,
+        preferences: { ...activeExport.telemetry!.preferences, connect: true },
+        connect: "on",
+      },
+    };
+    await using screen = await render(<TelemetrySettings />, { router: "/settings/maintenance" });
+    await userEvent.click(screen.getByRole("button", { name: "What to send" }));
+    const label = screen
+      .getByRole("switch", { name: "T3 Connect tracing (Axiom)" })
+      .element()
+      .closest("label");
+    expect(label?.textContent).toContain("Ready · On");
+    expect(label?.textContent).toContain("Other · Unavailable in this build");
+  });
   it("offers only connected environments that support telemetry exports", async () => {
     setup();
     state.allEnvironments = true;

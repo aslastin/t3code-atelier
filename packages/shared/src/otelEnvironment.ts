@@ -324,11 +324,13 @@ export const load: Effect.Effect<OtelEnvironment> = Config.all({
     }
     return {
       disabled,
+      ...([generic, own.traces, own.metrics, own.logs].some(
+        ({ endpoint }) => endpoint.value !== undefined,
+      )
+        ? { hasConfiguredEndpoint: true }
+        : {}),
       ...(disabled
         ? {
-            hasConfiguredEndpoint: [generic, own.traces, own.metrics, own.logs].some(
-              ({ endpoint }) => endpoint.value !== undefined,
-            ),
             disabledBy: t3.value
               ? ("T3CODE_OTEL_SDK_DISABLED" as const)
               : ("OTEL_SDK_DISABLED" as const),
@@ -344,14 +346,15 @@ export const load: Effect.Effect<OtelEnvironment> = Config.all({
   Effect.orDie,
 );
 
+export function isT3TelemetryEnabled(env: Readonly<Record<string, string | undefined>>) {
+  const value = env.T3CODE_TELEMETRY_ENABLED?.trim().toLowerCase();
+  return !value || T3CODE_TRUE.includes(value);
+}
+
 export const isRelayTracingEnabled = (env: Readonly<Record<string, string | undefined>>) =>
-  Config.all({
-    ...sdkFlags,
-    telemetry: flag("T3CODE_TELEMETRY_ENABLED", T3CODE_TRUE, T3CODE_FALSE, String),
-  }).pipe(
-    Effect.map(
-      ({ telemetry, t3, spec }) => telemetry.value !== false && !(t3.value ?? spec.value ?? false),
-    ),
+  isT3TelemetryEnabled(env) &&
+  Config.all(sdkFlags).pipe(
+    Effect.map(({ t3, spec }) => !(t3.value ?? spec.value ?? false)),
     Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(env))),
     Effect.orDie,
     Effect.runSync,

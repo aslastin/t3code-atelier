@@ -428,6 +428,28 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       ),
   );
 
+  it.effect("preserves blocked preferences during a stale settings update", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      config.telemetry.setManaged(true);
+      const updated = yield* service.updateSettings({
+        observability: {
+          otlpTracesUrl: "http://localhost:4318/v1/traces",
+          telemetry: { enabled: true, analytics: true, connect: true, otlp: true },
+        },
+      });
+      assert.deepEqual(updated.observability.telemetry, {
+        enabled: true,
+        analytics: false,
+        connect: false,
+        otlp: true,
+      });
+      config.telemetry.setManaged(false);
+      assert.equal(config.telemetry.describe().telemetry.analytics, "off");
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect("retries a failed settings read instead of keeping the failure", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
@@ -441,6 +463,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
         },
       });
       assert.isTrue(serverConfig.telemetry.describe().otlpTracesEnabled);
+      const original = yield* fileSystem.readFileString(serverConfig.settingsPath);
       yield* fileSystem.remove(serverConfig.settingsPath);
       yield* fileSystem.makeDirectory(serverConfig.settingsPath);
       const failedWrite = yield* Effect.flip(
@@ -455,13 +478,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       assert.deepInclude(error, { _tag: "ServerSettingsError", operation: "read-file" });
 
       yield* fileSystem.remove(serverConfig.settingsPath, { recursive: true });
-      yield* fileSystem.writeFileString(
-        serverConfig.settingsPath,
-        `{ "responseStreamingMode": "turn" }`,
-      );
+      yield* fileSystem.writeFileString(serverConfig.settingsPath, original);
 
       const settings = yield* serverSettings.getSettings;
-      assert.equal(settings.responseStreamingMode, "turn");
+      assert.isTrue(settings.observability.telemetry?.otlp);
+      assert.isTrue(serverConfig.telemetry.describe().otlpTracesEnabled);
     }).pipe(Effect.provide(layerServerSettings())),
   );
 

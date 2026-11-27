@@ -7,6 +7,7 @@ import {
   resolveTelemetry,
   type TelemetrySettings,
 } from "@t3tools/shared/telemetryConsent";
+import { isT3TelemetryEnabled } from "@t3tools/shared/otelEnvironment";
 import type { ServerConfig } from "../config.ts";
 import { relayClientTracingDestination } from "../cloud/publicConfig.ts";
 
@@ -41,6 +42,10 @@ export class TelemetryControl {
     this.refresh();
   }
 
+  get relayDestination() {
+    return this.#relay;
+  }
+
   setManaged(denied: boolean) {
     this.managed = denied;
     this.refresh();
@@ -51,7 +56,11 @@ export class TelemetryControl {
     this.refresh();
   }
 
-  private endpoint(signal: "traces" | "metrics" | "logs", name: "Traces" | "Metrics" | "Logs") {
+  private endpoint(
+    settings: TelemetrySettings,
+    signal: "traces" | "metrics" | "logs",
+    name: "Traces" | "Metrics" | "Logs",
+  ) {
     const config = this.#config;
     const key = `otlp${name}Url` as const;
     const source = config[`otlp${name}Source`];
@@ -60,32 +69,31 @@ export class TelemetryControl {
     const setting = config.otelEnvironment[signal];
     if (setting._tag === "Off")
       return { url: undefined, source: "environment" as const, variable: setting.variable };
-    const url = this.#settings[key]?.trim() || undefined;
+    const url = settings[key]?.trim() || undefined;
     return { url, source: url ? ("settings" as const) : undefined, variable: undefined };
   }
 
-  describe() {
+  describe(settings = this.#settings) {
     const config = this.#config;
-    const traces = this.endpoint("traces", "Traces");
-    const metrics = this.endpoint("metrics", "Metrics");
-    const logs = this.endpoint("logs", "Logs");
+    const traces = this.endpoint(settings, "traces", "Traces");
+    const metrics = this.endpoint(settings, "metrics", "Metrics");
+    const logs = this.endpoint(settings, "logs", "Logs");
     const sdk = config.otelEnvironment.disabled;
-    const preference = this.#env.T3CODE_TELEMETRY_ENABLED?.trim().toLowerCase();
-    const status = resolveTelemetry(this.#settings.telemetry, {
+    const status = resolveTelemetry(settings.telemetry, {
       endpoint: Boolean(traces.url || metrics.url || logs.url),
       exportersDisabled: [traces, metrics, logs].every(
         (signal) => signal.source === "environment" && !signal.url,
       ),
       legacyEndpoint: Boolean(
         config.otelEnvironment.hasConfiguredEndpoint ||
-        this.#settings.otlpTracesUrl ||
-        this.#settings.otlpMetricsUrl ||
-        this.#settings.otlpLogsUrl,
+        settings.otlpTracesUrl ||
+        settings.otlpMetricsUrl ||
+        settings.otlpLogsUrl,
       ),
       connect: this.#relay !== null,
       sdk,
       managed: this.managed,
-      t3: this.#allowT3 && (!preference || ["true", "1", "yes", "y", "on"].includes(preference)),
+      t3: this.#allowT3 && isT3TelemetryEnabled(this.#env),
       pending: this.#env.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING === "1",
     });
     return {
@@ -96,9 +104,7 @@ export class TelemetryControl {
         ...(config.otelEnvironment.disabledBy
           ? { sdkDisabledBy: config.otelEnvironment.disabledBy }
           : {}),
-        ...(this.#settings.telemetryRevisions
-          ? { revisions: this.#settings.telemetryRevisions }
-          : {}),
+        ...(settings.telemetryRevisions ? { revisions: settings.telemetryRevisions } : {}),
       },
       otlpTracesUrl: traces.url,
       otlpTracesSource: traces.source,

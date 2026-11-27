@@ -405,6 +405,10 @@ export const TelemetryStatus = Schema.Struct({
 });
 export type TelemetryStatus = typeof TelemetryStatus.Type;
 
+export function canChangeTelemetryChannel(state: TelemetryStatus["otlp"] | undefined) {
+  return state === "on" || state === "off" || state === "noEndpoint";
+}
+
 export const ServerObservability = Schema.Struct({
   telemetry: Schema.optionalKey(TelemetryStatus),
   logsDirectoryPath: TrimmedNonEmptyString,

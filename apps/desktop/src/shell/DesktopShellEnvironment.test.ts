@@ -1051,6 +1051,66 @@ describe("DesktopShellEnvironment", () => {
       }),
   );
 
+  it.effect(
+    "keeps Windows telemetry pending when a different PowerShell answers the profile probe",
+    () =>
+      Effect.gen(function* () {
+        let profileReady = false;
+        const env: NodeJS.ProcessEnv = { PATH: "C:\\Windows" };
+        yield* runShellEnvironment({
+          env,
+          platform: "win32",
+          handler: (command) => {
+            if (command._tag !== "StandardCommand") return "";
+            if (command.command === "pwsh.exe" && !command.args.includes("-NoProfile")) {
+              return profileReady
+                ? envOutput({ PATH: "C:\\Windows", T3CODE_TELEMETRY_ENABLED: "false" })
+                : { output: "", exitCode: 1 };
+            }
+            return envOutput({ PATH: "C:\\Windows" });
+          },
+          use: (service) =>
+            Effect.gen(function* () {
+              yield* service.awaitDiscovery;
+              assert.isFalse(yield* service.discoveryFinished);
+              profileReady = true;
+              yield* TestClock.adjust("30 seconds");
+              yield* service.awaitSettledDiscovery;
+              assert.isTrue(yield* service.discoveryFinished);
+              assert.equal(env.T3CODE_TELEMETRY_ENABLED, "false");
+              return true;
+            }),
+        });
+      }),
+  );
+
+  it.effect("trusts the Windows PowerShell profile when pwsh is not installed", () =>
+    Effect.gen(function* () {
+      const env: NodeJS.ProcessEnv = {};
+      const confirmed = yield* runShellEnvironment({
+        env,
+        platform: "win32",
+        handler: () => "",
+        processSpawner: ChildProcessSpawner.make((command) =>
+          command._tag === "StandardCommand" && command.command === "powershell.exe"
+            ? Effect.succeed(
+                makeProcess(envOutput({ PATH: "C:\\Windows", T3CODE_TELEMETRY_ENABLED: "false" })),
+              )
+            : Effect.fail(
+                PlatformError.systemError({
+                  _tag: "NotFound",
+                  module: "ChildProcess",
+                  method: "spawn",
+                }),
+              ),
+        ),
+        use: (service) => service.awaitDiscovery.pipe(Effect.andThen(service.discoveryFinished)),
+      });
+      assert.isTrue(confirmed);
+      assert.equal(env.T3CODE_TELEMETRY_ENABLED, "false");
+    }),
+  );
+
   it.effect("gives up on a Windows shell that survives the kill", () =>
     Effect.gen(function* () {
       const commands: Array<string> = [];

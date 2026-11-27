@@ -15,13 +15,28 @@ import { relayLayer } from "./relayTracing.ts";
 const tracesTo = (policy?: ManagedPolicyDocument) =>
   Effect.service(RelayTracing.RelayClientTracer).pipe(
     Effect.provide(
-      relayLayer(
-        { serviceName: "t3code-server", runtime: "node", client: "environment-server" },
-        { tracesUrl: "https://traces.example.com", tracesDataset: "relay", tracesToken: "token" },
-      ).pipe(
+      relayLayer({
+        serviceName: "t3code-server",
+        runtime: "node",
+        client: "environment-server",
+      }).pipe(
         Layer.provide(ManagedPolicy.layerTest(policy)),
         Layer.provide(
-          ServerConfig.layerTest(process.cwd(), { prefix: "t3-relay-tracing-" }).pipe(
+          Layer.effect(
+            ServerConfig.ServerConfig,
+            Effect.gen(function* () {
+              return ServerConfig.make(
+                yield* ServerConfig.ServerConfig,
+                {},
+                {
+                  T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: "https://traces.example.com",
+                  T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: "relay",
+                  T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: "token",
+                },
+              );
+            }),
+          ).pipe(
+            Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-relay-tracing-" })),
             Layer.provide(NodeServices.layer),
           ),
         ),
@@ -59,15 +74,13 @@ it.effect(
         tracesToken: "local",
         tracesDataset: "test",
       };
-      const config = ServerConfig.make(
-        base,
-        {},
-        {
-          T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: destination.tracesUrl,
-          T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: destination.tracesToken,
-          T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: destination.tracesDataset,
-        },
-      );
+      const env = {
+        T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: destination.tracesUrl,
+        T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: destination.tracesToken,
+        T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: destination.tracesDataset,
+        T3CODE_TELEMETRY_ENABLED: "false",
+      };
+      const config = ServerConfig.make(base, {}, env);
       const save = (enabled: boolean, revision: number) =>
         fs.writeFileString(
           config.settingsPath,
@@ -86,10 +99,11 @@ it.effect(
           return HttpClientResponse.fromWeb(request, new Response(null, { status: 200 }));
         }),
       );
-      const cli = relayLayer(
-        { client: "headless-cli", serviceName: "test-cli", runtime: "node" },
-        destination,
-      ).pipe(
+      const cli = relayLayer({
+        client: "headless-cli",
+        serviceName: "test-cli",
+        runtime: "node",
+      }).pipe(
         Layer.provide(ManagedPolicy.layerTest()),
         Layer.provide(ServerConfig.layer(config)),
         Layer.provide(Layer.succeed(HttpClient.HttpClient, http)),
@@ -99,6 +113,10 @@ it.effect(
       yield* span("cli-before-consent").pipe(Effect.provide(cli));
       assert.isEmpty(batches);
       yield* save(true, 1);
+      yield* span("cli-blocked").pipe(Effect.provide(cli));
+      assert.isEmpty(batches);
+      env.T3CODE_TELEMETRY_ENABLED = "true";
+      config.telemetry.refresh();
       yield* Effect.gen(function* () {
         yield* span("cli-revoked");
         yield* save(false, 2);

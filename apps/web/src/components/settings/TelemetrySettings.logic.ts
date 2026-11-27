@@ -1,4 +1,8 @@
-import type { TelemetryPreferences, TelemetryStatus } from "@t3tools/contracts";
+import {
+  canChangeTelemetryChannel,
+  type TelemetryPreferences,
+  type TelemetryStatus,
+} from "@t3tools/contracts";
 
 export function telemetryTargetIssue(
   connected: boolean,
@@ -23,7 +27,7 @@ function channelBlock(target: TelemetryTarget, channel: (typeof channels)[number
   if (channel === "connect" && target.blockedByDesktop) return "desktop";
   const state = target.status?.[channel];
   if (state === "unavailable") return "noChannel";
-  if (state === "on" || state === "off" || state === "noEndpoint") return undefined;
+  if (canChangeTelemetryChannel(state)) return undefined;
   return state;
 }
 

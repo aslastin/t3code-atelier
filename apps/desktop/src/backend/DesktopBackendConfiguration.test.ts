@@ -4,6 +4,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -25,19 +26,27 @@ import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
 
-const layerShellEnvironment = (prepared = true) =>
+const layerShellEnvironment = (
+  prepared = true,
+  discoveryFinished = Effect.succeed(true),
+  awaitSettledDiscovery = Effect.void,
+) =>
   Layer.succeed(DesktopShellEnvironment.DesktopShellEnvironment, {
     installIntoProcess: Effect.succeed(prepared),
     awaitDiscovery: Effect.succeed(prepared),
     awaitUserShellDiscovery: Effect.succeed(prepared),
-    discoveryFinished: Effect.succeed(true),
-    awaitSettledDiscovery: Effect.void,
+    discoveryFinished,
+    awaitSettledDiscovery,
     updates: Stream.empty,
   });
 
-const layerBackendConfiguration = (prepared = true) =>
+const layerBackendConfiguration = (
+  prepared = true,
+  discoveryFinished = Effect.succeed(true),
+  awaitSettledDiscovery = Effect.void,
+) =>
   DesktopBackendConfiguration.layer.pipe(
-    Layer.provide(layerShellEnvironment(prepared)),
+    Layer.provide(layerShellEnvironment(prepared, discoveryFinished, awaitSettledDiscovery)),
     Layer.provide(DesktopState.layer),
   );
 
@@ -773,46 +782,85 @@ describe("DesktopBackendConfiguration", () => {
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
-  it.effect("resolveWsl carries the kill switch and resource attributes into the distro", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-backend-config-test-",
-      });
+  it.effect.each([true, false])(
+    "resolveWsl forwards a confirmed host ban with discovery settled at launch: %s",
+    (settledAtLaunch) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-desktop-backend-config-test-",
+        });
 
-      yield* Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const config = yield* configuration.resolveWsl({ port: 5050, distro: null });
-
-        assert.equal(config.env.OTEL_SDK_DISABLED, "true");
-        assert.include((config.env.WSLENV ?? "").split(":"), "OTEL_SDK_DISABLED");
-        assert.equal(config.env.T3CODE_TELEMETRY_ENABLED, "false");
-        assert.include((config.env.WSLENV ?? "").split(":"), "T3CODE_TELEMETRY_ENABLED");
-        assert.equal(config.env.OTEL_RESOURCE_ATTRIBUTES, "deployment.environment.name=staging");
-        assert.include((config.env.WSLENV ?? "").split(":"), "OTEL_RESOURCE_ATTRIBUTES");
-      }).pipe(
-        Effect.provide(
-          layerBackendConfiguration().pipe(
-            Layer.provideMerge(layerServerExposure),
-            Layer.provideMerge(DesktopAppSettings.layerTest()),
-            Layer.provideMerge(DesktopWslServerTree.layerTest()),
-            Layer.provideMerge(
-              DesktopWslEnvironment.layerTest({
-                isAvailable: true,
-                windowsToWslPath: () => Option.some("/mnt/c/repo/apps/server/src/index.ts"),
-                getDistroIp: () => Option.some("172.27.0.99"),
-              }),
-            ),
-            Layer.provideMerge(layerEnvironment(baseDir, { platform: "win32" })),
-          ),
-        ),
-        Effect.provideService(HostProcess.Environment, {
+        const path = yield* Path.Path;
+        const entry = path.join(baseDir, "apps/server/dist/bin.mjs");
+        yield* fileSystem.makeDirectory(path.dirname(entry), { recursive: true });
+        yield* fileSystem.writeFileString(entry, "");
+        const settled = yield* Deferred.make<void>();
+        let known = settledAtLaunch;
+        const env = {
           OTEL_SDK_DISABLED: "true",
-          T3CODE_TELEMETRY_ENABLED: "false",
+          T3CODE_TELEMETRY_ENABLED: settledAtLaunch ? "false" : "true",
           OTEL_RESOURCE_ATTRIBUTES: "deployment.environment.name=staging",
-        }),
-      );
-    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+        };
+        yield* Effect.gen(function* () {
+          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+          const config = yield* configuration.resolveWsl({ port: 5050, distro: null });
+
+          assert.equal(config.env.OTEL_SDK_DISABLED, "true");
+          assert.include((config.env.WSLENV ?? "").split(":"), "OTEL_SDK_DISABLED");
+          if (settledAtLaunch) {
+            assert.equal(config.env.T3CODE_TELEMETRY_ENABLED, "false");
+            assert.include((config.env.WSLENV ?? "").split(":"), "T3CODE_TELEMETRY_ENABLED");
+            assert.isUndefined(config.hostTelemetryDecision);
+          } else {
+            assert.isTrue(config.bootstrap.pendingHostTelemetry);
+            assert.isUndefined(config.env.T3CODE_TELEMETRY_ENABLED);
+            assert.notInclude((config.env.WSLENV ?? "").split(":"), "T3CODE_TELEMETRY_ENABLED");
+            assert.include(config.args, "T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING=1");
+            env.T3CODE_TELEMETRY_ENABLED = "false";
+            known = true;
+            yield* Deferred.succeed(settled, undefined);
+            assert.isDefined(config.hostTelemetryDecision);
+            assert.isFalse(yield* config.hostTelemetryDecision!);
+          }
+          assert.equal(config.env.OTEL_RESOURCE_ATTRIBUTES, "deployment.environment.name=staging");
+          assert.include((config.env.WSLENV ?? "").split(":"), "OTEL_RESOURCE_ATTRIBUTES");
+        }).pipe(
+          Effect.provide(
+            layerBackendConfiguration(
+              true,
+              Effect.sync(() => known),
+              Deferred.await(settled),
+            ).pipe(
+              Layer.provideMerge(layerServerExposure),
+              Layer.provideMerge(DesktopAppSettings.layerTest()),
+              Layer.provideMerge(DesktopWslServerTree.layerTest()),
+              Layer.provideMerge(
+                DesktopWslEnvironment.layerTest({
+                  isAvailable: true,
+                  distros: [{ name: "Ubuntu", isDefault: true, version: 2 }],
+                  windowsToWslPath: () => Option.some("/mnt/c/repo"),
+                  ensureNodePty: () => ({
+                    ok: true,
+                    nodePath: "/usr/bin/node",
+                    resolvedPath: "/usr/bin",
+                    t3Home: null,
+                  }),
+                  getDistroIp: () => Option.some("172.27.0.99"),
+                }),
+              ),
+              Layer.provideMerge(
+                layerEnvironment(baseDir, {
+                  appPath: baseDir,
+                  platform: "win32",
+                  resourcesPath: baseDir,
+                }),
+              ),
+            ),
+          ),
+          Effect.provideService(HostProcess.Environment, env),
+        );
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("resolveWsl preserves existing WSLENV entries when forwarding backend secrets", () =>

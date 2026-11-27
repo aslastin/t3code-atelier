@@ -7,7 +7,8 @@ import {
   defaultInstanceIdForDriver,
   globalIdleCompaction,
   legacyTelemetryPreferences,
-  type TelemetryPreferences,
+  type TelemetryStatus,
+  canChangeTelemetryChannel,
   type IdleCompactionMode,
   isProviderAvailable,
   isUnconfiguredDefaultInstanceEnabled,
@@ -429,15 +430,29 @@ function patchedIdleCompaction(
 function patchObservability(
   current: ServerSettings["observability"],
   patch: NonNullable<ServerSettingsPatch["observability"]>,
-  legacy?: TelemetryPreferences,
+  status?: TelemetryStatus,
 ): ServerSettings["observability"] {
   const previous =
     current.telemetry ??
-    legacy ??
+    status?.preferences ??
     legacyTelemetryPreferences(
       Boolean(current.otlpTracesUrl || current.otlpMetricsUrl || current.otlpLogsUrl),
     );
   const telemetry = { ...previous, ...patch.telemetry };
+  if (status && patch.telemetry) {
+    // A renderer-only Connect build can select the channel on its primary server.
+    const channels = {
+      analytics: status.analytics,
+      connect: status.connect === "unavailable" ? status.rendererConnect : status.connect,
+      otlp: status.otlp,
+    };
+    for (const key of ["analytics", "connect", "otlp"] as const) {
+      if (!canChangeTelemetryChannel(channels[key])) telemetry[key] = previous[key];
+    }
+    if (telemetry.enabled && !Object.values(channels).some(canChangeTelemetryChannel)) {
+      telemetry.enabled = previous.enabled;
+    }
+  }
   const next = { ...current, ...patch, telemetry };
   const revisions = current.telemetryRevisions ?? { connect: 0, otlp: 0 };
   const masterChanged = previous.enabled !== telemetry.enabled;
@@ -462,7 +477,7 @@ function patchObservability(
 export function applyServerSettingsPatch(
   current: ServerSettings,
   rawPatch: ServerSettingsPatch,
-  legacyTelemetry?: TelemetryPreferences,
+  telemetryStatus?: TelemetryStatus,
 ): ServerSettings {
   const patch = translateLegacyProjectOverridePatch(current, rawPatch);
   const selectionPatch = patch.textGenerationModelSelection;
@@ -583,7 +598,7 @@ export function applyServerSettingsPatch(
   const nextWithReplacementsBase = {
     ...next,
     ...(observabilityPatch && {
-      observability: patchObservability(current.observability, observabilityPatch, legacyTelemetry),
+      observability: patchObservability(current.observability, observabilityPatch, telemetryStatus),
     }),
     favorites,
     providerModelPreferences: nextModelPreferences,
