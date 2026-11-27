@@ -214,6 +214,14 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
       assert.deepEqual(commits, ["save"]);
       assert.equal(result.commit.commitSha, "abc");
       assert.deepEqual(events, ["action_started", "phase_started", "action_finished"]);
+      // A typed message with nothing changed among the selection is skipped, as for Git.
+      const unchanged = yield* workflow.runStackedAction({
+        ...action,
+        action: "commit",
+        filePaths: ["gone.txt"],
+      });
+      assert.equal(unchanged.commit.status, "skipped_no_changes");
+      assert.deepEqual(commits, ["save"]);
 
       // Without a typed message, it is written from the driver's status, patch and log, as for Git.
       yield* workflow.runStackedAction({

@@ -311,7 +311,6 @@ const runDriverAction = Effect.fn("GitWorkflowService.runDriverAction")(function
     includeBranch: boolean,
   ) {
     const typed = input.commitMessage?.trim();
-    if (typed && !includeBranch) return { commitMessage: typed };
     const status = yield* driverStatus(handle, { cwd });
     const selected = input.filePaths ? new Set(input.filePaths) : null;
     const files = status.workingTree.files.filter(
