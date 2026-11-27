@@ -1238,6 +1238,31 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
       }),
     );
 
+    it.effect("never walks a folder that holds a plugin's checkout below it", () =>
+      Effect.gen(function* () {
+        const create = vi.spyOn(FileFinder, "create");
+        const wrapper = yield* makeTempDir();
+        // A home folder or a wrapper of repositories, with a plugin's checkout two levels down.
+        yield* writeTextFile(wrapper, "work/mono/.kite/HEAD", "main\n");
+        yield* writeTextFile(wrapper, "work/mono/app/index.ts");
+        yield* writeTextFile(wrapper, "notes.md");
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const inPlugin = Effect.provideService(VcsPluginDrivers, {
+          installedMarkers: () => [".kite/HEAD"],
+        } as unknown as VcsPluginDrivers["Service"]);
+        expect(
+          yield* searchWorkspaceEntries({ cwd: wrapper, query: "index", limit: 10 }).pipe(inPlugin),
+        ).toEqual({ entries: [], truncated: false, unavailable: true });
+        expect(create).not.toHaveBeenCalled();
+        // Its folders still open one at a time, never all at once.
+        const top = yield* workspaceEntries
+          .list({ cwd: wrapper, directoryPath: "" })
+          .pipe(inPlugin);
+        expect(top.entries.map((entry) => entry.path).toSorted()).toEqual(["notes.md", "work"]);
+        expect(top.treeWalkUnavailable).toBe(true);
+      }),
+    );
+
     it.effect("drops an index made before a plugin claimed the folder", () =>
       Effect.gen(function* () {
         const create = vi.spyOn(FileFinder, "create");

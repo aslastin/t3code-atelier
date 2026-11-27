@@ -28,11 +28,12 @@ marker in the project folder and every folder above it. When a Git repository is
 one closer to the project folder wins; in the same folder, the plugin wins. Avoid installing two
 plugins whose markers can sit in the same folder: only one of them owns it.
 
-In a plugin's repository, even while the plugin is off, T3 Code does not walk or index the
-project's files: a large repository or a network mount could make that slow or download every
+In a plugin's repository, even while the plugin is off, and in a project folder that holds one
+a level or two down, T3 Code does not walk or index the project's files: a large repository or a network mount could make that slow or download every
 file. File mentions (`@`), the file tree's filter, and text search (`Ctrl+Shift+F` / `⌘⇧F`) say
 file search is not available, though `@` still finds threads and models by name. Opening a link by
-file name finds nothing. Browsing the file tree one folder at a time still works, and a Git
+file name finds nothing. Browsing the file tree one folder at a time still works, though not
+expanding every folder at once, and a Git
 repository inside keeps its own search. Searching through the plugin is planned in
 [#26](https://github.com/aslastin/t3code-atelier/issues/26).
 
