@@ -174,6 +174,29 @@ const resolveBrowseTarget = Effect.fn("WorkspaceEntries.resolveBrowseTarget")(fu
   );
 });
 
+/**
+ * Atelier fork: mount points in `mount` output (macOS, `<device> on <path> (<options>)`) or in
+ * `/proc/self/mounts` (Linux, octal-escaped fields).
+ */
+export function parseMountPoints(output: string, platform: string): ReadonlyArray<string> {
+  const lines = output.split("\n").filter((line) => line.length > 0);
+  if (platform === "linux")
+    return lines.flatMap((line) => {
+      const field = line.split(" ")[1];
+      return field === undefined
+        ? []
+        : [
+            field.replace(/\\([0-7]{3})/g, (_, octal: string) =>
+              String.fromCharCode(parseInt(octal, 8)),
+            ),
+          ];
+    });
+  return lines.flatMap((line) => {
+    const match = / on (.+) \([^()]*\)$/.exec(line);
+    return match === null ? [] : [match[1]!];
+  });
+}
+
 /** @public */
 export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
@@ -213,6 +236,30 @@ export const make = Effect.gen(function* () {
   // wrapper of repositories, walks into it as well. Probed as the folder scan does, and
   // remembered for a while: it reads the folder's children and theirs.
   const holdsPluginCheckout = new Map<string, { readonly at: number; readonly holds: boolean }>();
+  // A checkout can be another file system, such as a FUSE mount, at any depth: none is walked.
+  const platform = yield* HostProcess.Platform;
+  let mounts: { readonly at: number; readonly points: ReadonlyArray<string> } | undefined;
+  const mountPoints = Effect.fnUntraced(function* (now: number) {
+    if (mounts !== undefined && now - mounts.at < PLUGIN_CHECKOUT_MISS_TTL_MS) return mounts.points;
+    const output =
+      platform === "linux"
+        ? yield* Effect.promise(() => NodeFSP.readFile("/proc/self/mounts", "utf8").catch(() => ""))
+        : platform === "darwin"
+          ? ((yield* vcsProcess
+              .run({
+                operation: "WorkspaceEntries.mountPoints",
+                command: "/sbin/mount",
+                args: [],
+                cwd: "/",
+                allowNonZeroExit: true,
+                timeoutMs: 5_000,
+                maxOutputBytes: 1024 * 1024,
+              })
+              .pipe(Effect.orElseSucceed(() => undefined)))?.stdout ?? "")
+          : "";
+    mounts = { at: now, points: parseMountPoints(output, platform) };
+    return mounts.points;
+  });
   const containsPluginCheckout = Effect.fnUntraced(function* (cwd: string) {
     const current = Option.isSome(constructedPlugins)
       ? constructedPlugins
@@ -227,7 +274,7 @@ export const make = Effect.gen(function* () {
       now - known.at < (known.holds ? PLUGIN_CHECKOUT_PROBE_TTL_MS : PLUGIN_CHECKOUT_MISS_TTL_MS)
     )
       return known.holds;
-    const holds = yield* Effect.promise(async () => {
+    const probed = yield* Effect.promise(async () => {
       const marked = async (folder: string) => {
         for (const marker of markers) {
           if (
@@ -254,8 +301,45 @@ export const make = Effect.gen(function* () {
       }
       return false;
     });
+    const root = yield* Effect.promise(() => NodeFSP.realpath(cwd).catch(() => path.resolve(cwd)));
+    const holds =
+      probed ||
+      (yield* mountPoints(now)).some((point) => {
+        const relative = path.relative(root, point);
+        return (
+          relative !== "" &&
+          relative !== ".." &&
+          !relative.startsWith(`..${path.sep}`) &&
+          !path.isAbsolute(relative)
+        );
+      });
     holdsPluginCheckout.set(cwd, { at: now, holds });
     return holds;
+  });
+  const holdsMarkedFolder = Effect.fnUntraced(function* (
+    cwd: string,
+    entries: ReadonlyArray<ProjectEntry>,
+  ) {
+    const current = Option.isSome(constructedPlugins)
+      ? constructedPlugins
+      : yield* Effect.serviceOption(VcsPluginDrivers);
+    const markers = Option.isSome(current) ? current.value.installedMarkers() : [];
+    if (markers.length === 0) return false;
+    return yield* Effect.promise(async () => {
+      for (const entry of entries) {
+        if (entry.kind !== "directory") continue;
+        for (const marker of markers) {
+          if (
+            await NodeFSP.access(path.join(cwd, entry.path, marker)).then(
+              () => true,
+              () => false,
+            )
+          )
+            return true;
+        }
+      }
+      return false;
+    });
   });
   const walksPluginRepository = (cwd: string) =>
     inPluginRepository(cwd).pipe(
@@ -616,9 +700,12 @@ export const make = Effect.gen(function* () {
         // Atelier fork: a Git repository around a VCS plugin's checkout does not decide what the
         // plugin's files are; only one nested inside the folder does. Its tree is never opened
         // whole, so clients do not offer to.
+        // A checkout among this folder's own, at any depth, stops a walk before it goes in.
         const pluginRepository = yield* inPluginRepository(normalizedCwd);
         const walk =
-          pluginRepository || (yield* containsPluginCheckout(normalizedCwd))
+          pluginRepository ||
+          (yield* containsPluginCheckout(normalizedCwd)) ||
+          (yield* holdsMarkedFolder(normalizedCwd, entries))
             ? { treeWalkUnavailable: true }
             : {};
         if (nestedGitRoots.length === 0 && pluginRepository)

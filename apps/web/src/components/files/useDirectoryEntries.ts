@@ -57,8 +57,8 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
         // A request is dropped from `requests` when its folder disappears, so its read is stale.
         if (!active.current || !result || requests.current.get(directoryPath) !== request) return;
         if (result._tag === "Success") {
-          if (directoryPath === "")
-            setTreeWalkUnavailable(result.value.treeWalkUnavailable === true);
+          // Any folder can say so, once a checkout below it appears, and it stays said.
+          if (result.value.treeWalkUnavailable === true) setTreeWalkUnavailable(true);
           const children = result.value.entries.filter(
             (entry) =>
               entry.path.slice(0, Math.max(0, entry.path.lastIndexOf("/"))) === directoryPath,

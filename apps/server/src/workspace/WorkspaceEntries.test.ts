@@ -1264,6 +1264,42 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
       }),
     );
 
+    it.effect(
+      "says a tree holding a deeper checkout is never walked, from the folder above it",
+      () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTempDir();
+          yield* writeTextFile(cwd, "one/two/mono/.kite/HEAD", "main\n");
+          const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+          const inPlugin = Effect.provideService(VcsPluginDrivers, {
+            installedMarkers: () => [".kite/HEAD"],
+          } as unknown as VcsPluginDrivers["Service"]);
+          const list = (directoryPath: string) =>
+            workspaceEntries.list({ cwd, directoryPath }).pipe(inPlugin);
+          expect((yield* list("one")).treeWalkUnavailable).toBeUndefined();
+          expect((yield* list("one/two")).treeWalkUnavailable).toBe(true);
+        }),
+    );
+
+    it("reads mount points from mount and /proc/self/mounts output", () => {
+      expect(
+        WorkspaceEntries.parseMountPoints(
+          [
+            "/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)",
+            "map auto_home on /System/Volumes/Data/home (autofs, automounted, nobrowse)",
+            "kite on /Users/me/my mono (macfuse_kite, nodev, nosuid, mounted by me)",
+          ].join("\n"),
+          "darwin",
+        ),
+      ).toEqual(["/", "/System/Volumes/Data/home", "/Users/me/my mono"]);
+      expect(
+        WorkspaceEntries.parseMountPoints(
+          "/dev/sda1 / ext4 rw 0 0\nkite /home/me/my\\040mono fuse.kite rw 0 0\n",
+          "linux",
+        ),
+      ).toEqual(["/", "/home/me/my mono"]);
+    });
+
     it.effect("drops an index made before a plugin claimed the folder", () =>
       Effect.gen(function* () {
         const create = vi.spyOn(FileFinder, "create");
