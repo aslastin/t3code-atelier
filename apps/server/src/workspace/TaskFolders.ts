@@ -439,6 +439,19 @@ const make = Effect.gen(function* () {
       : `${checkout.worktreePath} is not on the branch ${branch}`;
   });
 
+  // A task folder keeps one branch in every repository; a VCS plugin may name its own.
+  const onBranch = Effect.fnUntraced(function* (
+    operation: TaskFolderError["operation"],
+    name: string,
+    branch: string,
+    created: { readonly worktree: { readonly refName: string } },
+  ) {
+    if (created.worktree.refName === branch) return;
+    return yield* new TaskFolderError({
+      operation,
+      detail: `The ${name} worktree is on ${created.worktree.refName}, not ${branch}, and a task folder keeps one branch in every repository.`,
+    });
+  });
   const mapped = (taskFolder: Pick<TaskFolder, "root" | "anchor">, source: string) =>
     path.join(taskFolder.root, path.relative(taskFolder.anchor, source));
   const depth = (target: string) => path.resolve(target).split(path.sep).length;
@@ -968,7 +981,7 @@ const make = Effect.gen(function* () {
     const worktreePath = mapped(taskFolder, repository.path);
     yield* fileSystem.makeDirectory(path.dirname(worktreePath), { recursive: true });
     const start = yield* repositoryStart(repository.path, startFromOrigin, baseBranch);
-    yield* git.createWorktree({
+    const made = yield* git.createWorktree({
       cwd: repository.path,
       refName: start.refName,
       newRefName: branch,
@@ -976,6 +989,7 @@ const make = Effect.gen(function* () {
       path: worktreePath,
     });
     return {
+      refName: made.worktree.refName,
       repository: {
         repositoryPath: repository.path,
         worktreePath,
@@ -1104,7 +1118,7 @@ const make = Effect.gen(function* () {
         }
         if (taskPlan.projectIsRepository) {
           yield* fileSystem.makeDirectory(path.dirname(empty.projectPath), { recursive: true });
-          yield* git.createWorktree(
+          const made = yield* git.createWorktree(
             {
               cwd: taskPlan.projectRoot,
               refName: input.projectStart.refName,
@@ -1114,6 +1128,7 @@ const make = Effect.gen(function* () {
             },
             input.projectProgress === undefined ? {} : { progress: input.projectProgress },
           );
+          yield* onBranch("create", "project", branch, made);
         } else {
           yield* linkFolder(taskPlan.projectRoot, empty.projectPath, taskPlan.trackedRepositories);
         }
@@ -1141,14 +1156,19 @@ const make = Effect.gen(function* () {
               ).pipe(
                 Effect.tap((worktree) =>
                   Effect.suspend(() => {
+                    // Recorded first, so the rollback removes a checkout on another branch too.
                     created.push(worktree.repository);
                     repositoriesStartedFromOrigin ||= worktree.fromOrigin;
-                    return (
-                      input.onRepository?.({
-                        name: repository.name,
-                        done: created.length,
-                        total: taskPlan.repositories.length,
-                      }) ?? Effect.void
+                    return onBranch("create", repository.name, branch, {
+                      worktree: { refName: worktree.refName },
+                    }).pipe(
+                      Effect.andThen(
+                        input.onRepository?.({
+                          name: repository.name,
+                          done: created.length,
+                          total: taskPlan.repositories.length,
+                        }) ?? Effect.void,
+                      ),
                     );
                   }),
                 ),
@@ -1335,13 +1355,20 @@ const make = Effect.gen(function* () {
             });
           } else {
             const start = yield* repositoryStart(repositoryPath, startFromOrigin);
-            yield* git.createWorktree({
+            const made = yield* git.createWorktree({
               cwd: repositoryPath,
               refName: start.refName,
               newRefName: branch,
               baseRefName: start.baseRefName,
               path: worktreePath,
             });
+            yield* onBranch("add-repository", folder.name, branch, made).pipe(
+              Effect.tapError(() =>
+                removeCheckout({ repositoryPath, worktreePath }, true, undefined).pipe(
+                  Effect.ignoreCause({ log: true }),
+                ),
+              ),
+            );
           }
         }).pipe(
           Effect.onError(() => relink),

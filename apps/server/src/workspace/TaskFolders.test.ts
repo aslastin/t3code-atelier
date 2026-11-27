@@ -382,6 +382,10 @@ it.live(
         state.pluginCreated?.map((created) => created.refName),
         ["main"],
       );
+      // A plugin that names the branch its own way cannot join a folder of one branch.
+      state.pluginNamesBranch = "kite/other";
+      const renamed = yield* create("second").pipe(Effect.flip);
+      assert.include(renamed.detail, "is on kite/other, not second");
     }).pipe(
       Effect.provide(
         layerFor(state).pipe(

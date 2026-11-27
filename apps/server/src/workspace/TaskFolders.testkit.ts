@@ -31,6 +31,8 @@ export interface TaskFoldersTestState {
   /** The local refs a VCS plugin lists, and the worktrees it was asked to create. */
   pluginRefs?: ReadonlyArray<{ readonly name: string; readonly isDefault?: boolean }>;
   pluginCreated?: Array<{ readonly path: string; readonly refName: string }>;
+  /** The branch a VCS plugin names instead of the one asked for. */
+  pluginNamesBranch?: string;
 }
 
 /**
@@ -59,7 +61,12 @@ export const layerTaskFoldersWithGit = (state: TaskFoldersTestState) => {
             yield* fs
               .writeFileString(`${path}/.kite/HEAD`, `${input.newRefName}\n`)
               .pipe(Effect.orDie);
-            return { worktree: { path, refName: input.newRefName ?? input.refName } };
+            return {
+              worktree: {
+                path,
+                refName: state.pluginNamesBranch ?? input.newRefName ?? input.refName,
+              },
+            };
           }),
         listRefs: () => Effect.sync(() => ({ refs: state.pluginRefs ?? [] }) as never),
         removeWorktree: git.removeWorktree,
