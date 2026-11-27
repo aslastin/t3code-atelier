@@ -74,11 +74,16 @@ const layer = NodeServices.layer;
 /** Completes once `file` exists, woken by the folder's change events rather than a timer. */
 const fileAppears = (file: string) =>
   Effect.callback<void>((resume) => {
+    // Closed once done too: the finalizer returned below runs only on interruption.
+    const done = () => {
+      watcher.close();
+      resume(Effect.void);
+    };
     const watcher = NodeFS.watch(NodePath.dirname(file), () => {
-      if (NodeFS.existsSync(file)) resume(Effect.void);
+      if (NodeFS.existsSync(file)) done();
     });
     // Created before the watcher started: nothing would wake it.
-    if (NodeFS.existsSync(file)) resume(Effect.void);
+    if (NodeFS.existsSync(file)) done();
     return Effect.sync(() => watcher.close());
   });
 
