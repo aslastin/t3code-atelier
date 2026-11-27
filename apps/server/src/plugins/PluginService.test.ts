@@ -225,9 +225,7 @@ describe("PluginService", () => {
       NodeChildProcess.execFileSync("git", ["init", "-q"], { cwd: `${repository}/nested` });
       const registry = yield* VcsDriverRegistry.make.pipe(
         Effect.provideService(VcsPluginDrivers, drivers),
-        Effect.provide(VcsProjectConfig.layer),
-        Effect.provide(VcsProcess.layer),
-        Effect.provide(NodeCrypto.layer),
+        Effect.provide(Layer.mergeAll(VcsProjectConfig.layer, VcsProcess.layer, NodeCrypto.layer)),
       );
       const project = (
         projectId: string,

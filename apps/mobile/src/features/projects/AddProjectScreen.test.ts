@@ -154,6 +154,7 @@ vi.mock("../../state/presentation", () => ({
   useEnvironmentPresentation: () => ({ isReady: true, presentation: null }),
 }));
 vi.mock("../../state/filesystem", () => ({ filesystemEnvironment: {} }));
+vi.mock("../../state/plugins", () => ({ pluginEnvironment: {} }));
 vi.mock("../../state/sourceControl", () => ({
   sourceControlEnvironment: {
     discovery: (input: unknown) => input,
