@@ -17,10 +17,11 @@ the folder to `<T3 home>/plugins/<id>/`. Importing a folder with the same `id` a
 installed copy. Edits to the original folder have no effect until you import it again.
 
 Each plugin shows whether it works. A plugin whose `check` fails, or reports a problem, is marked
-**Unavailable** and its repositories are not detected. Fix the problem, then use the refresh
-button on its row to check it again. The switch turns a plugin off without removing it, and
-**Remove** deletes the installed copy. Importing a plugin, turning it on or off, and removing it
-need permission to maintain the environment. The mobile app shows the list and status only.
+**Unavailable**, with the failure or the problems under its name, and its repositories are not
+detected. Fix the problem, then use the refresh button on its row to check it again. The switch
+turns a plugin off without removing it, and **Remove** deletes the installed copy. Importing a
+plugin, turning it on or off, and removing it need permission to maintain the environment. The
+mobile app shows the list and status only.
 
 A repository is detected by a marker file, without running anything. T3 Code looks for each
 marker in the project folder and every folder above it. When a Git repository is found too, the
@@ -94,7 +95,7 @@ Every command except `readFile` prints one JSON object on stdout. Optional field
 
 | Command             | Placeholders                      | Prints                                                                                                                                                                                  |
 | ------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `check`             |                                   | `{ "version", "problems": [string] }`. Runs in the plugin folder.                                                                                                                       |
+| `check`             |                                   | `{ "version", "problems": [string] }`. Runs in the plugin folder. Settings shows each problem as the reason the plugin is unavailable, so say what to do, such as `Run myvcs login.`    |
 | `status` (required) |                                   | `{ "refName": string \| null, "isDefaultRef"?, "hasPrimaryRemote"?, "files"?: [{ "path", "insertions"?, "deletions"?, "untracked"? }], "hasUpstream"?, "aheadCount"?, "behindCount"? }` |
 | `listRemotes`       |                                   | `{ "remotes": [{ "name", "url", "pushUrl"?, "isPrimary"? }] }`. A VCS without URLs uses `<vcs>://<repository>`.                                                                         |
 | `listRefs`          |                                   | `{ "refs": [{ "name", "current"?, "isDefault"?, "isRemote"?, "remoteName"? }] }`. Without it, only the current ref is offered.                                                          |

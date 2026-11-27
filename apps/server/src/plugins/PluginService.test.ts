@@ -199,11 +199,21 @@ describe("PluginService", () => {
 
   it.live("marks a plugin unavailable when its check reports problems", () =>
     Effect.gen(function* () {
-      const { imported, driver } = yield* setup({ problem: "Sign in with kite login." });
+      const { imported, driver, home, plugins } = yield* setup({
+        problem: "Sign in with kite login.",
+      });
       assert.strictEqual(imported.plugins[0]?.status, "unavailable");
       assert.deepStrictEqual(imported.plugins[0]?.problems, ["Sign in with kite login."]);
       // Its repositories stay undetected.
       assert.isUndefined(driver);
+
+      // A problem the check left blank still says why the plugin is unavailable.
+      NodeFS.writeFileSync(`${home}/plugins/kite/problems.txt`, "");
+      const rechecked = yield* plugins.recheck("kite");
+      assert.strictEqual(rechecked.plugins[0]?.status, "unavailable");
+      assert.deepStrictEqual(rechecked.plugins[0]?.problems, [
+        "The plugin's check reported a problem without describing it.",
+      ]);
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 

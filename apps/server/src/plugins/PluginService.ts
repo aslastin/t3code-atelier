@@ -258,7 +258,10 @@ const make = Effect.gen(function* () {
         checkedAt,
         driver: null,
       } satisfies PluginEntry;
-    const { version, problems } = result.success;
+    const { version } = result.success;
+    const problems = result.success.problems.map(
+      (problem) => problem.trim() || "The plugin's check reported a problem without describing it.",
+    );
     if (problems.length > 0)
       return {
         ...entry,
