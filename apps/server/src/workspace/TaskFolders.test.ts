@@ -404,6 +404,43 @@ it.live(
   },
 );
 
+it.live("gives no task folder to a project in a subfolder of a VCS plugin's repository", () => {
+  const state: TaskFoldersTestState = { workspaceRoot: "/unset", trackedFolders: [], thread: null };
+  return Effect.gen(function* () {
+    const { fileSystem, path, tmp, repository } = yield* fixture;
+    const mono = path.join(tmp, "mono");
+    yield* fileSystem.makeDirectory(path.join(mono, ".kite"), { recursive: true });
+    yield* fileSystem.writeFileString(path.join(mono, ".kite", "HEAD"), "main\n");
+    const app = path.join(mono, "app");
+    yield* fileSystem.makeDirectory(app, { recursive: true });
+    const web = yield* repository("web");
+    state.workspaceRoot = app;
+    state.trackedFolders = tracked(web);
+    const taskFolders = yield* TaskFolders.TaskFolders;
+    // Its files would be linked to the originals, so the launch checks out the plugin's
+    // repository alone, and a repository chosen beside it is refused.
+    assert.isNull(yield* taskFolders.plan({ projectId }));
+    const chosen = yield* taskFolders
+      .plan({ projectId, repositories: [{ path: web }] })
+      .pipe(Effect.flip);
+    assert.include(chosen.detail, "subfolder of a VCS plugin's repository");
+  }).pipe(
+    Effect.provide(
+      layerFor(state).pipe(
+        Layer.provide(
+          Layer.succeed(VcsPluginDrivers, {
+            hasAny: () => true,
+            markers: () => [".kite/HEAD"],
+            installedMarkers: () => [".kite/HEAD"],
+            available: () => [{ markers: [".kite/HEAD"], worktrees: true }],
+          } as unknown as VcsPluginDrivers["Service"]),
+        ),
+      ),
+    ),
+    Effect.scoped,
+  );
+});
+
 it.live.each([{ projectIsRepository: true }, { projectIsRepository: false }])(
   "answers an existing thread's worktree request with a task folder, project is a repository=$projectIsRepository",
   ({ projectIsRepository }) =>

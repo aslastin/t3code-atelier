@@ -253,6 +253,20 @@ const make = Effect.gen(function* () {
     }
     return false;
   });
+  // Physical ancestors, as a plugin's driver finds its repository root.
+  const insidePluginRepository = Effect.fnUntraced(function* (folder: string) {
+    const markers = plugins?.installedMarkers() ?? [];
+    if (markers.length === 0) return false;
+    let current = yield* fileSystem
+      .realPath(folder)
+      .pipe(Effect.orElseSucceed(() => path.resolve(folder)));
+    while (true) {
+      const parent = path.dirname(current);
+      if (parent === current) return false;
+      current = parent;
+      for (const marker of markers) if (yield* exists(path.join(current, marker))) return true;
+    }
+  });
   // As the driver registry decides on its own: the first available plugin whose marker the
   // folder holds owns it, even beside a `.git`.
   const canGetWorktree = Effect.fnUntraced(function* (folder: string) {
@@ -479,6 +493,16 @@ const make = Effect.gen(function* () {
       (yield* worktreeLayout(projectRoot)) === null
     )
       return null;
+    // A plain project folder is linked into the task folder, and here a link is the plugin's
+    // checkout itself: the plugin's own worktree, mapped to the subfolder, is used instead.
+    if (!(yield* isRepository(projectRoot)) && (yield* insidePluginRepository(projectRoot))) {
+      if ((input.repositories ?? []).length === 0) return null;
+      return yield* new TaskFolderError({
+        operation: "plan",
+        detail:
+          "The project is a subfolder of a VCS plugin's repository, so other repositories cannot be checked out beside it. Open the repository root as the project to add them.",
+      });
+    }
     // A repository on another Windows drive has no place in the folder; only choosing it fails.
     const { anchor, unreachable } = layoutAnchor(
       path,
