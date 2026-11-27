@@ -15,7 +15,7 @@ const { state, updateSettings, checkOtlpEndpoint, checkOtlpEndpointCommand } = v
       observability?: ServerObservability;
     },
   },
-  updateSettings: vi.fn(async () => ({ _tag: "Success" as const, value: undefined })),
+  updateSettings: vi.fn(async () => ({ _tag: "Success" as const, value: DEFAULT_SERVER_SETTINGS })),
   checkOtlpEndpoint: vi.fn(async (_request: unknown) => ({
     _tag: "Success" as const,
     value: { _tag: "Accepted" as const, latencyMs: 12 },
@@ -174,10 +174,11 @@ function setup() {
 }
 
 describe("TelemetryExportSettings", () => {
-  it("names both environments when only one supports Connect tracing", async () => {
+  it("distinguishes same-named environments in Connect status and save results", async () => {
     setup();
     state.allEnvironments = true;
     state.compareConnect = true;
+    state.duplicateLabels = true;
     state.serverConfig.observability = {
       ...activeExport,
       telemetry: {
@@ -188,12 +189,31 @@ describe("TelemetryExportSettings", () => {
     };
     await using screen = await render(<TelemetrySettings />, { router: "/settings/maintenance" });
     await userEvent.click(screen.getByRole("button", { name: "What to send" }));
-    const label = screen
-      .getByRole("switch", { name: "T3 Connect tracing (Axiom)" })
-      .element()
-      .closest("label");
-    expect(label?.textContent).toContain("Ready · On");
-    expect(label?.textContent).toContain("Other · Unavailable in this build");
+    const connect = screen.getByRole("switch", { name: "T3 Connect tracing (Axiom)" });
+    const label = connect.element().closest("label");
+    expect(label?.textContent).toContain("Ready · ready.example · On");
+    expect(label?.textContent).toContain("Ready · other.example · Unavailable in this build");
+    updateSettings.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        ...DEFAULT_SERVER_SETTINGS,
+        observability: {
+          ...DEFAULT_SERVER_SETTINGS.observability,
+          telemetry: activeExport.telemetry!.preferences,
+        },
+      },
+    });
+    connect.element().focus();
+    await userEvent.keyboard(" ");
+    const report = screen.getByRole("status");
+    await expect
+      .element(report.getByText("Ready · ready.example · Telemetry choice saved", { exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(
+        report.getByText("Ready · other.example · Unavailable in this build", { exact: true }),
+      )
+      .toBeInTheDocument();
   });
   it("offers only connected environments that support telemetry exports", async () => {
     setup();

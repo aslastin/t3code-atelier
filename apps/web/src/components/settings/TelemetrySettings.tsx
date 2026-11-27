@@ -17,6 +17,7 @@ import {
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { Switch } from "../ui/switch";
 import { useSettingsScope } from "./SettingsScopeContext";
+import { settingsScopeEnvironmentLabel } from "./settingsScopeAxis";
 import { SettingsSearchTarget, useSettingsSearchTargetId } from "./settingsLayout";
 import { TelemetryExportSettings } from "./TelemetryExportSettings";
 
@@ -107,6 +108,7 @@ export function TelemetrySettings() {
     }
     return {
       env,
+      label: settingsScopeEnvironmentLabel(env, environments),
       status,
       blockedByDesktop,
       issue: telemetryTargetIssue(connected, status, writable.has(env.environmentId)),
@@ -182,7 +184,7 @@ export function TelemetrySettings() {
                 : m(reasons[status[key]]);
       return (
         <span key={env.environmentId} className="text-xs text-muted-foreground">
-          {targets.length === 1 ? state : `${env.label} · ${state}`}
+          {targets.length === 1 ? state : `${target.label} · ${state}`}
         </span>
       );
     });
@@ -244,11 +246,11 @@ export function TelemetrySettings() {
           role="status"
           className="text-xs text-muted-foreground"
         >
-          {targets.map(({ env, issue }) => {
+          {targets.map(({ env, label, issue }) => {
             const outcome = issue ?? report.get(env.environmentId);
             return outcome ? (
               <p key={env.environmentId}>
-                {env.label} · {m(outcomes[outcome])}
+                {label} · {m(outcomes[outcome])}
               </p>
             ) : null;
           })}
