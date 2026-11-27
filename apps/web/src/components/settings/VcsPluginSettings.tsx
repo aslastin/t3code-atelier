@@ -317,7 +317,7 @@ function ImportForm({ environmentId }: { readonly environmentId: EnvironmentId }
   return (
     <form className="space-y-1.5 px-3 py-3 sm:px-4" onSubmit={(event) => void submit(event)}>
       <label htmlFor={inputId} className="text-xs font-medium text-foreground">
-        <T>Import a plugin folder from this server</T>
+        <T>Import a plugin folder from this machine</T>
       </label>
       <div className="flex items-center gap-2">
         <Input

@@ -11580,7 +11580,7 @@
     " again"
   ],
   "a5861af92b344936": "Its installed copy is deleted, and its repositories are no longer detected until you import the plugin again. Turn it off instead to keep it installed.",
-  "8c87144bb1681580": "Import a plugin folder from this server",
+  "3ddf3f96e052bfab": "Import a plugin folder from this machine",
   "1f190833cb8cefd1": "Choose folder…",
   "e30b840393c5dc4c": "Import",
   "3c29d619c9072db5": "Reload the list",
