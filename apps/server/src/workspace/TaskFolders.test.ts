@@ -323,6 +323,13 @@ it.live("gives a VCS plugin's project folder a checkout, not links to the origin
     yield* fileSystem.writeFileString(path.join(checkout, ".other", "HEAD"), "main\n");
     const replaced = yield* restore.pipe(Effect.flip);
     assert.include(replaced.detail, "is not a worktree of");
+    // Files put where a removed checkout was are never handed to the plugin to write over.
+    yield* fileSystem.remove(checkout, { recursive: true });
+    yield* fileSystem.makeDirectory(checkout, { recursive: true });
+    yield* fileSystem.writeFileString(path.join(checkout, "a.txt"), "mine\n");
+    const occupied = yield* restore.pipe(Effect.flip);
+    assert.include(occupied.detail, "holds files that are not a checkout");
+    assert.equal(yield* fileSystem.readFileString(path.join(checkout, "a.txt")), "mine\n");
   }).pipe(
     Effect.provide(
       layerFor(state).pipe(

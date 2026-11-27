@@ -500,13 +500,19 @@ const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection(
   }
 
   return (
-    <AssistantChangedFilesSectionInner
-      turnSummary={turnSummary}
-      checkpointFiles={checkpointFiles}
-      routeThreadKey={routeThreadKey}
-      resolvedTheme={resolvedTheme}
-      onOpenTurnDiff={onOpenTurnDiff}
-    />
+    <>
+      <AssistantChangedFilesSectionInner
+        turnSummary={turnSummary}
+        checkpointFiles={checkpointFiles}
+        routeThreadKey={routeThreadKey}
+        resolvedTheme={resolvedTheme}
+        onOpenTurnDiff={onOpenTurnDiff}
+      />
+      {/* A repository without a snapshot beside others that changed still says why. */}
+      {turnSummary.unavailableReason === undefined ? null : (
+        <CheckpointUnavailableNote reason={turnSummary.unavailableReason} restorable />
+      )}
+    </>
   );
 });
 

@@ -403,10 +403,13 @@ const make = Effect.gen(function* () {
         marked = true;
     }
     if (!marked) return null;
+    // A listing that fails cannot hand the folder to Git: the plugin's own removal checks again.
     const listed = yield* gitWorkflow
       .listWorktrees(projectRoot)
-      .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-    return listed.some((entry) => pathKey(entry) === pathKey(worktreePath)) ? kind : null;
+      .pipe(Effect.orElseSucceed((): ReadonlyArray<string> | null => null));
+    return listed === null || listed.some((entry) => pathKey(entry) === pathKey(worktreePath))
+      ? kind
+      : null;
   });
   // The checkout around `target` for a plugin's worktree, found by the project plugin's marker as
   // that plugin's removal resolves it; null inside the project's repository itself.
@@ -723,8 +726,10 @@ const make = Effect.gen(function* () {
           }
           if (!repositories.has(pathKey(result.target)))
             for (const marker of pluginMarkers) {
+              // Without case: a case-insensitive disk finds `.OTHER/HEAD` for `.other/HEAD`.
+              const head = marker.split("/")[0]!.toLowerCase();
               if (
-                result.names.includes(marker.split("/")[0]!) &&
+                result.names.some((name) => name.toLowerCase() === head) &&
                 (yield* fs.exists(path.join(result.target, marker)))
               )
                 return { bytes: null, reason: "contains a nested repository" };

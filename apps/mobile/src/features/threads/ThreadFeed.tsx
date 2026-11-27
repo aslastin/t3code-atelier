@@ -2795,7 +2795,7 @@ function TurnDiffStat(props: {
           ...(rootFiles.length > 0 ? [gt("this folder")] : []),
           ...repositories.map((repository) => repository.name),
         ].join(", ");
-  return (
+  const stat = (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={
@@ -2825,6 +2825,17 @@ function TurnDiffStat(props: {
       </Text>
       <SymbolView name="chevron.right" size={12} tintColorClassName="accent-foreground-muted" />
     </Pressable>
+  );
+  // A repository without a snapshot beside others that changed still says why.
+  return reason === undefined ? (
+    stat
+  ) : (
+    <View>
+      {stat}
+      <Text className="px-2 pb-1 text-xs text-foreground-muted">
+        {gt("This turn's changes cannot be shown: {reason}", { reason })}
+      </Text>
+    </View>
   );
 }
 
