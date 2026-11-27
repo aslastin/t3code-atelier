@@ -22,6 +22,7 @@ import { ChildProcessSpawner } from "effect/process";
 import {
   checkPortAvailabilityOnHosts,
   createDevRunnerEnv,
+  devWorktreesDirectory,
   findFirstAvailableOffset,
   resolveModePortOffsets,
   runDevRunnerWithInput,
@@ -211,6 +212,18 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.equal(env.T3CODE_HOST, undefined);
         assert.equal(env.T3CODE_LAN, undefined);
       }),
+    );
+  });
+
+  describe("devWorktreesDirectory", () => {
+    it.effect("keeps a checkout's dev worktrees outside the checkout", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const directory = devWorktreesDirectory(path, "/home/dev", "/src/t3code/feature-a/.t3");
+        assert.strictEqual(directory, "/home/dev/.t3-dev-worktrees/t3code/feature-a");
+        // Never below the checkout, where a tool that walks the repository would reach it.
+        assert.isFalse(directory.startsWith("/src/t3code/feature-a/"));
+      }).pipe(Effect.provide(NodeServices.layer)),
     );
   });
 

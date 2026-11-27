@@ -59,6 +59,8 @@ export interface ServerDerivedPaths {
 
 export interface DeriveServerPathsOptions {
   readonly baseDirIsExplicit?: boolean;
+  /** Atelier fork: `T3CODE_WORKTREES_DIR`, so dev keeps worktrees outside its checkout. */
+  readonly worktreesDir?: string | undefined;
 }
 
 export class ServerConfig extends Context.Service<
@@ -160,7 +162,7 @@ export const deriveServerPaths = Effect.fn(function* (
     settingsPath: join(stateDir, "settings.json"),
     environmentThemesDir: join(stateDir, "themes"),
     providerStatusCacheDir,
-    worktreesDir: join(baseDir, "worktrees"),
+    worktreesDir: options.worktreesDir ?? join(baseDir, "worktrees"),
     worktreeCheckoutCacheDir: join(providerStatusCacheDir, "worktree-checkouts"),
     attachmentsDir,
     browserArtifactsDir: join(stateDir, "browser-artifacts"),

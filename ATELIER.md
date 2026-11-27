@@ -138,7 +138,9 @@ Both run from source with hot reload. In a git worktree, state lives in that wor
 a plain clone uses `~/.t3/dev` unless you pass `--home-dir`. A new worktree's first start seeds a
 read-only copy of recent data from the installed Atelier app (`~/.t3-atelier`), or from the
 official app (`~/.t3`) if Atelier has no data yet. `vp run migrate-dev-db` refreshes it from the
-same source. Dev never writes to either live install. See
+same source. Dev never writes to either live install. That state's worktrees go to
+`~/.t3-dev-worktrees/<repository>/<worktree>`, outside the checkout, so tools that walk the
+repository never reach them (`T3CODE_WORKTREES_DIR` overrides it). See
 [docs/operations/development.md](./docs/operations/development.md). The desktop app shows the
 blue blueprint icon in development mode. This is intentional and keeps it apart from installed
 builds.
