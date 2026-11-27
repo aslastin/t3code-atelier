@@ -2532,6 +2532,8 @@
   "b96db7780fceca0d": "Esta conexão não pode adicionar projetos agora. Os arquivos existentes continuam em {path}.",
   "ecae689a9b8b87ec": "Projeto adicionado",
   "68c8ffd655dfa170": "O projeto foi criado, mas ainda não chegou a este dispositivo. Ele aparecerá na lista de projetos quando a conexão se atualizar.",
+  "4b4125e1ebc0d06a": "{plugin} não consegue criar checkpoints dos turnos em {project}",
+  "f66c4ae77f48b473": "Os snapshots dele abrangem o repositório inteiro, e este projeto é uma subpasta dele, então os turnos aqui não podem ser comparados nem revertidos. Adicione changed-files ao plugin ou abra a raiz do repositório como projeto.",
   "fbdd6a9f82fed5c4": "Criado sem um primeiro commit",
   "1eed14183ebbd6b3": "Não foi possível criar o repositório no {provider}",
   "ed7b2ba9874fa853": "Inicie ou reconecte um ambiente antes de adicionar um projeto.",

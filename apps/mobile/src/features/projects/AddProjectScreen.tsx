@@ -81,6 +81,7 @@ import { cn } from "../../lib/cn";
 import { m } from "../../i18n/messages";
 import { useProjects, useServerConfigs, waitForProject } from "../../state/entities";
 import { filesystemEnvironment } from "../../state/filesystem";
+import { pluginEnvironment } from "../../state/plugins";
 import { projectEnvironment } from "../../state/projects";
 import { useEnvironmentQuery } from "../../state/query";
 import { environmentSession, useEnvironmentScope, readEnvironmentScope } from "../../state/session";
@@ -855,6 +856,7 @@ function useCreateProject(environment: EnvironmentOption | null) {
   const navigation = useNavigation();
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
   const openExistingProject = useOpenExistingProject(environment);
+  const warnUncheckpointed = useWarnUncheckpointedProject();
 
   return async (
     workspaceRoot: string,
@@ -920,7 +922,46 @@ function useCreateProject(environment: EnvironmentOption | null) {
       },
       originRoute,
     );
+    warnUncheckpointed(environment.environmentId, projectId);
     return result;
+  };
+}
+
+/**
+ * Atelier fork: after a project is added, warns when it sits in a subfolder of a VCS plugin's
+ * repository whose only checkpoints are native snapshots, so its turns will get none.
+ */
+function useWarnUncheckpointedProject() {
+  const serverConfigs = useServerConfigs();
+  const listPlugins = useAtomQueryRunner(pluginEnvironment.list, {
+    reportFailure: false,
+    refresh: true,
+  });
+  return (environmentId: EnvironmentId, projectId: ProjectId) => {
+    if (serverConfigs.get(environmentId)?.environment.capabilities.vcsPlugins !== true) return;
+    void listPlugins({ environmentId, input: {} }).then((result) => {
+      if (result._tag !== "Success") return;
+      for (const plugin of result.value.plugins) {
+        const project = plugin.uncheckpointedProjects?.find(
+          (entry) => entry.projectId === projectId,
+        );
+        if (project === undefined) continue;
+        Dialog.alert(
+          m(
+            msg("{plugin} cannot checkpoint turns in {project}", {
+              plugin: plugin.label,
+              project: project.title,
+            }),
+          ),
+          m(
+            msg(
+              "Its snapshots cover the whole repository, and this project is a subfolder of it, so turns here cannot be diffed or rolled back. Add changed-files to the plugin, or open the repository root as the project.",
+            ),
+          ),
+        );
+        return;
+      }
+    });
   };
 }
 

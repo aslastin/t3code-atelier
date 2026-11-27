@@ -2536,6 +2536,8 @@
   "b96db7780fceca0d": "Den här anslutningen kan inte lägga till projekt just nu. Befintliga filer finns kvar på {path}.",
   "ecae689a9b8b87ec": "Projektet lades till",
   "68c8ffd655dfa170": "Projektet skapades men har inte nått den här enheten än. Det visas i projektlistan när anslutningen har kommit ikapp.",
+  "4b4125e1ebc0d06a": "{plugin} kan inte skapa kontrollpunkter för turer i {project}",
+  "f66c4ae77f48b473": "Dess ögonblicksbilder omfattar hela repot, och det här projektet är en undermapp i det, så turer här kan varken visas som diff eller återställas. Lägg till changed-files i pluginet eller öppna repots rot som projekt.",
   "fbdd6a9f82fed5c4": "Skapat utan en första commit",
   "1eed14183ebbd6b3": "Kunde inte skapa {provider}-repot",
   "ed7b2ba9874fa853": "Starta eller återanslut en miljö innan du lägger till ett projekt.",

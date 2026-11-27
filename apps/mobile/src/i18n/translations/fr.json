@@ -2532,6 +2532,8 @@
   "b96db7780fceca0d": "Cette connexion ne peut pas ajouter de projets pour le moment. Les fichiers existants restent dans {path}.",
   "ecae689a9b8b87ec": "Projet ajouté",
   "68c8ffd655dfa170": "Le projet a été créé mais n’est pas encore arrivé sur cet appareil. Il apparaîtra dans la liste des projets dès que la connexion aura rattrapé son retard.",
+  "4b4125e1ebc0d06a": "{plugin} ne peut pas créer de points de contrôle des tours dans {project}",
+  "f66c4ae77f48b473": "Ses instantanés couvrent tout le dépôt et ce projet en est un sous-dossier : les tours ici ne peuvent être ni comparés ni annulés. Ajoutez changed-files au plugin, ou ouvrez la racine du dépôt comme projet.",
   "fbdd6a9f82fed5c4": "Créé sans premier commit",
   "1eed14183ebbd6b3": "Impossible de créer le dépôt {provider}",
   "ed7b2ba9874fa853": "Démarrez ou reconnectez un environnement avant d’ajouter un projet.",

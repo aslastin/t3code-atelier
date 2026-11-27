@@ -2532,6 +2532,8 @@
   "b96db7780fceca0d": "Esta conexión no puede añadir proyectos ahora mismo. Los archivos existentes siguen en {path}.",
   "ecae689a9b8b87ec": "Proyecto añadido",
   "68c8ffd655dfa170": "El proyecto se creó, pero aún no ha llegado a este dispositivo. Aparecerá en la lista de proyectos cuando la conexión se ponga al día.",
+  "4b4125e1ebc0d06a": "{plugin} no puede crear puntos de control de los turnos en {project}",
+  "f66c4ae77f48b473": "Sus instantáneas abarcan todo el repositorio y este proyecto es una subcarpeta, así que los turnos aquí no se pueden comparar ni revertir. Añade changed-files al plugin o abre la raíz del repositorio como proyecto.",
   "fbdd6a9f82fed5c4": "Creado sin un primer commit",
   "1eed14183ebbd6b3": "No se pudo crear el repositorio de {provider}",
   "ed7b2ba9874fa853": "Inicia o vuelve a conectar un entorno antes de añadir un proyecto.",

@@ -2536,6 +2536,8 @@
   "b96db7780fceca0d": "This connection cannot add projects right now. Any existing files remain at {path}.",
   "ecae689a9b8b87ec": "Project added",
   "68c8ffd655dfa170": "The project was created but has not reached this device yet. It will appear in the project list once the connection catches up.",
+  "4b4125e1ebc0d06a": "{plugin} cannot checkpoint turns in {project}",
+  "f66c4ae77f48b473": "Its snapshots cover the whole repository, and this project is a subfolder of it, so turns here cannot be diffed or rolled back. Add changed-files to the plugin, or open the repository root as the project.",
   "fbdd6a9f82fed5c4": "Created without a first commit",
   "1eed14183ebbd6b3": "Could not create the {provider} repository",
   "ed7b2ba9874fa853": "Start or reconnect an environment before adding a project.",

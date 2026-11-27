@@ -1469,6 +1469,7 @@ export const layerWsRpc = (
       >();
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
+      const vcsRegistry = yield* Effect.serviceOption(VcsDriverRegistry.VcsDriverRegistry);
       const projectService = yield* ProjectService.ProjectService;
       const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
       const scratchThreadPromotion = yield* ScratchThreadPromotion.ScratchThreadPromotion;
@@ -1539,6 +1540,12 @@ export const layerWsRpc = (
       const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
       const topics = yield* TopicService.TopicService;
       const plugins = yield* PluginService.PluginService;
+      const withProjectLookup = <A, E>(effect: Effect.Effect<A, E>) =>
+        Option.match(vcsRegistry, {
+          onNone: () => effect,
+          onSome: (registry) =>
+            effect.pipe(Effect.provideService(VcsDriverRegistry.VcsDriverRegistry, registry)),
+        }).pipe(Effect.provideService(ProjectStore.ProjectStoreV2, projectStore));
       const repositoryIdentityResolver =
         yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
       const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
@@ -3011,24 +3018,12 @@ export const layerWsRpc = (
         [WS_METHODS.threadTopicsMutate]: (mutation) => topics.mutate(mutation),
         [WS_METHODS.subscribeThreadTopics]: () => topics.stream,
         // The list names the projects a plugin leaves without checkpoints.
-        [WS_METHODS.pluginsList]: () =>
-          plugins.list.pipe(Effect.provideService(ProjectStore.ProjectStoreV2, projectStore)),
-        [WS_METHODS.pluginsImport]: (input) =>
-          plugins
-            .importFolder(input.path)
-            .pipe(Effect.provideService(ProjectStore.ProjectStoreV2, projectStore)),
-        [WS_METHODS.pluginsRemove]: (input) =>
-          plugins
-            .remove(input.id)
-            .pipe(Effect.provideService(ProjectStore.ProjectStoreV2, projectStore)),
+        [WS_METHODS.pluginsList]: () => withProjectLookup(plugins.list),
+        [WS_METHODS.pluginsImport]: (input) => withProjectLookup(plugins.importFolder(input.path)),
+        [WS_METHODS.pluginsRemove]: (input) => withProjectLookup(plugins.remove(input.id)),
         [WS_METHODS.pluginsSetEnabled]: (input) =>
-          plugins
-            .setEnabled(input.id, input.enabled)
-            .pipe(Effect.provideService(ProjectStore.ProjectStoreV2, projectStore)),
-        [WS_METHODS.pluginsRecheck]: (input) =>
-          plugins
-            .recheck(input.id)
-            .pipe(Effect.provideService(ProjectStore.ProjectStoreV2, projectStore)),
+          withProjectLookup(plugins.setEnabled(input.id, input.enabled)),
+        [WS_METHODS.pluginsRecheck]: (input) => withProjectLookup(plugins.recheck(input.id)),
         [WS_METHODS.sourceControlPublishRepository]: (input) =>
           sourceControlRepositories.publishRepository(input).pipe(
             // A failed push still leaves the new remote added.

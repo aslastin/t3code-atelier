@@ -2536,6 +2536,8 @@
   "b96db7780fceca0d": "Diese Verbindung kann gerade keine Projekte hinzufügen. Vorhandene Dateien bleiben unter {path}.",
   "ecae689a9b8b87ec": "Projekt hinzugefügt",
   "68c8ffd655dfa170": "Das Projekt wurde erstellt, ist aber noch nicht auf diesem Gerät angekommen. Es erscheint in der Projektliste, sobald die Verbindung aufgeholt hat.",
+  "4b4125e1ebc0d06a": "{plugin} kann in {project} keine Checkpoints für Züge anlegen",
+  "f66c4ae77f48b473": "Seine Snapshots umfassen das ganze Repository, und dieses Projekt ist ein Unterordner davon, daher lassen sich Züge hier weder als Diff anzeigen noch zurücksetzen. Füge dem Plugin changed-files hinzu oder öffne den Repository-Stamm als Projekt.",
   "fbdd6a9f82fed5c4": "Ohne ersten Commit erstellt",
   "1eed14183ebbd6b3": "Das {provider}-Repository konnte nicht erstellt werden",
   "ed7b2ba9874fa853": "Starte eine Umgebung oder verbinde sie erneut, bevor du ein Projekt hinzufügst.",

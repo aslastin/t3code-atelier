@@ -3,6 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { CheckpointRef, VcsDriverKind } from "@t3tools/contracts";
@@ -17,7 +18,9 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as VcsProjectConfig from "../vcs/VcsProjectConfig.ts";
 import * as PluginService from "./PluginService.ts";
 import { pluginCheckpointsWithPrefixes } from "./pluginCheckpoints.ts";
 import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
@@ -62,7 +65,7 @@ const setup = Effect.fn("test.setup")(function* (options: FakeVcsPluginOptions =
     return rows.map((row) => row.strategy);
   });
   const sql = Context.get(context, SqlClient.SqlClient);
-  return { plugins, imported, driver, repository, home, source, path, strategies, sql };
+  return { plugins, imported, driver, drivers, repository, home, source, path, strategies, sql };
 });
 
 const layer = NodeServices.layer;
@@ -201,8 +204,17 @@ describe("PluginService", () => {
 
   it.live("names the projects in a subfolder that native snapshots leave without checkpoints", () =>
     Effect.gen(function* () {
-      const { plugins, repository } = yield* setup({ checkpoints: ["native"] });
+      const { plugins, drivers, repository } = yield* setup({ checkpoints: ["native"] });
       NodeFS.mkdirSync(`${repository}/sub`, { recursive: true });
+      // A Git repository inside the Kite one is Git's, and gets Git's checkpoints.
+      NodeFS.mkdirSync(`${repository}/nested`, { recursive: true });
+      NodeChildProcess.execFileSync("git", ["init", "-q"], { cwd: `${repository}/nested` });
+      const registry = yield* VcsDriverRegistry.make.pipe(
+        Effect.provideService(VcsPluginDrivers, drivers),
+        Effect.provide(VcsProjectConfig.layer),
+        Effect.provide(VcsProcess.layer),
+        Effect.provide(NodeCrypto.layer),
+      );
       const project = (
         projectId: string,
         workspaceRoot: string,
@@ -216,8 +228,10 @@ describe("PluginService", () => {
               project("sub", `${repository}/sub`),
               project("archived", `${repository}/sub`, "2026-01-01T00:00:00.000Z"),
               project("elsewhere", NodeOS.tmpdir()),
+              project("nested", `${repository}/nested`),
             ]),
         } as never),
+        Effect.provideService(VcsDriverRegistry.VcsDriverRegistry, registry),
       );
       assert.deepStrictEqual(listed.plugins[0]?.uncheckpointedProjects, [
         { projectId: "sub", title: "sub" },
@@ -333,6 +347,13 @@ describe("ManifestVcsDriver", () => {
         yield* driver!.workflow!.workingDiff!({ cwd: repository }),
         "diff --git a/a.txt b/a.txt",
       );
+      // A diff that takes no file list prints every change; only the selected ones are kept.
+      const selected = yield* driver!.workflow!.workingDiff!({
+        cwd: repository,
+        filePaths: ["new.txt"],
+      });
+      assert.include(selected, "new.txt");
+      assert.notInclude(selected, "a/a.txt");
 
       // One path per line: a name with a line break cannot be listed for the plugin.
       const ambiguous = yield* driver!.workflow!.commit!({
