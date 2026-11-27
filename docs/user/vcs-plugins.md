@@ -46,24 +46,21 @@ repository inside keeps its own search.
   "icon": "icon.svg",
   "check": ["./bin/check.mjs"],
   "detect": { "markers": [".myvcs/HEAD"] },
-  "capabilities": { "worktrees": true },
-  "checkpoints": ["native", "changed-files"],
   "commands": {
     "status": ["./bin/status.mjs"],
-    "listRemotes": ["./bin/remotes.mjs"],
+    "refList": ["./bin/refs.mjs"],
     "commit": ["myvcs", "commit", "--all", "--file", "{messageFile}"],
-    "diff": ["./bin/diff.mjs"],
-    "log": ["./bin/log.mjs"],
+    "push": ["myvcs", "push"],
+    "pull": ["myvcs", "pull"],
+    "diff": ["myvcs", "diff"],
+    "log": ["myvcs", "log", "--format=%s", "-n", "20"],
     "branchCreate": ["myvcs", "checkout", "-b", "{newRef}"],
     "branchRename": ["myvcs", "branch", "-m", "{oldRef}", "{newRef}"],
     "fetchBase": ["./bin/fetch-base.mjs", "{ref}"],
-    "worktreeCreate": ["./bin/worktree-add.mjs", "{path}", "{newRef}", "{baseRef}"],
-    "worktreeRemove": ["./bin/worktree-remove.mjs", "{path}"],
-    "worktreeAttach": ["./bin/worktree-attach.mjs", "{path}", "{ref}"],
+    "worktreeCreate": ["myvcs", "worktree", "add", "{worktreePath}", "-b", "{newRef}", "{baseRef}"],
+    "worktreeRemove": ["myvcs", "worktree", "remove", "{worktreePath}"],
+    "worktreeAttach": ["myvcs", "worktree", "add", "{worktreePath}", "{ref}"],
     "worktreeList": ["./bin/worktree-list.mjs"],
-    "checkpointCapture": ["./bin/snapshot.mjs"],
-    "checkpointDiff": ["./bin/snapshot-diff.mjs", "{fromRevision}", "{toRevision}"],
-    "checkpointRestore": ["./bin/snapshot-restore.mjs", "{revision}"],
     "changedFiles": ["./bin/changed-files.mjs"],
     "readFile": ["myvcs", "show", "{revision}:{path}"],
   },
@@ -72,65 +69,77 @@ repository inside keeps its own search.
 
 - `id` is lowercase letters, digits, and dashes, and must match the folder name once installed.
   `git`, `jj`, `unknown`, and `auto` are taken.
+- Only `check` and `status` are required. Every other command adds a feature, listed below.
 - Commands are argument lists. No shell runs them, so on Windows a `.cmd` or `.bat` file is
-  refused; use an executable or a script run by its interpreter. The first item is either `./` and a file in
-  the plugin folder, or a bare name looked up on the server's `PATH`. Absolute paths are refused,
-  and so is a `./` path that a symbolic link points outside the folder. The icon must also be an
-  `.svg` file in the folder, at most 64 KB. It is shown as an image, so it does not take the
-  theme's text color: give shapes an explicit `fill` or `stroke` and check the icon on both light
-  and dark backgrounds.
-- A placeholder such as `{path}` is replaced inside an argument and never splits it into more
+  refused; use an executable or a script run by its interpreter. The first item is either `./`
+  and a file in the plugin folder, or a bare name looked up on the server's `PATH`. Absolute
+  paths are refused, and so is a `./` path that a symbolic link points outside the folder. The
+  icon must also be an `.svg` file in the folder, at most 64 KB. It is shown as an image, so it
+  does not take the theme's text color: give shapes an explicit `fill` or `stroke` and check the
+  icon on both light and dark backgrounds.
+- A placeholder such as `{newRef}` is replaced inside an argument and never splits it into more
   arguments. Each command may use only its own placeholders, listed below, and `{repositoryRoot}`.
+  Write `{{` and `}}` for a literal brace, as in `@{{upstream}}`.
 - `detect.markers` are paths inside the repository's own metadata folder. Pick a specific one:
   `.myvcs/HEAD`, not `.myvcs`, if your VCS also keeps a folder of that name in the home directory.
 - Commands run in the project folder with a clean environment: `PATH`, `HOME`, the locale, the
   temporary folder, and `SSH_AUTH_SOCK` are passed on, plus `T3_PLUGIN_DIR` and
-  `T3_PLUGIN_PROTOCOL`. Most commands time out after 30 seconds; `worktreeCreate` never does.
-- A command succeeds when it exits with 0. Its stderr is then ignored, so warnings there are
-  harmless. On failure, T3 Code shows that the command failed, not its output.
+  `T3_PLUGIN_PROTOCOL`.
+- Most commands time out after 30 seconds. Checkpoint commands get two minutes. `commit`,
+  `push`, `pull`, `fetchBase`, `worktreeCreate`, `worktreeAttach` and `worktreeRemove` run as
+  long as they need.
+- A command succeeds when it exits with 0; its stderr is then ignored, so warnings there are
+  harmless. When it fails, T3 Code shows the last line it wrote to stderr, up to 200 characters,
+  as the reason. Make that line say what went wrong, and keep secrets out of it.
 - Long text, such as a commit message, is passed as a file.
 - Output that does not match the contract below is an error. Settings shows the last one on the
-  plugin's row.
+  plugin's row. A field, command, or checkpoint strategy this server does not know is ignored and
+  noted there, so a typo in a command name shows.
 
 ### Operations
 
-Every command except `readFile` prints one JSON object on stdout. Optional fields are marked `?`.
+Commands print JSON only where the result is structured. Optional fields are marked `?`.
 
-| Command             | Placeholders                      | Prints                                                                                                                                                                                                     |
-| ------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `check`             |                                   | `{ "version", "problems": [string] }`. Runs in the plugin folder. Settings shows each problem as the reason the plugin is unavailable, so say what to do, such as `Run myvcs login.`                       |
-| `status` (required) |                                   | `{ "refName": string \| null, "isDefaultRef"?, "hasPrimaryRemote"?, "files"?: [{ "path", "insertions"?, "deletions"?, "untracked"? }], "hasUpstream"?, "aheadCount"?, "behindCount"? }`                    |
-| `listRemotes`       |                                   | `{ "remotes": [{ "name", "url", "pushUrl"?, "isPrimary"? }] }`. A VCS without URLs uses `<vcs>://<repository>`.                                                                                            |
-| `listRefs`          |                                   | `{ "refs": [{ "name", "current"?, "isDefault"?, "isRemote"?, "remoteName"? }] }`. Without it, only the current ref is offered.                                                                             |
-| `commit`            | `{messageFile}`, `{pathsFile}`    | `{ "commitSha"?, "subject"? }`. `{pathsFile}` lists the files to commit, one per line: the selected ones, or every changed file. Without it, only "commit all" works.                                      |
-| `diff`              | `{pathsFile}`                     | `{ "patch" }`, the uncommitted changes as a Git-format patch, only of `{pathsFile}` when given. Optional.                                                                                                  |
-| `log`               |                                   | `{ "subjects": [string] }`, recent commit subjects, newest first. Optional.                                                                                                                                |
-| `branchCreate`      | `{newRef}`                        | Anything. Start `{newRef}` from the checkout and switch to it, keeping uncommitted changes. Optional.                                                                                                      |
-| `branchRename`      | `{oldRef}`, `{newRef}`            | Anything. Rename branch `{oldRef}` to `{newRef}`. T3 Code picks a `{newRef}` that `listRefs` does not list. Optional.                                                                                      |
-| `fetchBase`         | `{ref}`                           | `{ "baseRef" }`. Bring `{ref}` up to date from the remote without changing the checkout or its files, and print the ref or revision a worktree should start from, such as a remote-tracking ref. Optional. |
-| `push`              |                                   | `{ "branch"?, "upstreamBranch"? }`                                                                                                                                                                         |
-| `pull`              |                                   | `{ "status": "pulled" \| "skipped_up_to_date", "refName", "upstreamRef"? }`                                                                                                                                |
-| `worktreeCreate`    | `{path}`, `{newRef}`, `{baseRef}` | `{ "refName" }`. Create the checkout at `{path}`; T3 Code chooses it, as it does for Git.                                                                                                                  |
-| `worktreeRemove`    | `{path}`                          | Anything.                                                                                                                                                                                                  |
-| `worktreeAttach`    | `{path}`, `{ref}`                 | Anything. Check out the existing `{ref}` at `{path}`. Optional.                                                                                                                                            |
-| `worktreeList`      |                                   | `{ "worktrees": [{ "path" }] }` with absolute paths.                                                                                                                                                       |
-| `checkpointCapture` | `{checkpointRef}`                 | `{ "revision" }`                                                                                                                                                                                           |
-| `checkpointDiff`    | `{fromRevision}`, `{toRevision}`  | `{ "patch" }`, a Git-format patch. Must fail when either revision cannot be read.                                                                                                                          |
-| `checkpointRestore` | `{revision}`                      | Anything.                                                                                                                                                                                                  |
-| `checkpointDelete`  | `{revision}`                      | Anything. Optional.                                                                                                                                                                                        |
-| `changedFiles`      |                                   | `{ "revision", "files": [{ "path", "status": "modified" \| "added" \| "deleted", "executable"?, "symlink"? }] }`; both flags are as at `revision`.                                                         |
-| `readFile`          | `{revision}`, `{path}`            | The file's bytes, or a link's target. Exit with a non-zero code when it does not exist at that revision.                                                                                                   |
+| Command             | Placeholders                              | Prints                                                                                                                                                                               |
+| ------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `check` (required)  |                                           | `{ "version", "problems": [string] }`. Runs in the plugin folder. Settings shows each problem as the reason the plugin is unavailable, so say what to do, such as `Run myvcs login.` |
+| `status` (required) |                                           | `{ "ref": string \| null, "default"?, "hasPrimaryRemote"?, "files"?: [{ "path", "insertions"?, "deletions"?, "untracked"? }], "hasUpstream"?, "aheadCount"?, "behindCount"? }`       |
+| `refList`           |                                           | `{ "refs": [{ "name", "current"?, "default"?, "remote"?, "remoteName"? }] }`. Without it, only the current ref is offered.                                                           |
+| `commit`            | `{messageFile}`, `{pathsFile}`            | Anything, or `{ "commitSha"?, "subject"? }`. `{pathsFile}` lists the files to commit, one per line: the selected ones, or every changed file. Without it, only "commit all" works.   |
+| `push`              |                                           | Anything, or `{ "branch"?, "upstreamBranch"? }`.                                                                                                                                     |
+| `pull`              |                                           | Anything, or `{ "status"?: "pulled" \| "skipped_up_to_date", "ref"?, "upstreamRef"? }`.                                                                                              |
+| `diff`              | `{pathsFile}`                             | The uncommitted changes as a Git-format patch, only of `{pathsFile}` when given.                                                                                                     |
+| `log`               |                                           | Recent commit subjects, one per line, newest first.                                                                                                                                  |
+| `branchCreate`      | `{newRef}`                                | Anything. Start `{newRef}` from the checkout and switch to it, keeping uncommitted changes.                                                                                          |
+| `branchRename`      | `{oldRef}`, `{newRef}`                    | Anything. Rename branch `{oldRef}` to `{newRef}`. T3 Code picks a `{newRef}` that `refList` does not list.                                                                           |
+| `fetchBase`         | `{ref}`                                   | The ref or revision a worktree should start from, such as a remote-tracking ref. Bring `{ref}` up to date from the remote without changing the checkout or its files.                |
+| `worktreeCreate`    | `{worktreePath}`, `{newRef}`, `{baseRef}` | Anything, or `{ "ref" }` when the VCS named the branch other than `{newRef}`. Create the checkout at `{worktreePath}`; T3 Code chooses it, as it does for Git.                       |
+| `worktreeRemove`    | `{worktreePath}`                          | Anything.                                                                                                                                                                            |
+| `worktreeAttach`    | `{worktreePath}`, `{ref}`                 | Anything. Check out the existing `{ref}` at `{worktreePath}`.                                                                                                                        |
+| `worktreeList`      |                                           | `{ "worktrees": [{ "path", "ref"? }] }` with absolute paths; `ref` is the branch checked out there.                                                                                  |
+| `checkpointCapture` |                                           | The new snapshot's revision.                                                                                                                                                         |
+| `checkpointDiff`    | `{fromRevision}`, `{toRevision}`          | A Git-format patch between the two snapshots. Must fail when either revision cannot be read.                                                                                         |
+| `checkpointRestore` | `{revision}`                              | Anything.                                                                                                                                                                            |
+| `checkpointDelete`  | `{revision}`                              | Anything.                                                                                                                                                                            |
+| `changedFiles`      |                                           | `{ "revision", "files": [{ "path", "status": "modified" \| "added" \| "deleted", "executable"?, "symlink"? }] }`; both flags are as at `revision`.                                   |
+| `readFile`          | `{revision}`, `{path}`                    | The file's bytes, or a link's target. Exit with a non-zero code when it does not exist at that revision.                                                                             |
 
-Paths are relative to the repository root and use `/`. With `capabilities.worktrees`,
-`worktreeCreate`, `worktreeRemove` and `worktreeList` are required, and **New worktree** is offered for the
+"Anything" means T3 Code reads nothing from the output unless it is a JSON object. Paths are
+relative to the repository root and use `/`.
+
+With `worktreeCreate`, `worktreeRemove` and `worktreeList`, **New worktree** is offered for the
 plugin's repositories. A new worktree starts on a temporary branch; with `branchRename`, T3 Code
 renames it after the thread's first message, as it does for Git, and without it the branch keeps
 its temporary name. **Start from remote** is offered with `fetchBase`: T3 Code runs it in the
-repository, then passes the `baseRef` it printed to `worktreeCreate`. Commit and push are offered only when their commands exist. Without a
-typed message, T3 Code writes one as it does for Git, from the files `status` lists and, when the
-plugin has it, the patch `diff` prints. With `log`, the message follows your repository's recent
-subjects. **Commit on a new branch** needs `branchCreate`; T3 Code names the branch as it does for
-Git. Pull requests, the branch comparison, and sparse checkouts stay Git-only.
+repository, then passes the ref it printed to `worktreeCreate` as `{baseRef}`. Commit, push and
+pull are offered only when their commands exist. Without a typed message, T3 Code writes one as
+it does for Git, from the files `status` lists and, when the plugin has it, the patch `diff`
+prints. With `log`, the message follows your repository's recent subjects. **Commit on a new
+branch** needs `branchCreate`; T3 Code names the branch as it does for Git. Pull requests, the
+branch comparison, and sparse checkouts stay Git-only.
+
+Within `t3-plugin/1`, new versions of T3 Code only add optional commands, optional output fields,
+and placeholders for new commands, so a plugin keeps working as T3 Code updates.
 
 When a project is a subfolder of the repository, a new worktree's thread works in the same
 subfolder of the new checkout.
@@ -145,14 +154,15 @@ worktree stays when:
   worktree, report unpushed commits there, counted from the branch's base when it has no
   upstream, or they are lost with the worktree.
 - Its thread is still live and the plugin cannot bring it back. A thread's next turn checks its
-  branch out again with `worktreeAttach`, so the repository's `listRefs` must still list that
+  branch out again with `worktreeAttach`, so the repository's `refList` must still list that
   branch. Without both commands, cleanup removes only a deleted thread's worktree.
 
 ### Checkpoints
 
 T3 Code snapshots each turn so you can see its diff and roll it back. `checkpoints` lists the
-strategies T3 Code may use, in order, and it never uses one you did not list. Without the field, a
-plugin gets `["changed-files"]`. A thread's first snapshot tries them in that order. Later
+strategies T3 Code may use, in order, and it never uses one you did not list. Without the field,
+a plugin gets every strategy its commands allow: `native`, then `changed-files`. `full` is used
+only when listed. A thread's first snapshot tries them in that order. Later
 snapshots in the thread try the strategy of the previous one first, because snapshots taken with
 different strategies cannot be compared. After a fallback, the thread stays on the fallback, and
 a new thread starts from the top of the list again.
@@ -195,7 +205,7 @@ const files = execFileSync("myvcs", ["status", "--porcelain"], { encoding: "utf8
   .filter(Boolean)
   .map((line) => ({ path: line.slice(2).trim() }));
 
-process.stdout.write(JSON.stringify({ refName: branch || null, files }));
+process.stdout.write(JSON.stringify({ ref: branch || null, files }));
 ```
 
 Make scripts executable (`chmod +x bin/*.mjs`) before you import the folder.

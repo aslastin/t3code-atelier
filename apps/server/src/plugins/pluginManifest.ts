@@ -15,8 +15,7 @@ export type ManifestCommandName = VcsPluginCommandName | "check";
 export const COMMAND_PLACEHOLDERS: Readonly<Record<ManifestCommandName, ReadonlyArray<string>>> = {
   check: [],
   status: ["repositoryRoot"],
-  listRemotes: ["repositoryRoot"],
-  listRefs: ["repositoryRoot"],
+  refList: ["repositoryRoot"],
   commit: ["repositoryRoot", "messageFile", "pathsFile"],
   diff: ["repositoryRoot", "pathsFile"],
   log: ["repositoryRoot"],
@@ -25,11 +24,11 @@ export const COMMAND_PLACEHOLDERS: Readonly<Record<ManifestCommandName, Readonly
   fetchBase: ["repositoryRoot", "ref"],
   push: ["repositoryRoot"],
   pull: ["repositoryRoot"],
-  worktreeCreate: ["repositoryRoot", "path", "newRef", "baseRef"],
-  worktreeRemove: ["repositoryRoot", "path"],
-  worktreeAttach: ["repositoryRoot", "path", "ref"],
+  worktreeCreate: ["repositoryRoot", "worktreePath", "newRef", "baseRef"],
+  worktreeRemove: ["repositoryRoot", "worktreePath"],
+  worktreeAttach: ["repositoryRoot", "worktreePath", "ref"],
   worktreeList: ["repositoryRoot"],
-  checkpointCapture: ["repositoryRoot", "checkpointRef"],
+  checkpointCapture: ["repositoryRoot"],
   checkpointDiff: ["repositoryRoot", "fromRevision", "toRevision"],
   checkpointRestore: ["repositoryRoot", "revision"],
   checkpointDelete: ["repositoryRoot", "revision"],
@@ -48,18 +47,25 @@ const STRATEGY_COMMANDS: Readonly<
 /** Ids the server already gives a meaning to. */
 const RESERVED_IDS = new Set(["git", "jj", "unknown", "auto"]);
 
-const PLACEHOLDER = /\{([A-Za-z]+)\}/g;
+// `{{` and `}}` are a literal brace, so an argument such as `@{{upstream}}` stays as written.
+const PLACEHOLDER = /\{\{|\}\}|\{([A-Za-z]+)\}/g;
 const MAX_ICON_BYTES = 64 * 1024;
 
-export const DEFAULT_CHECKPOINT_STRATEGIES: ReadonlyArray<VcsPluginCheckpointStrategy> = [
-  "changed-files",
-];
+const KNOWN_STRATEGIES: ReadonlyArray<string> = ["native", "changed-files", "full"];
+const isStrategy = (name: string): name is VcsPluginCheckpointStrategy =>
+  KNOWN_STRATEGIES.includes(name);
 
-export const checkpointStrategies = (manifest: VcsPluginManifest) =>
-  manifest.checkpoints ?? DEFAULT_CHECKPOINT_STRATEGIES;
+/** The listed strategies this server knows, or by default every one the commands allow. */
+export const checkpointStrategies = (
+  manifest: VcsPluginManifest,
+): ReadonlyArray<VcsPluginCheckpointStrategy> =>
+  manifest.checkpoints === undefined
+    ? (["native", "changed-files"] as const).filter((strategy) =>
+        STRATEGY_COMMANDS[strategy].every((command) => manifest.commands[command] !== undefined),
+      )
+    : manifest.checkpoints.filter(isStrategy);
 
 export const supportsWorktrees = (manifest: VcsPluginManifest) =>
-  manifest.capabilities?.worktrees === true &&
   manifest.commands.worktreeCreate !== undefined &&
   manifest.commands.worktreeRemove !== undefined &&
   manifest.commands.worktreeList !== undefined;
@@ -108,7 +114,7 @@ export function validateManifest(manifest: VcsPluginManifest): ReadonlyArray<str
     const allowed = COMMAND_PLACEHOLDERS[name];
     for (const argument of argv.slice(1)) {
       for (const [, placeholder] of argument.matchAll(PLACEHOLDER)) {
-        if (!allowed.includes(placeholder!))
+        if (placeholder !== undefined && !allowed.includes(placeholder))
           errors.push(`${field}: {${placeholder}} is not available here.`);
       }
     }
@@ -134,15 +140,6 @@ export function validateManifest(manifest: VcsPluginManifest): ReadonlyArray<str
         errors.push(`checkpoints: "${strategy}" needs commands.${command}.`);
     }
   }
-  if (
-    manifest.capabilities?.worktrees === true &&
-    (manifest.commands.worktreeCreate === undefined ||
-      manifest.commands.worktreeRemove === undefined ||
-      manifest.commands.worktreeList === undefined)
-  )
-    errors.push(
-      "capabilities.worktrees: needs commands.worktreeCreate, commands.worktreeRemove and commands.worktreeList.",
-    );
   return errors;
 }
 
@@ -158,7 +155,8 @@ export function renderArgv(
   const rendered = argv.map((argument, index) =>
     index === 0
       ? argument
-      : argument.replace(PLACEHOLDER, (match, name: string) => {
+      : argument.replace(PLACEHOLDER, (match, name: string | undefined) => {
+          if (name === undefined) return match[0]!;
           const value = values[name];
           if (value === undefined) missing ??= name;
           return value ?? match;
@@ -168,13 +166,50 @@ export function renderArgv(
 }
 
 export const usesPlaceholder = (argv: ReadonlyArray<string> | undefined, name: string) =>
-  argv?.slice(1).some((argument) => argument.includes(`{${name}}`)) === true;
+  argv
+    ?.slice(1)
+    .some((argument) => [...argument.matchAll(PLACEHOLDER)].some(([, found]) => found === name)) ===
+  true;
 
 const decodeManifest = Schema.decodeUnknownEffect(Schema.fromJsonString(VcsPluginManifest));
+const decodeFields = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+);
+const MANIFEST_FIELDS = new Set([
+  "protocol",
+  "kind",
+  "id",
+  "label",
+  "icon",
+  "check",
+  "detect",
+  "checkpoints",
+  "commands",
+]);
+
+/** Fields, commands and strategies this server skips: a typo would otherwise go unnoticed. */
+const ignoredParts = Effect.fnUntraced(function* (text: string, manifest: VcsPluginManifest) {
+  const fields = yield* decodeFields(text).pipe(Effect.orElseSucceed(() => ({})));
+  const notes: string[] = [];
+  for (const field of Object.keys(fields))
+    if (!MANIFEST_FIELDS.has(field))
+      notes.push(`${field}: not a field this server knows; ignored.`);
+  const commands = (fields as Record<string, unknown>).commands;
+  if (typeof commands === "object" && commands !== null)
+    for (const command of Object.keys(commands))
+      if (command === "check" || !(command in COMMAND_PLACEHOLDERS))
+        notes.push(`commands.${command}: not a command this server knows; ignored.`);
+  for (const strategy of manifest.checkpoints ?? [])
+    if (!isStrategy(strategy))
+      notes.push(`checkpoints: "${strategy}" is not a strategy this server knows; skipped.`);
+  return notes;
+});
 
 export interface ReadManifestResult {
   readonly manifest: VcsPluginManifest | null;
   readonly errors: ReadonlyArray<string>;
+  /** What the server ignored, such as an unknown command; the plugin still works. */
+  readonly notes: ReadonlyArray<string>;
 }
 
 /** Decodes `plugin.json` in `directory` and checks the rules the schema cannot. */
@@ -190,17 +225,20 @@ export const readManifest = Effect.fn("pluginManifest.readManifest")(function* (
     return {
       manifest: null,
       errors: [`${PLUGIN_MANIFEST_FILE_NAME} is missing or unreadable.`],
+      notes: [],
     } satisfies ReadManifestResult;
   const decoded = yield* decodeManifest(text.value).pipe(Effect.result);
   if (decoded._tag === "Failure")
     return {
       manifest: null,
       errors: [`${PLUGIN_MANIFEST_FILE_NAME}: ${decoded.failure.message}`],
+      notes: [],
     } satisfies ReadManifestResult;
   const errors = validateManifest(decoded.success);
   return {
     manifest: errors.length === 0 ? decoded.success : null,
     errors,
+    notes: yield* ignoredParts(text.value, decoded.success),
   } satisfies ReadManifestResult;
 });
 

@@ -1,6 +1,7 @@
 import {
   PLUGIN_PROTOCOL,
   VcsPluginOutputError,
+  VcsProcessExitError,
   VcsUnsupportedOperationError,
   type VcsDriverKind,
   type VcsError,
@@ -21,6 +22,17 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
+const MAX_STDERR_REASON = 200;
+
+/** The last line a failed command wrote to stderr, as the reason shown for the failure. */
+function stderrReason(stderr: string): string | null {
+  const line = stderr
+    .split(/\r?\n/)
+    .map((text) => text.replace(/[\u0000-\u001f\u007f]/g, "").trim())
+    .findLast((text) => text.length > 0);
+  if (line === undefined) return null;
+  return line.length > MAX_STDERR_REASON ? `${line.slice(0, MAX_STDERR_REASON - 1)}…` : line;
+}
 
 // Commands see only what a CLI needs to find itself and its credentials.
 const INHERITED_ENV = [
@@ -72,6 +84,8 @@ export interface PluginRunOptions {
   readonly onStdoutChunk?: (chunk: Uint8Array) => void;
   /** False keeps a failure out of the plugin's last error in Settings. */
   readonly reportFailures?: boolean;
+  /** For `runJson`: output that is not a JSON object counts as `{}`, for all-optional fields. */
+  readonly anyOutput?: boolean;
 }
 
 export interface PluginCommandRunner {
@@ -125,8 +139,9 @@ export const makePluginCommandRunner = Effect.fn("pluginCommandRunner.make")(fun
       const rendered = renderArgv(argv, options.values ?? {});
       if ("missing" in rendered)
         return yield* unsupported(command, `No value for {${rendered.missing}} here.`);
-      return yield* vcsProcess.run({
-        operation: `plugin.${kind}.${command}`,
+      const operation = `plugin.${kind}.${command}`;
+      const output = yield* vcsProcess.run({
+        operation,
         command: resolved,
         args: rendered.argv.slice(1),
         cwd: options.cwd,
@@ -141,6 +156,17 @@ export const makePluginCommandRunner = Effect.fn("pluginCommandRunner.make")(fun
         maxOutputBytes: options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
         ...(options.onStdoutChunk ? { onStdoutChunk: options.onStdoutChunk } : {}),
         outputMode: options.onStdoutChunk ? "truncate" : "error",
+        allowNonZeroExit: true,
+      });
+      if (output.exitCode === 0) return output;
+      return yield* new VcsProcessExitError({
+        operation,
+        command: resolved,
+        cwd: options.cwd,
+        exitCode: Number(output.exitCode),
+        detail: stderrReason(output.stderr) ?? "Process exited with a non-zero status.",
+        stderrLength: output.stderr.length,
+        stderrTruncated: output.stderrTruncated,
       });
     },
   );
@@ -148,7 +174,11 @@ export const makePluginCommandRunner = Effect.fn("pluginCommandRunner.make")(fun
   const runJson: PluginCommandRunner["runJson"] = (command, schema, options) =>
     run(command, options).pipe(
       Effect.flatMap((output) =>
-        Schema.decodeEffect(Schema.fromJsonString(schema))(output.stdout).pipe(
+        Schema.decodeEffect(Schema.fromJsonString(schema))(
+          options.anyOutput === true && !output.stdout.trimStart().startsWith("{")
+            ? "{}"
+            : output.stdout,
+        ).pipe(
           Effect.catchTags({
             SchemaError: (error) => {
               const detail = output.stdout.trim() === "" ? "stdout was empty" : error.message;

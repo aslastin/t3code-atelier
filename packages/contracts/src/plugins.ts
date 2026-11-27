@@ -23,8 +23,7 @@ const PluginArgv = Schema.Array(Schema.String.check(Schema.isMaxLength(4_096))).
 
 export const VcsPluginCommands = Schema.Struct({
   status: PluginArgv,
-  listRemotes: Schema.optionalKey(PluginArgv),
-  listRefs: Schema.optionalKey(PluginArgv),
+  refList: Schema.optionalKey(PluginArgv),
   commit: Schema.optionalKey(PluginArgv),
   push: Schema.optionalKey(PluginArgv),
   pull: Schema.optionalKey(PluginArgv),
@@ -67,16 +66,17 @@ export const VcsPluginManifest = Schema.Struct({
       Schema.isMaxLength(8),
     ),
   }),
-  capabilities: Schema.optionalKey(
-    Schema.Struct({ worktrees: Schema.optionalKey(Schema.Boolean) }),
-  ),
-  /** Strategies T3 may use, in order. Defaults to `["changed-files"]`; `full` must be listed. */
-  checkpoints: Schema.optionalKey(Schema.Array(VcsPluginCheckpointStrategy)),
+  /**
+   * Strategies T3 may use, in order. By default, those the commands allow: `native`, then
+   * `changed-files`; `full` must be listed. A name this server does not know is skipped.
+   */
+  checkpoints: Schema.optionalKey(Schema.Array(Schema.String)),
   commands: VcsPluginCommands,
 });
 export type VcsPluginManifest = typeof VcsPluginManifest.Type;
 
-// What each operation prints on stdout. Fields T3 can infer are optional.
+// What each operation prints on stdout, when it is JSON. Fields T3 can infer are optional.
+// Other commands print text: a patch, one subject per line, or a single revision.
 
 export const PluginCheckOutput = Schema.Struct({
   version: Schema.String,
@@ -88,8 +88,9 @@ export type PluginCheckOutput = typeof PluginCheckOutput.Type;
 const PluginPath = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4_096));
 
 export const VcsPluginStatusOutput = Schema.Struct({
-  refName: Schema.NullOr(TrimmedNonEmptyString),
-  isDefaultRef: Schema.optionalKey(Schema.Boolean),
+  ref: Schema.NullOr(TrimmedNonEmptyString),
+  /** The checked-out ref is the repository's default one. */
+  default: Schema.optionalKey(Schema.Boolean),
   hasPrimaryRemote: Schema.optionalKey(Schema.Boolean),
   files: Schema.optionalKey(
     Schema.Array(
@@ -108,32 +109,13 @@ export const VcsPluginStatusOutput = Schema.Struct({
 });
 export type VcsPluginStatusOutput = typeof VcsPluginStatusOutput.Type;
 
-export const VcsPluginLogOutput = Schema.Struct({
-  /** Newest first. */
-  subjects: Schema.Array(Schema.String),
-});
-export type VcsPluginLogOutput = typeof VcsPluginLogOutput.Type;
-
-export const VcsPluginRemotesOutput = Schema.Struct({
-  remotes: Schema.Array(
-    Schema.Struct({
-      name: TrimmedNonEmptyString,
-      /** A URL, or `<vcs>://<repository>` for a VCS without URLs. */
-      url: TrimmedNonEmptyString,
-      pushUrl: Schema.optionalKey(TrimmedNonEmptyString),
-      isPrimary: Schema.optionalKey(Schema.Boolean),
-    }),
-  ),
-});
-export type VcsPluginRemotesOutput = typeof VcsPluginRemotesOutput.Type;
-
 export const VcsPluginRefsOutput = Schema.Struct({
   refs: Schema.Array(
     Schema.Struct({
       name: TrimmedNonEmptyString,
       current: Schema.optionalKey(Schema.Boolean),
-      isDefault: Schema.optionalKey(Schema.Boolean),
-      isRemote: Schema.optionalKey(Schema.Boolean),
+      default: Schema.optionalKey(Schema.Boolean),
+      remote: Schema.optionalKey(Schema.Boolean),
       remoteName: Schema.optionalKey(TrimmedNonEmptyString),
     }),
   ),
@@ -150,19 +132,16 @@ export const VcsPluginPushOutput = Schema.Struct({
   upstreamBranch: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
+/** Defaults: pulled, onto the ref `status` reports. */
 export const VcsPluginPullOutput = Schema.Struct({
-  status: Schema.Literals(["pulled", "skipped_up_to_date"]),
-  refName: TrimmedNonEmptyString,
+  status: Schema.optionalKey(Schema.Literals(["pulled", "skipped_up_to_date"])),
+  ref: Schema.optionalKey(TrimmedNonEmptyString),
   upstreamRef: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
 });
 
-/** The ref or revision a worktree starts from, once `fetchBase` brought it up to date. */
-export const VcsPluginFetchBaseOutput = Schema.Struct({
-  baseRef: TrimmedNonEmptyString,
-});
-
+/** Only when the VCS named the new branch other than `{newRef}`. */
 export const VcsPluginWorktreeCreateOutput = Schema.Struct({
-  refName: TrimmedNonEmptyString,
+  ref: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
 export const VcsPluginWorktreeListOutput = Schema.Struct({
@@ -170,18 +149,9 @@ export const VcsPluginWorktreeListOutput = Schema.Struct({
     Schema.Struct({
       path: PluginPath,
       /** The ref checked out there, so its branch can name the worktree. */
-      refName: Schema.optionalKey(TrimmedNonEmptyString),
+      ref: Schema.optionalKey(TrimmedNonEmptyString),
     }),
   ),
-});
-
-export const VcsPluginCheckpointCaptureOutput = Schema.Struct({
-  revision: TrimmedNonEmptyString,
-});
-
-/** A Git-formatted patch between two native snapshots. */
-export const VcsPluginCheckpointDiffOutput = Schema.Struct({
-  patch: Schema.String,
 });
 
 export const VcsPluginChangedFileStatus = Schema.Literals(["modified", "added", "deleted"]);
@@ -224,6 +194,8 @@ export const PluginSummary = Schema.Struct({
   version: Schema.NullOr(Schema.String),
   /** Manifest errors and the problems `check` printed, for Settings. */
   problems: Schema.Array(Schema.String),
+  /** Parts of the manifest this server ignored, such as an unknown command or a typo in one. */
+  notes: Schema.optionalKey(Schema.Array(Schema.String)),
   /** The last operation that failed, such as output that broke the contract. */
   lastError: Schema.NullOr(
     Schema.Struct({ operation: Schema.String, message: Schema.String, at: IsoDateTime }),

@@ -4,9 +4,7 @@ import * as NodeOS from "node:os";
 
 import {
   VcsCheckpointStorageError,
-  VcsPluginCheckpointCaptureOutput,
   VcsPluginChangedFilesOutput,
-  VcsPluginCheckpointDiffOutput,
   VcsPluginOutputError,
   VcsUnsupportedOperationError,
   type CheckpointRef,
@@ -434,13 +432,16 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     `.pipe(Effect.mapError(failed));
   });
 
+  // The patch is the command's whole stdout.
   const nativeDiff = (location: Location, cwd: string, from: string, to: string) =>
-    runner.runJson("checkpointDiff", VcsPluginCheckpointDiffOutput, {
-      cwd,
-      values: { repositoryRoot: location.root, fromRevision: from, toRevision: to },
-      timeoutMs: CHECKPOINT_TIMEOUT_MS,
-      maxOutputBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
-    });
+    runner
+      .run("checkpointDiff", {
+        cwd,
+        values: { repositoryRoot: location.root, fromRevision: from, toRevision: to },
+        timeoutMs: CHECKPOINT_TIMEOUT_MS,
+        maxOutputBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+      })
+      .pipe(Effect.map((output) => output.stdout));
 
   const capture = {
     native: Effect.fn("pluginCheckpoints.captureNative")(function* (
@@ -462,15 +463,18 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           "captureCheckpoint",
           "A native snapshot covers the whole repository, not only the project's folder.",
         );
-      const { revision } = yield* runner.runJson(
-        "checkpointCapture",
-        VcsPluginCheckpointCaptureOutput,
-        {
-          cwd,
-          values: { repositoryRoot: location.root, checkpointRef },
-          timeoutMs: CHECKPOINT_TIMEOUT_MS,
-        },
-      );
+      // The revision is the command's stdout, trimmed.
+      const revision = (yield* runner.run("checkpointCapture", {
+        cwd,
+        values: { repositoryRoot: location.root },
+        timeoutMs: CHECKPOINT_TIMEOUT_MS,
+      })).stdout.trim();
+      if (revision === "")
+        return yield* new VcsPluginOutputError({
+          operation: "checkpointCapture",
+          kind,
+          detail: "checkpointCapture printed no revision.",
+        });
       // Some stores hand out snapshots that cannot be read back; only a readable one counts.
       yield* nativeDiff(location, cwd, revision, revision);
       return { strategy: "native", revision, baseRevision: null, files: null } as CheckpointRecord;
@@ -672,7 +676,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       );
     if (from.strategy === "native") {
       // Said in the turn's note: a snapshot the plugin no longer reads is not an empty change.
-      const { patch } = yield* nativeDiff(location, input.cwd, from.revision, to.revision).pipe(
+      const patch = yield* nativeDiff(location, input.cwd, from.revision, to.revision).pipe(
         Effect.catch(() =>
           unsupported("diffCheckpoints", `${runner.label} could not read one of these snapshots.`),
         ),

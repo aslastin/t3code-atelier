@@ -74,6 +74,7 @@ interface PluginEntry {
   readonly directory: string;
   readonly manifest: VcsPluginManifest | null;
   readonly manifestErrors: ReadonlyArray<string>;
+  readonly manifestNotes: ReadonlyArray<string>;
   readonly iconSvg: string | null;
   readonly enabled: boolean;
   readonly status: PluginStatus;
@@ -96,6 +97,7 @@ const summarize = (entry: PluginEntry): PluginSummary => ({
   status: entry.status,
   version: entry.version,
   problems: [...entry.manifestErrors, ...entry.problems],
+  ...(entry.manifestNotes.length > 0 ? { notes: entry.manifestNotes } : {}),
   lastError: entry.lastError,
   iconSvg: entry.iconSvg,
   checkpoints: entry.manifest ? [...checkpointStrategies(entry.manifest)] : [],
@@ -185,7 +187,7 @@ const make = Effect.gen(function* () {
     enabled: boolean,
     pluginDirectory = path.join(directory, folder),
   ) {
-    const { manifest, errors } = yield* readManifest(fs, path, pluginDirectory);
+    const { manifest, errors, notes } = yield* readManifest(fs, path, pluginDirectory);
     const fileErrors = manifest ? yield* checkPluginFiles(fs, path, pluginDirectory, manifest) : [];
     const idErrors =
       manifest && manifest.id !== folder && pluginDirectory === path.join(directory, folder)
@@ -198,6 +200,7 @@ const make = Effect.gen(function* () {
       directory: pluginDirectory,
       manifest: valid,
       manifestErrors,
+      manifestNotes: notes,
       iconSvg: valid ? yield* readIcon(fs, path, pluginDirectory, valid) : null,
       enabled,
       status: valid === null ? "invalid" : enabled ? "checking" : "disabled",
@@ -610,7 +613,7 @@ const make = Effect.gen(function* () {
             recreatesWorktrees:
               supportsWorktrees(manifest) &&
               manifest.commands.worktreeAttach !== undefined &&
-              manifest.commands.listRefs !== undefined,
+              manifest.commands.refList !== undefined,
           };
       }
       return undefined;

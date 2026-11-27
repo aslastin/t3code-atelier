@@ -177,7 +177,8 @@ describe("PluginService", () => {
       const [summary] = imported.plugins;
       assert.strictEqual(summary?.status, "available");
       assert.strictEqual(summary?.version, "1.2.3");
-      assert.deepStrictEqual(summary?.checkpoints, ["changed-files"]);
+      // No `checkpoints` field: every strategy the commands allow, native first.
+      assert.deepStrictEqual(summary?.checkpoints, ["native", "changed-files"]);
       assert.include(summary?.iconSvg ?? "", "<svg");
       assert.isTrue(NodeFS.existsSync(`${home}/plugins/kite/plugin.json`));
       assert.isDefined(driver);
@@ -333,6 +334,37 @@ describe("ManifestVcsDriver", () => {
       assert.strictEqual(
         (yield* driver!.workflow!.status!({ cwd: repository })).refName,
         "feature/next",
+      );
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live("takes any output from commit, push and pull, and shows why a push failed", () =>
+    Effect.gen(function* () {
+      const { driver, repository, plugins } = yield* setup();
+      const workflow = driver!.workflow!;
+      NodeFS.writeFileSync(`${repository}/a.txt`, "changed\n");
+      NodeFS.writeFileSync(`${repository}/.kite/plain-commit`, "");
+      assert.deepStrictEqual(
+        yield* workflow.commit!({ cwd: repository, commitMessage: "Change a" }),
+        { status: "created" },
+      );
+      assert.deepStrictEqual(yield* workflow.push!({ cwd: repository }), { status: "pushed" });
+      // Nothing printed: pulled, onto the ref status reports.
+      assert.deepStrictEqual(yield* workflow.pull!({ cwd: repository }), {
+        status: "pulled",
+        refName: "main",
+        upstreamRef: null,
+      });
+
+      // The reason is the last line the command wrote to stderr.
+      NodeFS.writeFileSync(`${repository}/.kite/reject-push`, "");
+      const rejected = yield* workflow.push!({ cwd: repository }).pipe(Effect.flip);
+      assert.include(rejected.message, "Kite rejected the push: sign in with kite login");
+      assert.notInclude(rejected.message, "Connecting");
+      const listed = yield* plugins.list;
+      assert.include(
+        listed.plugins[0]?.lastError?.message ?? "",
+        "Kite rejected the push: sign in with kite login",
       );
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
@@ -604,8 +636,8 @@ describe("ManifestVcsDriver", () => {
 
   it.live("never uses a strategy the plugin does not list", () =>
     Effect.gen(function* () {
-      // No `checkpoints` field: only changed-files, never native and never full.
-      const { driver, repository, strategies } = yield* setup();
+      // Listing only changed-files: never native, and never full.
+      const { driver, repository, strategies } = yield* setup({ checkpoints: ["changed-files"] });
       yield* driver!.checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
       const calls = fakeCalls(repository);
       assert.isFalse(calls.some((call) => call.startsWith("snapshot")));

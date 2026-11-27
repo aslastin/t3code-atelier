@@ -13,7 +13,7 @@ import { SettingsSection } from "./SettingsSection";
 // Atelier fork: the VCS plugins on each environment and whether they work. Importing and removing
 // plugins runs commands on the server, so it stays in the web and desktop Settings.
 
-function pluginSummary(plugin: PluginSummary): string {
+function pluginStatusText(plugin: PluginSummary): string {
   if (plugin.problems.length > 0) return plugin.problems.join(" ");
   if (plugin.lastError) return plugin.lastError.message;
   switch (plugin.status) {
@@ -29,6 +29,10 @@ function pluginSummary(plugin: PluginSummary): string {
       return m(msg("Unavailable"));
   }
 }
+
+// What the server ignored in the manifest follows, so a typo in a command name shows.
+const pluginSummary = (plugin: PluginSummary) =>
+  [pluginStatusText(plugin), ...(plugin.notes ?? [])].join(" ");
 
 function EnvironmentPlugins(props: {
   readonly environment: SettingsTarget;

@@ -165,7 +165,7 @@ switch (command) {
       deletions: 0,
       ...(file.status === "added" ? { untracked: true } : {}),
     }));
-    out({ refName: fs.readFileSync(path.join(kite, "HEAD"), "utf8").trim(), isDefaultRef: true, files });
+    out({ ref: fs.readFileSync(path.join(kite, "HEAD"), "utf8").trim(), default: true, files });
     break;
   }
   case "bad-status":
@@ -179,7 +179,8 @@ switch (command) {
     copyTree(path.join(kite, "base"), path.join(target, ".kite", "base"));
     fs.writeFileSync(path.join(kite, "worktrees.json"), JSON.stringify([...readList(), target]));
     fs.writeFileSync(path.join(kite, "refs.json"), JSON.stringify([...readRefs(), newRef]));
-    out({ refName: newRef });
+    // Nothing to print: the new branch is the one T3 Code asked for.
+    process.stdout.write("Created " + target + "\n");
     break;
   }
   case "worktree-attach": {
@@ -200,7 +201,7 @@ switch (command) {
   case "refs": {
     const head = fs.readFileSync(path.join(kite, "HEAD"), "utf8").trim();
     const names = [...new Set(["main", ...readRefs()])];
-    out({ refs: names.map((name) => ({ name, current: name === head, isDefault: name === "main" })) });
+    out({ refs: names.map((name) => ({ name, current: name === head, default: name === "main" })) });
     break;
   }
   case "worktree-list":
@@ -208,7 +209,7 @@ switch (command) {
       worktrees: readList().map((p) => {
         const head = path.join(p, ".kite", "HEAD");
         return fs.existsSync(head)
-          ? { path: p, refName: fs.readFileSync(head, "utf8").trim() }
+          ? { path: p, ref: fs.readFileSync(head, "utf8").trim() }
           : { path: p };
       }),
     });
@@ -218,14 +219,14 @@ switch (command) {
     fs.mkdirSync(dir, { recursive: true });
     const revision = "snap-" + fs.readdirSync(dir).length;
     copyTree(root, snapshotDir(revision));
-    out({ revision });
+    process.stdout.write(revision + "\n");
     break;
   }
   case "snapshot-diff": {
     const [from, to] = args;
     if (fs.existsSync(path.join(kite, "broken-snapshots"))) fail("NoSuchObject " + from);
     if (!fs.existsSync(snapshotDir(from)) || !fs.existsSync(snapshotDir(to))) fail("unknown snapshot");
-    out({ patch: patch(snapshotDir(from), snapshotDir(to)) });
+    process.stdout.write(patch(snapshotDir(from), snapshotDir(to)));
     break;
   }
   case "snapshot-drop":
@@ -257,18 +258,20 @@ switch (command) {
     const log = path.join(kite, "commits.log");
     fs.appendFileSync(log, message.split("\n")[0] + "\n");
     const count = fs.readFileSync(log, "utf8").split("\n").filter(Boolean).length;
-    out({ commitSha: "kite-" + count, subject: message.split("\n")[0] });
+    // A test makes the commit print what a CLI prints for people, not JSON.
+    if (fs.existsSync(path.join(kite, "plain-commit"))) process.stdout.write("Committed.\n");
+    else out({ commitSha: "kite-" + count, subject: message.split("\n")[0] });
     break;
   }
   case "log": {
     const log = path.join(kite, "commits.log");
     const subjects = fs.existsSync(log) ? fs.readFileSync(log, "utf8").split("\n").filter(Boolean) : [];
-    out({ subjects: subjects.reverse() });
+    process.stdout.write(subjects.reverse().join("\n") + "\n");
     break;
   }
   // The remote is the repository itself here: the fetched base is the branch as it is.
   case "fetch-base":
-    out({ baseRef: args[0] });
+    process.stdout.write(args[0] + "\n");
     break;
   case "branch-rename": {
     const [oldRef, newRef] = args;
@@ -287,7 +290,17 @@ switch (command) {
     break;
   }
   case "diff":
-    out({ patch: patch(path.join(kite, "base"), root) });
+    process.stdout.write(patch(path.join(kite, "base"), root));
+    break;
+  // Pushing and pulling have no remote here; a test can make the push fail with a reason.
+  case "push":
+    if (fs.existsSync(path.join(kite, "reject-push"))) {
+      process.stderr.write("Connecting…\nKite rejected the push: sign in with kite login\n");
+      process.exit(1);
+    }
+    process.stdout.write("Pushed.\n");
+    break;
+  case "pull":
     break;
   case "changed":
     out({ revision: baseRevision(), files: changes() });
@@ -339,20 +352,21 @@ export function writeFakeVcsPlugin(directory: string, options: FakeVcsPluginOpti
         icon: "icon.svg",
         check: [kite, "check"],
         detect: { markers: [".kite/HEAD"] },
-        capabilities: { worktrees: true },
         ...(options.checkpoints ? { checkpoints: options.checkpoints } : {}),
         commands: {
           status: [kite, options.statusCommand ?? "status"],
-          listRefs: [kite, "refs"],
+          refList: [kite, "refs"],
+          push: [kite, "push"],
+          pull: [kite, "pull"],
           commit: [kite, "commit", "{messageFile}", "{pathsFile}"],
           diff: [kite, "diff"],
           log: [kite, "log"],
           branchCreate: [kite, "branch-create", "{newRef}"],
           branchRename: [kite, "branch-rename", "{oldRef}", "{newRef}"],
           fetchBase: [kite, "fetch-base", "{ref}"],
-          worktreeCreate: [kite, "worktree-add", "{path}", "{newRef}", "{baseRef}"],
-          worktreeRemove: [kite, "worktree-remove", "{path}"],
-          worktreeAttach: [kite, "worktree-attach", "{path}", "{ref}"],
+          worktreeCreate: [kite, "worktree-add", "{worktreePath}", "{newRef}", "{baseRef}"],
+          worktreeRemove: [kite, "worktree-remove", "{worktreePath}"],
+          worktreeAttach: [kite, "worktree-attach", "{worktreePath}", "{ref}"],
           worktreeList: [kite, "worktree-list"],
           checkpointCapture: [kite, "snapshot"],
           checkpointDiff: [kite, "snapshot-diff", "{fromRevision}", "{toRevision}"],

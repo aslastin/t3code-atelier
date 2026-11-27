@@ -547,6 +547,10 @@ export const make = Effect.gen(function* () {
           },
           catch: toError,
         });
+        // Atelier fork: a Git repository around a VCS plugin's checkout does not decide what the
+        // plugin's files are; only one nested inside the folder does.
+        if (nestedGitRoots.length === 0 && (yield* inPluginRepository(normalizedCwd)))
+          return { entries, truncated: false };
         let gitRoot = "";
         let gitPrefix = "";
         // stdin avoids argument limits; ignore classification is optional without git/repositories.

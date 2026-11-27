@@ -1176,6 +1176,9 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
         // The project sits below the plugin's checkout root, as a project in a subfolder does.
         yield* writeTextFile(cwd, ".kite/HEAD", "main\n");
         yield* writeTextFile(cwd, "app/src/index.ts");
+        // A Git repository around the checkout, which ignores it, does not grey its files out.
+        yield* git(cwd, ["init"]);
+        yield* writeTextFile(cwd, ".gitignore", "app/\n");
         // A Git repository inside keeps its own search.
         const nested = `${cwd}/app/vendor`;
         yield* writeTextFile(nested, "lib/tool.ts");
@@ -1209,7 +1212,7 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
         const folder = yield* workspaceEntries
           .list({ cwd: project, directoryPath: "src" })
           .pipe(inPlugin);
-        expect(folder.entries.map((entry) => entry.path)).toEqual(["src/index.ts"]);
+        expect(folder.entries).toEqual([{ path: "src/index.ts", kind: "file" }]);
         const inside = yield* searchWorkspaceEntries({
           cwd: nested,
           query: "tool",

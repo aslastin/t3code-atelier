@@ -155,6 +155,13 @@ function PluginRow({
               )}
             </p>
           )}
+          {plugin.notes && plugin.notes.length > 0 ? (
+            <ul className="space-y-0.5 text-xs leading-normal text-muted-foreground/70">
+              {plugin.notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          ) : null}
           {plugin.lastError ? (
             <p className="text-xs leading-normal text-destructive">
               <T>

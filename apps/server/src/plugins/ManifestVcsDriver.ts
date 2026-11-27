@@ -6,12 +6,8 @@ import {
   GitCommandError,
   VcsPluginCommitOutput,
   VcsPluginPullOutput,
-  VcsPluginFetchBaseOutput,
   VcsPluginPushOutput,
   VcsPluginRefsOutput,
-  VcsPluginRemotesOutput,
-  VcsPluginCheckpointDiffOutput,
-  VcsPluginLogOutput,
   VcsPluginStatusOutput,
   VcsPluginWorktreeCreateOutput,
   VcsPluginWorktreeListOutput,
@@ -106,7 +102,7 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
     yield* runner
       .run("worktreeAttach", {
         cwd,
-        values: { repositoryRoot: root, path: worktreePath, ref },
+        values: { repositoryRoot: root, worktreePath, ref },
         timeoutMs: null,
       })
       .pipe(Effect.mapError(toCommandError("worktreeAttach", cwd)));
@@ -161,6 +157,7 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
     cwd: string,
     values: Readonly<Record<string, string | undefined>> = {},
     timeoutMs?: number | null,
+    anyOutput = false,
   ) =>
     repositoryRoot(cwd).pipe(
       Effect.flatMap((root) =>
@@ -168,8 +165,28 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
           cwd,
           values: { repositoryRoot: root, ...values },
           ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+          ...(anyOutput ? { anyOutput } : {}),
         }),
       ),
+      Effect.mapError(toCommandError(command, cwd)),
+    );
+
+  /** A command whose stdout is plain text, such as a patch. */
+  const text = (
+    command: Parameters<PluginCommandRunner["run"]>[0],
+    cwd: string,
+    values: Readonly<Record<string, string | undefined>> = {},
+    timeoutMs?: number | null,
+  ) =>
+    repositoryRoot(cwd).pipe(
+      Effect.flatMap((root) =>
+        runner.run(command, {
+          cwd,
+          values: { repositoryRoot: root, ...values },
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        }),
+      ),
+      Effect.map((output) => output.stdout),
       Effect.mapError(toCommandError(command, cwd)),
     );
 
@@ -220,8 +237,8 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
     return {
       isRepo: true,
       hasPrimaryRemote: out.hasPrimaryRemote ?? false,
-      isDefaultRef: out.isDefaultRef ?? false,
-      refName: out.refName,
+      isDefaultRef: out.default ?? false,
+      refName: out.ref,
       hasWorkingTreeChanges: files.length > 0,
       workingTree: {
         ...(root ? { rootPath: root } : {}),
@@ -237,13 +254,13 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
   });
 
   const listRefNames = Effect.fn("ManifestVcsDriver.listRefNames")(function* (cwd: string) {
-    if (!runner.has("listRefs")) {
+    if (!runner.has("refList")) {
       const current = yield* status(cwd);
       return current.refName === null
         ? []
-        : [{ name: current.refName, current: true, isDefault: current.isDefaultRef }];
+        : [{ name: current.refName, current: true, default: current.isDefaultRef }];
     }
-    return (yield* json("listRefs", VcsPluginRefsOutput, cwd)).refs;
+    return (yield* json("refList", VcsPluginRefsOutput, cwd)).refs;
   });
 
   const managedWorktreePath = Effect.fn("ManifestVcsDriver.managedWorktreePath")(function* (
@@ -290,21 +307,21 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
       const checkedOut = new Map(
         (yield* listedWorktrees(request.cwd).pipe(Effect.orElseSucceed(() => []))).flatMap(
           (worktree) =>
-            worktree.refName === undefined ? [] : [[worktree.refName, worktree.path] as const],
+            worktree.ref === undefined ? [] : [[worktree.ref, worktree.path] as const],
         ),
       );
       const refs: VcsRef[] = (yield* listRefNames(request.cwd))
         .filter((ref) => {
-          if (request.refKind === "local" && ref.isRemote) return false;
-          if (request.refKind === "remote" && !ref.isRemote) return false;
+          if (request.refKind === "local" && ref.remote) return false;
+          if (request.refKind === "remote" && !ref.remote) return false;
           return query === undefined || ref.name.toLowerCase().includes(query);
         })
         .map((ref) => ({
           name: ref.name,
           current: ref.current ?? false,
-          isDefault: ref.isDefault ?? false,
+          isDefault: ref.default ?? false,
           worktreePath: checkedOut.get(ref.name) ?? null,
-          ...(ref.isRemote !== undefined ? { isRemote: ref.isRemote } : {}),
+          ...(ref.remote !== undefined ? { isRemote: ref.remote } : {}),
           ...(ref.remoteName !== undefined ? { remoteName: ref.remoteName } : {}),
         }));
       const start = request.cursor ?? 0;
@@ -348,7 +365,15 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
         const pathsText = yield* pathsFileText(paths, request.cwd);
         const out = yield* withTextFile(request.commitMessage, (messageFile) =>
           withTextFile(pathsText, (pathsFile) =>
-            json("commit", VcsPluginCommitOutput, request.cwd, { messageFile, pathsFile }),
+            json(
+              "commit",
+              VcsPluginCommitOutput,
+              request.cwd,
+              { messageFile, pathsFile },
+              // Hooks and large checkouts can run long, as `git commit` may.
+              null,
+              true,
+            ),
           ),
         );
         return {
@@ -361,7 +386,11 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
     ...(commands.log && {
       recentCommitSubjects: Effect.fn("ManifestVcsDriver.recentCommitSubjects")(
         function* (request) {
-          return (yield* json("log", VcsPluginLogOutput, request.cwd)).subjects.slice(0, 20);
+          return (yield* text("log", request.cwd))
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0)
+            .slice(0, 20);
         },
       ),
     }),
@@ -388,7 +417,7 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
             : freeBranchName(
                 request.newBranch,
                 (yield* listRefNames(request.cwd))
-                  .filter((ref) => !ref.isRemote && ref.name !== request.oldBranch)
+                  .filter((ref) => !ref.remote && ref.name !== request.oldBranch)
                   .map((ref) => ref.name),
               );
         if (branch === null)
@@ -411,23 +440,35 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
     }),
     ...(commands.fetchBase && {
       fetchWorktreeBase: Effect.fn("ManifestVcsDriver.fetchWorktreeBase")(function* (request) {
-        return yield* json("fetchBase", VcsPluginFetchBaseOutput, request.cwd, {
-          ref: request.refName,
-        });
+        // Network work: no deadline, as `git fetch` has none.
+        const baseRef = (yield* text(
+          "fetchBase",
+          request.cwd,
+          { ref: request.refName },
+          null,
+        )).trim();
+        if (baseRef === "")
+          return yield* new GitCommandError({
+            vcs: kind,
+            operation: `${kind}.fetchBase`,
+            command: "fetchBase",
+            cwd: request.cwd,
+            detail: "fetchBase printed no ref to start the worktree from.",
+          });
+        return { baseRef };
       }),
     }),
     ...(commands.diff && {
       workingDiff: Effect.fn("ManifestVcsDriver.workingDiff")(function* (request) {
-        const out = yield* withTextFile(
+        return yield* withTextFile(
           yield* pathsFileText(request.filePaths, request.cwd),
-          (pathsFile) => json("diff", VcsPluginCheckpointDiffOutput, request.cwd, { pathsFile }),
+          (pathsFile) => text("diff", request.cwd, { pathsFile }),
         );
-        return out.patch;
       }),
     }),
     ...(commands.push && {
       push: Effect.fn("ManifestVcsDriver.push")(function* (request) {
-        const out = yield* json("push", VcsPluginPushOutput, request.cwd);
+        const out = yield* json("push", VcsPluginPushOutput, request.cwd, {}, null, true);
         return {
           status: "pushed" as const,
           ...(out.branch !== undefined ? { branch: out.branch } : {}),
@@ -437,8 +478,12 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
     }),
     ...(commands.pull && {
       pull: Effect.fn("ManifestVcsDriver.pull")(function* (request) {
-        const out = yield* json("pull", VcsPluginPullOutput, request.cwd);
-        return { status: out.status, refName: out.refName, upstreamRef: out.upstreamRef ?? null };
+        const out = yield* json("pull", VcsPluginPullOutput, request.cwd, {}, null, true);
+        return {
+          status: out.status ?? "pulled",
+          refName: out.ref ?? (yield* status(request.cwd)).refName ?? "HEAD",
+          upstreamRef: out.upstreamRef ?? null,
+        };
       }),
     }),
     ...(supportsWorktrees(manifest) && {
@@ -473,14 +518,15 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
         const refName =
           request.newRefName === undefined
             ? yield* attachWorktree(request.cwd, root, worktreePath, request.refName)
-            : (yield* json(
+            : ((yield* json(
                 "worktreeCreate",
                 VcsPluginWorktreeCreateOutput,
                 request.cwd,
-                { path: worktreePath, newRef, baseRef: request.baseRefName ?? request.refName },
+                { worktreePath, newRef, baseRef: request.baseRefName ?? request.refName },
                 // Large checkouts can run for many minutes, as `git worktree add` does.
                 null,
-              )).refName;
+                true,
+              )).ref ?? newRef);
         // A project in a subfolder works in the same subfolder of the new checkout (#12).
         const relative = path.relative(yield* real(root), yield* real(request.cwd));
         const projectPath = yield* worktreeProjectFolder(fs, path, relative, worktreePath);
@@ -572,7 +618,8 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
         yield* runner
           .run("worktreeRemove", {
             cwd: request.cwd,
-            values: { repositoryRoot: root, path: target },
+            values: { repositoryRoot: root, worktreePath: target },
+            timeoutMs: null,
           })
           .pipe(Effect.mapError(toCommandError("worktreeRemove", request.cwd)));
       }),
@@ -639,26 +686,15 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
     listWorkspaceFiles: Effect.fn("ManifestVcsDriver.listWorkspaceFiles")(function* () {
       return yield* unsupported("listWorkspaceFiles", "Plugins do not list workspace files.");
     }),
-    listRemotes: Effect.fn("ManifestVcsDriver.listRemotes")(function* (cwd) {
-      const freshness = {
-        source: "live-local" as const,
-        observedAt: yield* DateTime.now,
-        expiresAt: Option.none(),
-      };
-      if (!runner.has("listRemotes")) return { remotes: [], freshness };
-      const root = yield* repositoryRoot(cwd);
-      const out = yield* runner.runJson("listRemotes", VcsPluginRemotesOutput, {
-        cwd,
-        values: { repositoryRoot: root },
-      });
+    // Remotes only feed change-request hosts, which plugins do not have yet.
+    listRemotes: Effect.fn("ManifestVcsDriver.listRemotes")(function* () {
       return {
-        remotes: out.remotes.map((remote, index) => ({
-          name: remote.name,
-          url: remote.url,
-          pushUrl: Option.fromNullishOr(remote.pushUrl),
-          isPrimary: remote.isPrimary ?? index === 0,
-        })),
-        freshness,
+        remotes: [],
+        freshness: {
+          source: "live-local" as const,
+          observedAt: yield* DateTime.now,
+          expiresAt: Option.none(),
+        },
       };
     }),
     // Nothing counts as ignored: the plugin reports its own changes.
