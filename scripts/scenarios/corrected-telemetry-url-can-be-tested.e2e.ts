@@ -44,8 +44,8 @@ test(
       await app.open("/settings/diagnostics#telemetry-endpoints");
       await expect(browser).toHaveURL(/\/settings\/maintenance/);
 
-      const traces = browser.locator("#otlpTracesUrl");
       const exportSection = browser.locator("#telemetry-export");
+      const traces = exportSection.getByRole("textbox", "Traces endpoint");
       await expect(
         exportSection.getByText("Applies to All environments", { exact: true }),
       ).toBeVisible();
@@ -54,9 +54,19 @@ test(
         await environmentChoice.isVisible(),
         "Choose the receiver's environment in place",
       ).toBe(true);
+      await environmentChoice.scrollIntoView();
+      await app.screenshot("export-environments");
       await environmentChoice.tap();
       await traces.waitFor();
-      await expect(exportSection.getByText("Applies to Scenario", { exact: true })).toBeVisible();
+      await app.screenshot("environment-export-form");
+      expect(
+        await exportSection.getByText("Applies to All environments", { exact: true }).isVisible(),
+        "Opening a receiver keeps the telemetry switches scoped to all environments",
+      ).toBe(true);
+      await environmentChoice.tap();
+      await expect(traces).toHaveCount(0);
+      await environmentChoice.tap();
+      await traces.waitFor();
       const analyticsLabel = "T3 product analytics (PostHog)";
       const analyticsRow = browser
         .locator("#telemetry-export label")
@@ -67,7 +77,7 @@ test(
         await analytics.isEnabled(),
         "Analytics respects the environment's telemetry settings",
       ).toBe(selectable);
-      await browser.locator("#otlpMetricsUrl").fill(`${origin}/v1/metrics`);
+      await exportSection.getByRole("textbox", "Metrics endpoint").fill(`${origin}/v1/metrics`);
       await exportSection.getByRole("button", "Save").tap();
       await exportSection.getByText("Saved", { exact: true }).waitFor();
       await exportSection.getByRole("switch", "My OpenTelemetry receiver").tap();

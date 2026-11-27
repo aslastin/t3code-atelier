@@ -84,7 +84,7 @@ export function TelemetrySettings() {
 
   const targets = environments.map((env) => {
     const connected = env.connection.phase === "connected" && !!env.serverConfig;
-    let status = connected ? env.serverConfig?.observability.telemetry : undefined;
+    let status = connected ? env.serverConfig?.observability?.telemetry : undefined;
     let blockedByDesktop = false;
     if (
       status?.connect === "unavailable" &&

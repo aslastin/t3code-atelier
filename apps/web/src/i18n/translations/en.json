@@ -11119,7 +11119,7 @@
   "11b77b0add59d7b4": "Rejected · HTTP {status}",
   "10cf4b8e7ecc020b": "Timed out",
   "523b72ed9d712100": "OpenTelemetry export",
-  "ecaa5a9da2c44a47": "Choose one environment to configure its telemetry exports.",
+  "aad9041b66878cea": "Expand an environment to configure its OpenTelemetry receiver.",
   "c6fa2905d56a750c": "Saved",
   "23029f9ce3382536": "This connection lacks permission to change settings on {environment}.",
   "49089031ea1dadf4": "Endpoint tests are available when OTLP export is active.",

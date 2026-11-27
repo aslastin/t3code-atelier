@@ -11110,7 +11110,7 @@
   "11b77b0add59d7b4": "Abgelehnt · HTTP {status}",
   "10cf4b8e7ecc020b": "Zeitüberschreitung",
   "523b72ed9d712100": "OpenTelemetry-Export",
-  "ecaa5a9da2c44a47": "Wähle eine Umgebung, um ihre Telemetrie-Exporte zu konfigurieren.",
+  "aad9041b66878cea": "Klappe eine Umgebung auf, um ihren OpenTelemetry-Empfänger zu konfigurieren.",
   "c6fa2905d56a750c": "Gespeichert",
   "23029f9ce3382536": "Dieser Verbindung fehlt die Berechtigung, Einstellungen auf {environment} zu ändern.",
   "49089031ea1dadf4": "Endpunkte können bei aktivem OTLP-Export getestet werden.",

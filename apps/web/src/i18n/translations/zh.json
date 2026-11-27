@@ -11131,7 +11131,7 @@
   "11b77b0add59d7b4": "已拒绝 · HTTP {status}",
   "10cf4b8e7ecc020b": "已超时",
   "523b72ed9d712100": "OpenTelemetry 导出",
-  "ecaa5a9da2c44a47": "选择一个环境来配置遥测导出。",
+  "aad9041b66878cea": "展开一个环境，即可配置其 OpenTelemetry 接收器。",
   "c6fa2905d56a750c": "已保存",
   "23029f9ce3382536": "此连接没有权限更改 {environment} 的设置。",
   "49089031ea1dadf4": "启用 OTLP 导出后即可测试端点。",

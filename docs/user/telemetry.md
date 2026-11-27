@@ -58,7 +58,7 @@ publishing setting.
 
 ## Export diagnostics to your own receiver
 
-For receiver-only export, open **What to send**, select **My OpenTelemetry receiver**, and leave both T3 channels off. In a single environment, enter and save the OTLP HTTP endpoint for each signal you want (for example `http://localhost:4318/v1/traces`). Turn on **Send telemetry**. Changes take effect immediately.
+For receiver-only export, open **What to send**, select **My OpenTelemetry receiver**, and leave both T3 channels off. Under **All environments**, expand the environment whose receiver you want to configure. Each environment saves its own addresses. When one environment is selected, its form opens directly. Enter and save the OTLP HTTP endpoint for each signal you want (for example `http://localhost:4318/v1/traces`). Turn on **Send telemetry**. Changes take effect immediately.
 
 The receiver must be reachable from that server. When the channel is active, opening the endpoint settings checks the saved addresses. **Test** sends an empty export from the server. Checks send authentication headers only to the currently configured endpoint for that signal and do not follow redirects. Save a new address before testing it with authentication.
 

@@ -25,6 +25,7 @@ const { state, updateSettings, checkOtlpEndpoint, checkOtlpEndpointCommand } = v
 function exportEnvironments() {
   const serverConfig = {
     ...state.serverConfig,
+    settings: { ...DEFAULT_SERVER_SETTINGS, observability: state.observability },
     environment: { ...state.serverConfig.environment, platform: { machine: "server" } },
   };
   return [
@@ -35,7 +36,17 @@ function exportEnvironments() {
             environmentId: "other",
             label: "Other",
             connected: true,
-            serverConfig: { ...serverConfig, observability: activeExport },
+            serverConfig: {
+              ...serverConfig,
+              observability: activeExport,
+              settings: {
+                ...DEFAULT_SERVER_SETTINGS,
+                observability: {
+                  ...DEFAULT_SERVER_SETTINGS.observability,
+                  otlpTracesUrl: "http://other/v1/traces",
+                },
+              },
+            },
           },
         ]
       : []),
@@ -108,22 +119,19 @@ vi.mock(import("./SettingsScopeContext"), async (original) => {
           connectedEnvironments: environments.filter((env) => env.connected),
         };
       }
-      return {
-        scope: { kind: "environment" },
-        environment: {
-          environmentId: "env",
-          label: "MAC1",
-          serverConfig: { ...state.serverConfig, observability: running },
+      const environment = {
+        environmentId: "env",
+        label: "MAC1",
+        serverConfig: {
+          ...state.serverConfig,
+          observability: running,
+          settings: { ...DEFAULT_SERVER_SETTINGS, observability: state.observability },
         },
       };
+      return { scope: { kind: "environment" }, environment, connectedEnvironments: [environment] };
     }) as never,
   };
 });
-vi.mock(import("./useScopedSettings"), async (original) => ({
-  ...(await original()),
-  useScopedSettings: ((select: (settings: typeof state) => unknown) => select(state)) as never,
-}));
-
 import { TelemetryExportSettings } from "./TelemetryExportSettings";
 import { TelemetrySettings } from "./TelemetrySettings";
 
@@ -145,7 +153,8 @@ function setup() {
   state.compareConnect = false;
   updateSettings.mockClear();
   checkOtlpEndpoint.mockReset();
-  state.serverConfig = { environment: { capabilities: {} } };
+  state.observability = DEFAULT_SERVER_SETTINGS.observability;
+  state.serverConfig = { environment: { capabilities: {} }, observability: activeExport };
 }
 
 describe("TelemetryExportSettings", () => {
@@ -188,6 +197,53 @@ describe("TelemetryExportSettings", () => {
       .toBeInTheDocument();
   });
 
+  it("keeps drafts, probes and saves local to each expanded environment", async () => {
+    setup();
+    state.allEnvironments = true;
+    state.compareConnect = true;
+    state.serverConfig.environment.capabilities.otlpEndpointCheck = true;
+    state.observability = {
+      ...DEFAULT_SERVER_SETTINGS.observability,
+      otlpTracesUrl: "http://ready/v1/traces",
+    };
+    await using screen = await render(<TelemetryExportSettings />, {
+      router: "/settings/maintenance",
+    });
+    const ready = screen.getByRole("button", { name: /Ready/ });
+    const other = screen.getByRole("button", { name: /Other/ });
+    const readyForm = screen.getByRole("form", { name: "Ready" });
+    const otherForm = screen.getByRole("form", { name: "Other" });
+    expect(checkOtlpEndpoint).not.toHaveBeenCalled();
+
+    await userEvent.click(ready);
+    const readyTraces = readyForm.getByRole("textbox", { name: "Traces endpoint" });
+    await expect.element(readyTraces).toHaveValue("http://ready/v1/traces");
+    await userEvent.fill(readyTraces, "http://draft/v1/traces");
+    await userEvent.click(ready);
+    await expect.element(readyForm).not.toBeInTheDocument();
+
+    await userEvent.click(other);
+    await expect
+      .element(otherForm.getByRole("textbox", { name: "Traces endpoint" }))
+      .toHaveValue("http://other/v1/traces");
+    expect(checkOtlpEndpoint.mock.calls.map(([request]) => request)).toEqual([
+      { environmentId: "ready", input: { signal: "traces", url: "http://ready/v1/traces" } },
+      { environmentId: "other", input: { signal: "traces", url: "http://other/v1/traces" } },
+    ]);
+    await userEvent.click(ready);
+    await expect.element(readyTraces).toHaveValue("http://draft/v1/traces");
+    await userEvent.fill(
+      otherForm.getByRole("textbox", { name: "Metrics endpoint" }),
+      "http://other/v1/metrics",
+    );
+    await userEvent.click(otherForm.getByRole("button", { name: "Save" }));
+    expect(updateSettings).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "other",
+      input: { patch: { observability: { otlpMetricsUrl: "http://other/v1/metrics" } } },
+    });
+    await expect.element(readyTraces).toHaveValue("http://draft/v1/traces");
+  });
+
   it("does not resend a field the user restored after another client changed it", async () => {
     setup();
     state.observability = {
@@ -197,16 +253,13 @@ describe("TelemetryExportSettings", () => {
     await using screen = await render(<TelemetryExportSettings />);
 
     const { container } = screen;
-    const field = (id: string) => container.querySelector<HTMLInputElement>(`#${id}`)!;
-    async function replace(id: string, value: string) {
-      await userEvent.clear(field(id));
-      await userEvent.type(field(id), value);
-    }
-    await replace("otlpTracesUrl", "http://draft/v1/traces");
-    await replace("otlpTracesUrl", "http://old/v1/traces");
+    const replace = (name: string, value: string) =>
+      userEvent.fill(screen.getByRole("textbox", { name }), value);
+    await replace("Traces endpoint", "http://draft/v1/traces");
+    await replace("Traces endpoint", "http://old/v1/traces");
     state.observability = { ...state.observability, otlpTracesUrl: "http://other/v1/traces" };
     await screen.rerender(<TelemetryExportSettings />);
-    await replace("otlpMetricsUrl", "http://new/v1/metrics");
+    await replace("Metrics endpoint", "http://new/v1/metrics");
     const save = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "Save",
     )!;
@@ -249,7 +302,7 @@ describe("TelemetryExportSettings", () => {
       environmentId: "env",
       input: { signal: "traces", url: "http://collector/v1/traces" },
     });
-    expect(screen.container.querySelector<HTMLInputElement>("#otlpTracesUrl")!.value).toBe("");
+    await expect.element(screen.getByRole("textbox", { name: "Traces endpoint" })).toHaveValue("");
 
     await userEvent.click(screen.getByRole("button", { name: "Test" }).first());
 

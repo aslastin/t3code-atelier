@@ -11104,7 +11104,7 @@
   "11b77b0add59d7b4": "Rechazado · HTTP {status}",
   "10cf4b8e7ecc020b": "Tiempo de espera agotado",
   "523b72ed9d712100": "Exportación de OpenTelemetry",
-  "ecaa5a9da2c44a47": "Elige un entorno para configurar sus exportaciones de telemetría.",
+  "aad9041b66878cea": "Despliega un entorno para configurar su receptor de OpenTelemetry.",
   "c6fa2905d56a750c": "Guardado",
   "23029f9ce3382536": "Esta conexión no tiene permiso para cambiar los ajustes de {environment}.",
   "49089031ea1dadf4": "Puedes probar los endpoints cuando la exportación OTLP esté activa.",
