@@ -184,8 +184,10 @@ const folderProbes = Effect.gen(function* () {
     const plugins = yield* Effect.serviceOption(VcsPluginDrivers);
     const markers = Option.isSome(plugins) ? plugins.value.installedMarkers() : [];
     if (markers.length === 0) return false;
+    // The nearest checkout root decides: a Git repository inside the plugin's keeps its scan.
     for (let current = yield* realPath(folder); ; current = path.dirname(current)) {
       for (const marker of markers) if (yield* exists(path.join(current, marker))) return true;
+      if (yield* exists(path.join(current, ".git"))) return false;
       if (path.dirname(current) === current) return false;
     }
   });

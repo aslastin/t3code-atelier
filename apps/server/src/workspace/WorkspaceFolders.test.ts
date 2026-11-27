@@ -254,6 +254,16 @@ it.layer(NodeServices.layer)("WorkspaceFolders", (it) => {
           ),
           [],
         );
+      // A Git project inside it is Git's, and keeps finding its own repositories.
+      const gitProject = path.join(web, "tools");
+      yield* fileSystem.makeDirectory(path.join(gitProject, ".git"), { recursive: true });
+      yield* fileSystem.makeDirectory(path.join(gitProject, "lib", ".git"), { recursive: true });
+      assert.deepEqual(
+        (yield* WorkspaceFolders.discoverFolders(gitProject).pipe(
+          Effect.provideService(VcsPluginDrivers, plugins),
+        )).map((folder) => folder.name),
+        ["lib"],
+      );
       // Both are repositories, but only one whose plugin can create worktrees is offered one.
       yield* Effect.gen(function* () {
         const workspaceFolders = yield* WorkspaceFolders.WorkspaceFolders;

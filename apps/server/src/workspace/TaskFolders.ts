@@ -273,6 +273,8 @@ const make = Effect.gen(function* () {
       if (parent === current) return false;
       current = parent;
       for (const marker of markers) if (yield* exists(path.join(current, marker))) return true;
+      // The nearest checkout root decides: inside a Git repository it is Git's subfolder.
+      if (yield* exists(path.join(current, ".git"))) return false;
     }
   });
   // As the driver registry decides on its own: the first available plugin whose marker the
