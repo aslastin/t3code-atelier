@@ -1,11 +1,15 @@
 import { GIT_VCS_KIND, type CheckpointRef } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 
 import type { CheckpointStoreError } from "./Errors.ts";
 import type { VcsCheckpointOps } from "../vcs/VcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import { pluginMarksBeforeGit, VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 
 export interface CaptureCheckpointInput {
   readonly cwd: string;
@@ -112,6 +116,9 @@ export class CheckpointStore extends Context.Service<
 /** @public */
 export const make = Effect.gen(function* () {
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
 
   const resolveCheckpoints = Effect.fn("CheckpointStore.resolveCheckpoints")(function* (
     cwd: string,
@@ -128,6 +135,12 @@ export const make = Effect.gen(function* () {
     if (vcsRegistry.hasAdditionalDrivers) {
       const handle = yield* vcsRegistry.detect({ cwd });
       if (handle !== null && handle.kind !== GIT_VCS_KIND) return true;
+      // Atelier fork: a checkout of a plugin that is off is not the `.git` around it.
+      if (
+        handle === null &&
+        (yield* pluginMarksBeforeGit(fileSystem, path, cwd, plugins?.installedMarkers() ?? []))
+      )
+        return false;
     }
     if ((yield* vcsRegistry.detect({ cwd, requestedKind: GIT_VCS_KIND })) !== null) return true;
     const git = yield* vcsRegistry.get(GIT_VCS_KIND);

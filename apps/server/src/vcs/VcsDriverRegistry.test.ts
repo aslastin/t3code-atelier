@@ -20,6 +20,7 @@ import type * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 import * as VcsProjectConfig from "./VcsProjectConfig.ts";
 import * as VcsDriverRegistry from "./VcsDriverRegistry.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 
 const processOutput = (stdout: string): VcsProcess.VcsProcessOutput => ({
   exitCode: ChildProcessSpawner.ExitCode(0),
@@ -100,6 +101,40 @@ describe("VcsDriverRegistry", () => {
         assert.equal(yield* registry.detect({ cwd: repoDir }), null);
         assert.equal(calls.filter((call) => call === DETECT_COMMAND).length, 2);
       }).pipe(Effect.provide(makeDiskBackedLayer(repoDir, calls)));
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
+  it.effect("never hands Git the checkout of an installed plugin that is off", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "t3-vcs-registry-" }),
+      );
+      yield* fs.makeDirectory(path.join(root, ".git"));
+      const checkout = path.join(root, "mono");
+      yield* fs.makeDirectory(path.join(checkout, ".kite"), { recursive: true });
+      yield* fs.writeFileString(path.join(checkout, ".kite", "HEAD"), "main\n");
+      yield* fs.makeDirectory(path.join(checkout, "app"));
+      yield* fs.makeDirectory(path.join(root, "web"));
+      const calls: string[] = [];
+      const pluginOff = Layer.succeed(VcsPluginDrivers, {
+        current: Effect.succeed(new Map()),
+        hasAny: () => false,
+        markers: () => [],
+        installedMarkers: () => [".kite/HEAD"],
+        available: () => [],
+      } as unknown as VcsPluginDrivers["Service"]);
+
+      yield* Effect.gen(function* () {
+        const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
+        // The Git repository around it does not reach into the plugin's checkout.
+        assert.equal(yield* registry.detect({ cwd: path.join(checkout, "app") }), null);
+        assert.equal(
+          (yield* registry.detect({ cwd: path.join(root, "web") }))?.repository.rootPath,
+          root,
+        );
+      }).pipe(Effect.provide(makeDiskBackedLayer(root, calls).pipe(Layer.provide(pluginOff))));
     }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 

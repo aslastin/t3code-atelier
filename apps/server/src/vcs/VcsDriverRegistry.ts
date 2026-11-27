@@ -15,7 +15,7 @@ import {
   type VcsError,
   type VcsRepositoryIdentity,
 } from "@t3tools/contracts";
-import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
+import { pluginMarksBeforeGit, VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import * as VcsProjectConfig from "./VcsProjectConfig.ts";
 import * as VcsDriver from "./VcsDriver.ts";
@@ -178,7 +178,14 @@ export const makeWithDrivers = Effect.fn("VcsDriverRegistry.makeWithDrivers")(fu
       }
 
       const additionalDrivers = yield* currentDrivers;
-      if (additionalDrivers.size === 0) return yield* detectGit(input.cwd);
+      // Atelier fork: a checkout an installed plugin marks stays out of Git's hands while that
+      // plugin is off or unavailable; a `.git` around it is another repository.
+      const installedMarkers = plugins?.installedMarkers() ?? [];
+      const gitUnlessPluginMarked = (cwd: string) =>
+        pluginMarksBeforeGit(fileSystem, path, cwd, installedMarkers).pipe(
+          Effect.flatMap((marked) => (marked ? Effect.succeed(null) : detectGit(cwd))),
+        );
+      if (additionalDrivers.size === 0) return yield* gitUnlessPluginMarked(input.cwd);
       const roots = new Map<string, VcsDriverHandle>();
       for (const [kind, driver] of additionalDrivers) {
         if (kind === GIT_VCS_KIND) continue;
@@ -189,7 +196,7 @@ export const makeWithDrivers = Effect.fn("VcsDriverRegistry.makeWithDrivers")(fu
         const root = yield* canonicalPath(handle.repository.rootPath);
         if (!roots.has(root)) roots.set(root, handle);
       }
-      if (roots.size === 0) return yield* detectGit(input.cwd);
+      if (roots.size === 0) return yield* gitUnlessPluginMarked(input.cwd);
 
       // Marker probes run on every lookup, so a new nested repository wins over a cached parent.
       const cwd = yield* canonicalPath(input.cwd);
@@ -197,6 +204,14 @@ export const makeWithDrivers = Effect.fn("VcsDriverRegistry.makeWithDrivers")(fu
       while (true) {
         const candidate = roots.get(folder);
         if (candidate) return candidate;
+        for (const marker of installedMarkers) {
+          if (
+            yield* fileSystem
+              .exists(path.join(folder, marker))
+              .pipe(Effect.orElseSucceed(() => false))
+          )
+            return null;
+        }
         if (
           yield* fileSystem
             .exists(path.join(folder, ".git"))

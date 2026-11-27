@@ -1,6 +1,8 @@
 import type { VcsDriverKind } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
+import type * as FileSystem from "effect/FileSystem";
+import type * as Path from "effect/Path";
 import type * as Stream from "effect/Stream";
 
 import type * as VcsDriver from "../vcs/VcsDriver.ts";
@@ -40,3 +42,26 @@ export class VcsPluginDrivers extends Context.Service<
     readonly changes: Stream.Stream<void>;
   }
 >()("t3/plugins/VcsPluginDrivers") {}
+
+/**
+ * Whether an installed plugin's marker is in `cwd` or a physical parent before any `.git`. Such a
+ * checkout is the plugin's even while the plugin is off, so Git never treats it as its own.
+ */
+export const pluginMarksBeforeGit = Effect.fnUntraced(function* (
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+  cwd: string,
+  markers: ReadonlyArray<string>,
+) {
+  if (markers.length === 0) return false;
+  const exists = (target: string) =>
+    fileSystem.exists(target).pipe(Effect.orElseSucceed(() => false));
+  let folder = yield* fileSystem.realPath(cwd).pipe(Effect.orElseSucceed(() => path.resolve(cwd)));
+  while (true) {
+    for (const marker of markers) if (yield* exists(path.join(folder, marker))) return true;
+    if (yield* exists(path.join(folder, ".git"))) return false;
+    const parent = path.dirname(folder);
+    if (parent === folder) return false;
+    folder = parent;
+  }
+});
