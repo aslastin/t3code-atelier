@@ -135,13 +135,11 @@ export const make = Effect.gen(function* () {
     if (vcsRegistry.hasAdditionalDrivers) {
       const handle = yield* vcsRegistry.detect({ cwd });
       if (handle !== null && handle.kind !== GIT_VCS_KIND) return true;
-      // Atelier fork: a checkout of a plugin that is off is not the `.git` around it.
-      if (
-        handle === null &&
-        (yield* pluginMarksBeforeGit(fileSystem, path, cwd, plugins?.installedMarkers() ?? []))
-      )
-        return false;
     }
+    // Atelier fork: a checkout of a plugin that is off, every plugin off included, is not the
+    // `.git` around it.
+    if (yield* pluginMarksBeforeGit(fileSystem, path, cwd, plugins?.installedMarkers() ?? []))
+      return false;
     if ((yield* vcsRegistry.detect({ cwd, requestedKind: GIT_VCS_KIND })) !== null) return true;
     const git = yield* vcsRegistry.get(GIT_VCS_KIND);
     return (yield* git.detectRepository(cwd)) !== null;

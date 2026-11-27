@@ -18,6 +18,7 @@ import { parseTurnDiffFilesFromNumstat } from "./Diffs.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import * as ServerConfig from "../config.ts";
 
 function checkpointRefForThreadTurn(threadId: ThreadId, turnCount: number): CheckpointRef {
@@ -119,6 +120,28 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
       const checkpointStore = yield* CheckpointStore.CheckpointStore;
       expect(yield* checkpointStore.isGitRepository(nested)).toBe(true);
     }),
+  );
+  it.effect(
+    "never reads the checkout of a plugin that is off as the Git repository around it",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const fileSystem = yield* FileSystem.FileSystem;
+        const checkout = NodePath.join(tmp, "mono");
+        yield* fileSystem.makeDirectory(NodePath.join(checkout, ".kite"), { recursive: true });
+        yield* writeTextFile(NodePath.join(checkout, ".kite", "HEAD"), "main\n");
+        yield* fileSystem.makeDirectory(NodePath.join(checkout, "app"), { recursive: true });
+        // Every plugin off: none is available, but the installed one still marks its checkout.
+        const checkpointStore = yield* CheckpointStore.make.pipe(
+          Effect.provideService(VcsPluginDrivers, {
+            hasAny: () => false,
+            installedMarkers: () => [".kite/HEAD"],
+          } as unknown as VcsPluginDrivers["Service"]),
+        );
+        expect(yield* checkpointStore.isGitRepository(NodePath.join(checkout, "app"))).toBe(false);
+        expect(yield* checkpointStore.isGitRepository(tmp)).toBe(true);
+      }),
   );
   it.effect("fails the repository probe that other callers read as no repository", () =>
     Effect.gen(function* () {
