@@ -70,6 +70,7 @@ import {
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
+  PuzzleIcon,
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
@@ -127,6 +128,7 @@ import { threadEnvironment } from "../state/threads";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
+import { pluginEnvironment } from "../state/plugins";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useScratchProject } from "../hooks/useScratchProject";
@@ -318,6 +320,8 @@ function openIntentView(
         addonIcon: <PaletteIcon className={ADDON_ICON_CLASS} />,
         groups: [{ value: "themes", label: resolve(msg("Change theme")), items: [] }],
       };
+    case "import-vcs-plugin":
+      return vcsPluginBrowseView();
     case "search":
     case undefined:
       return null;
@@ -325,6 +329,15 @@ function openIntentView(
 }
 
 const NEW_THREAD_NO_PROJECT_VALUE = "new-thread-in:no-project";
+
+// Atelier fork: a VCS plugin's folder is browsed as a project's is, from the home folder.
+function vcsPluginBrowseView(): CommandPaletteView {
+  return {
+    addonIcon: <PuzzleIcon className={ADDON_ICON_CLASS} />,
+    groups: [],
+    initialQuery: "~/",
+  };
+}
 
 export function CommandPalette({ children }: { children: ReactNode }) {
   useCommandPaletteMount();
@@ -454,7 +467,7 @@ function OpenCommandPaletteDialog(props: {
   const [searchState, dispatchSearch] = useReducer(reduceCommandPaletteSearchState, null, () => {
     const view = props.initialContext ? null : openIntentView(props.openIntent, messages);
     return view
-      ? { query: "", views: [{ view, parentQuery: "" }] }
+      ? { query: view.initialQuery ?? "", views: [{ view, parentQuery: "" }] }
       : createCommandPaletteSearchState(initialSearch.query);
   });
   const { query, views: viewStack } = searchState;
@@ -559,9 +572,16 @@ function OpenCommandPaletteDialog(props: {
   const threadSearchQuery = currentView === null && !isActionsOnly ? deferredQuery : "";
   const [browseGeneration, setBrowseGeneration] = useState(0);
   const [browseNavigation] = useState(createBrowseNavigationCoordinator);
+  const intentVcsPluginEnvironmentId =
+    props.openIntent?.kind === "import-vcs-plugin" && !props.initialContext
+      ? props.openIntent.environmentId
+      : null;
   const [addProjectEnvironmentId, setAddProjectEnvironmentId] = useState<EnvironmentId | null>(
-    null,
+    intentVcsPluginEnvironmentId,
   );
+  // Atelier fork: while set, a browsed folder is imported as a VCS plugin, not added as a project.
+  const [vcsPluginImportEnvironmentId, setVcsPluginImportEnvironmentId] =
+    useState<EnvironmentId | null>(intentVcsPluginEnvironmentId);
   const [isPickingProjectFolder, setIsPickingProjectFolder] = useState(false);
   const [addProjectCloneFlow, setAddProjectCloneFlow] = useState<AddProjectCloneFlow | null>(null);
   const [newProjectFlow, setNewProjectFlow] = useState<{
@@ -733,6 +753,20 @@ function OpenCommandPaletteDialog(props: {
   const currentProjectEnvironmentId =
     activeThread?.environmentId ?? activeDraftThread?.environmentId ?? null;
   const currentProjectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
+  const supportsVcsPlugins = (environmentId: EnvironmentId | null) =>
+    environments.find((environment) => environment.environmentId === environmentId)?.serverConfig
+      ?.environment.capabilities.vcsPlugins === true;
+  const vcsPluginEnvironmentId =
+    vcsPluginImportEnvironmentId ??
+    [currentProjectEnvironmentId, primaryEnvironmentId].find(
+      (environmentId) => environmentId !== null && supportsVcsPlugins(environmentId),
+    ) ??
+    null;
+  const canImportVcsPlugin = useAtomValue(
+    pluginEnvironment.importFolder.permissionAtom(vcsPluginEnvironmentId),
+  );
+  const isVcsPluginImport = vcsPluginImportEnvironmentId !== null;
+  const canSubmitFromBrowse = isVcsPluginImport ? canImportVcsPlugin : canCreateProject;
   const scratchTargetEnvironmentId = scratchEnvironmentId(currentProjectEnvironmentId);
   const supportsTriage = (environmentId: EnvironmentId | null) =>
     environments.find((environment) => environment.environmentId === environmentId)?.serverConfig
@@ -992,6 +1026,7 @@ function OpenCommandPaletteDialog(props: {
     setNewProjectFlow(null);
     if (viewStack.length <= 1) {
       setAddProjectEnvironmentId(null);
+      setVcsPluginImportEnvironmentId(null);
     } else if (newProjectFlow?.sourcesEnvironmentId) {
       setAddProjectEnvironmentId(newProjectFlow.sourcesEnvironmentId);
     }
@@ -1043,6 +1078,50 @@ function OpenCommandPaletteDialog(props: {
         setAddProjectCloneFlow(null);
         pushPaletteView(view);
       },
+    );
+  };
+
+  const startVcsPluginBrowse = async (environmentId: EnvironmentId): Promise<void> => {
+    const view = vcsPluginBrowseView();
+    await browseNavigation.run(
+      () =>
+        prefetchBrowsePath(
+          getBrowseDirectoryPath(view.initialQuery ?? ""),
+          environmentId,
+          getBrowseCwdForEnvironment(environmentId),
+        ),
+      () => {
+        setAddProjectEnvironmentId(environmentId);
+        setAddProjectCloneFlow(null);
+        setVcsPluginImportEnvironmentId(environmentId);
+        pushPaletteView(view);
+      },
+    );
+  };
+
+  const importVcsPluginFolder = useAtomCommand(pluginEnvironment.importFolder, {
+    label: "import VCS plugin",
+    reportFailure: false,
+  });
+  const importVcsPlugin = async (rawPath: string): Promise<void> => {
+    const folder = resolveProjectPathForDispatch(rawPath, currentProjectCwdForBrowse);
+    if (vcsPluginImportEnvironmentId === null || folder.length === 0) return;
+    const result = await importVcsPluginFolder({
+      environmentId: vcsPluginImportEnvironmentId,
+      input: { path: folder },
+    });
+    if (result._tag === "Success") {
+      setOpen(false);
+      toastManager.add(stackedThreadToast({ type: "success", title: gt("VCS plugin imported") }));
+      return;
+    }
+    const error = squashAtomCommandFailure(result);
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title: gt("Could not import the VCS plugin"),
+        description: error instanceof Error ? error.message : gt("The request failed."),
+      }),
     );
   };
 
@@ -1655,6 +1734,24 @@ function OpenCommandPaletteDialog(props: {
     },
   };
   actionItems.push(addProjectAction);
+
+  if (vcsPluginEnvironmentId !== null && canImportVcsPlugin) {
+    const pluginEnvironmentId = vcsPluginEnvironmentId;
+    actionItems.push({
+      kind: "action",
+      value: "action:import-vcs-plugin",
+      searchTerms: ["import", "install", "vcs", "plugin", "version control", "source control"],
+      title: gt("Import VCS plugin"),
+      ...(environments.length > 1
+        ? { description: environmentLabelById.get(pluginEnvironmentId) ?? undefined }
+        : {}),
+      icon: <PuzzleIcon className={ITEM_ICON_CLASS} />,
+      keepOpen: true,
+      run: async () => {
+        await startVcsPluginBrowse(pluginEnvironmentId);
+      },
+    });
+  }
 
   if (wslAddProjectEnvironmentOption) {
     actionItems.push({
@@ -2583,8 +2680,10 @@ function OpenCommandPaletteDialog(props: {
   const inputPlaceholder =
     newProjectFlow !== null
       ? gt("Project name")
-      : (remoteProjectInputPlaceholder(addProjectCloneFlow, messages) ??
-        getCommandPaletteInputPlaceholder(paletteMode, messages));
+      : isVcsPluginImport
+        ? gt("Enter the plugin folder's path (e.g. ~/plugins/my-vcs)")
+        : (remoteProjectInputPlaceholder(addProjectCloneFlow, messages) ??
+          getCommandPaletteInputPlaceholder(paletteMode, messages));
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
   const hasHighlightedBrowseItem = highlightedItemValue?.startsWith("browse:") ?? false;
   const canWriteSourceControl = useEnvironmentScope(
@@ -2600,10 +2699,11 @@ function OpenCommandPaletteDialog(props: {
   const canSubmitBrowsePath =
     isBrowsing &&
     !relativePathNeedsActiveProject &&
-    canCreateProject &&
+    canSubmitFromBrowse &&
     (!isCloneDestinationStep || canCloneProject) &&
     canCreateProjectInEnvironment(browseEnvironment?.connection.phase);
   const willCreateProjectPath =
+    !isVcsPluginImport &&
     canSubmitBrowsePath &&
     !isBrowsePending &&
     browseAccessError === null &&
@@ -2612,13 +2712,15 @@ function OpenCommandPaletteDialog(props: {
     (hasTrailingPathSeparator(query) ? !browseResult : exactBrowseEntry === null);
   const useMetaForMod = isMacPlatform(navigator.platform);
   const submitModifierLabel = useMetaForMod ? "\u2318" : "Ctrl";
-  const submitActionLabel = isCloneDestinationStep
-    ? willCreateProjectPath
-      ? gt("Create & Clone")
-      : gt("Clone")
-    : willCreateProjectPath
-      ? gt("Create & Add")
-      : gt("Add");
+  const submitActionLabel = isVcsPluginImport
+    ? gt("Import")
+    : isCloneDestinationStep
+      ? willCreateProjectPath
+        ? gt("Create & Clone")
+        : gt("Clone")
+      : willCreateProjectPath
+        ? gt("Create & Add")
+        : gt("Add");
   const addShortcutLabel = hasHighlightedBrowseItem ? `${submitModifierLabel} Enter` : "Enter";
   const hasHighlightedNewProjectItem = newProjectFlow !== null && highlightedItemValue !== null;
   const createShortcutLabel = hasHighlightedNewProjectItem
@@ -2660,6 +2762,12 @@ function OpenCommandPaletteDialog(props: {
     const resolvedPath = resolveProjectPathForDispatch(initialPath, currentProjectCwdForBrowse);
     return resolvedPath.length > 0 ? resolvedPath : undefined;
   })();
+
+  function submitBrowsePath(path: string): Promise<void> {
+    if (isVcsPluginImport) return importVcsPlugin(path);
+    if (isCloneDestinationStep) return submitAddProjectCloneFlow(path);
+    return handleAddProject(path);
+  }
 
   function isPrimaryModifierPressed(event: KeyboardEvent<HTMLInputElement>): boolean {
     return useMetaForMod ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
@@ -2763,11 +2871,7 @@ function OpenCommandPaletteDialog(props: {
 
     if (shouldSubmitBrowsePath) {
       event.preventDefault();
-      if (isCloneDestinationStep) {
-        void submitAddProjectCloneFlow(resolvedAddProjectPath);
-      } else {
-        void handleAddProject(resolvedAddProjectPath);
-      }
+      void submitBrowsePath(resolvedAddProjectPath);
       return;
     }
 
@@ -2943,6 +3047,10 @@ function OpenCommandPaletteDialog(props: {
         );
         return;
       }
+      if (isVcsPluginImport) {
+        await importVcsPlugin(selection.linuxPath);
+        return;
+      }
       if (addProjectCloneFlow?.step === "confirm") {
         if (selection.environmentId !== addProjectCloneFlow.environmentId) {
           toastManager.add(
@@ -2981,12 +3089,19 @@ function OpenCommandPaletteDialog(props: {
       );
       return;
     }
+    if (isVcsPluginImport) {
+      await importVcsPlugin(pickedPath);
+      return;
+    }
     await handleAddProject(pickedPath);
   };
 
   const submitButtonId = useId();
-  const browseSubmitLabel =
-    isCloneDestinationStep && !canCloneProject
+  const browseSubmitLabel = isVcsPluginImport
+    ? canImportVcsPlugin
+      ? `${submitActionLabel} (${addShortcutLabel})`
+      : gt("This connection cannot import VCS plugins.")
+    : isCloneDestinationStep && !canCloneProject
       ? gt("This connection needs permission to write source control and add projects.")
       : canCreateProject
         ? `${submitActionLabel} (${addShortcutLabel})`
@@ -3024,7 +3139,7 @@ function OpenCommandPaletteDialog(props: {
         ariaLabel={browseSubmitLabel}
         tooltip={browseSubmitLabel}
         disabled={
-          !canCreateProject ||
+          !canSubmitFromBrowse ||
           !canCreateProjectInEnvironment(browseEnvironment?.connection.phase) ||
           relativePathNeedsActiveProject ||
           (isCloneDestinationStep && (!canCloneProject || isRemoteProjectPending))
@@ -3033,11 +3148,7 @@ function OpenCommandPaletteDialog(props: {
           if (relativePathNeedsActiveProject) {
             return;
           }
-          if (isCloneDestinationStep) {
-            void submitAddProjectCloneFlow(resolvedAddProjectPath);
-          } else {
-            void handleAddProject(resolvedAddProjectPath);
-          }
+          void submitBrowsePath(resolvedAddProjectPath);
         }}
       />
     ) : null;
@@ -3107,7 +3218,7 @@ function OpenCommandPaletteDialog(props: {
               ),
             }
           : isBrowsing
-            ? { startAddon: <FolderPlusIcon /> }
+            ? { startAddon: isVcsPluginImport ? <PuzzleIcon /> : <FolderPlusIcon /> }
             : {}),
         onKeyDown: handleKeyDown,
       }}

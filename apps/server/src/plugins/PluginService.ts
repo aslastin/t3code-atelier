@@ -13,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 import { isCommandAvailable } from "@t3tools/shared/shell";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -418,7 +419,7 @@ const make = Effect.gen(function* () {
   )(function* (requested) {
     const operation = "plugins.import";
     const source = yield* fs
-      .realPath(path.resolve(requested))
+      .realPath(path.resolve(expandHomePath(requested.trim(), yield* HostProcess.HomeDirectory)))
       .pipe(
         Effect.mapError(() => failure(operation, `${requested} does not exist on the server.`)),
       );

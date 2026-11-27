@@ -6,6 +6,7 @@ import * as NodeOS from "node:os";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { CheckpointRef, VcsDriverKind } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -172,7 +173,7 @@ it.live("keeps a plugin turned off while its startup check was still running", (
 describe("PluginService", () => {
   it.live("imports a plugin, checks it, and serves its driver", () =>
     Effect.gen(function* () {
-      const { imported, driver, home, plugins } = yield* setup();
+      const { imported, driver, home, plugins, source, path } = yield* setup();
       const [summary] = imported.plugins;
       assert.strictEqual(summary?.status, "available");
       assert.strictEqual(summary?.version, "1.2.3");
@@ -187,6 +188,12 @@ describe("PluginService", () => {
       const removed = yield* plugins.remove("kite");
       assert.deepStrictEqual(removed.plugins, []);
       assert.isFalse(NodeFS.existsSync(`${home}/plugins/kite`));
+
+      // A path from the folder browser can start at the home folder.
+      const fromHome = yield* plugins
+        .importFolder(`~/${path.basename(source)}`)
+        .pipe(Effect.provideService(HostProcess.HomeDirectory, path.dirname(source)));
+      assert.strictEqual(fromHome.plugins[0]?.id, "kite");
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 

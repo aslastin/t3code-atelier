@@ -8,8 +8,9 @@ environment.
 ## Install, update, and remove a plugin
 
 1. Put the plugin folder on the environment's machine.
-2. Open **Settings → Source control**. Under **VCS plugins**, enter the folder's path and choose
-   **Import**.
+2. Open **Settings → Source control**. Under **VCS plugins**, enter the folder's path or pick it
+   with **Choose folder…**, then choose **Import**. You can also run **Import VCS plugin** from the
+   command palette. For a remote environment, both browse that machine's folders, not yours.
 
 T3 Code checks the manifest and the files it names, runs the plugin's `check` command, and copies
 the folder to `<T3 home>/plugins/<id>/`. Importing a folder with the same `id` again replaces the

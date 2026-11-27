@@ -4,7 +4,10 @@ import type { EnvironmentId, PluginListResult, PluginSummary } from "@t3tools/co
 import { useState, type FormEvent } from "react";
 import { T, useGT, useMessages, Var } from "gt-react";
 
-import { cn } from "../../lib/utils";
+import { openCommandPalette } from "../../commandPaletteBus";
+import { cn, isWindowsPlatform } from "../../lib/utils";
+import { readLocalApi } from "../../localApi";
+import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import {
   AlertDialog,
@@ -242,6 +245,30 @@ function ImportForm({
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const inputId = `vcs-plugin-import-${environmentId}`;
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const environment = useEnvironment(environmentId);
+  // The system picker shows this machine's folders: right only for the desktop's own server,
+  // not a remote one or one in WSL, whose folders the palette browses instead.
+  const picksLocally =
+    environmentId === primaryEnvironmentId &&
+    typeof window !== "undefined" &&
+    window.desktopBridge !== undefined &&
+    !(
+      isWindowsPlatform(navigator.platform) &&
+      environment?.serverConfig?.environment.platform.os === "linux"
+    );
+
+  const chooseFolder = async () => {
+    if (!picksLocally) {
+      openCommandPalette({ importVcsPluginIn: environmentId });
+      return;
+    }
+    const initialPath = path.trim();
+    const picked = await readLocalApi()
+      ?.dialogs.pickFolder(initialPath === "" ? undefined : { initialPath })
+      .catch(() => null);
+    if (picked) setPath(picked);
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -273,6 +300,15 @@ function ImportForm({
           placeholder={gt("/path/to/plugin")}
           onChange={(event) => setPath(event.target.value)}
         />
+        <Button
+          size="sm"
+          variant="outline"
+          type="button"
+          disabled={busy}
+          onClick={() => void chooseFolder()}
+        >
+          <T>Choose folder…</T>
+        </Button>
         <Button size="sm" variant="outline" type="submit" disabled={busy || path.trim() === ""}>
           <T>Import</T>
         </Button>

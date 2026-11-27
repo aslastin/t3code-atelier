@@ -81,6 +81,8 @@ export type SearchOverlayMode = "command" | "files" | "content";
 
 export type CommandPaletteOpenIntent =
   | { readonly kind: "add-project" | "new-thread-in" | "change-theme" }
+  /** Atelier fork: browse the environment's folders for a VCS plugin to import. */
+  | { readonly kind: "import-vcs-plugin"; readonly environmentId: EnvironmentId }
   | {
       readonly kind: "search";
       readonly query: string;
@@ -109,6 +111,7 @@ export type CommandPaletteUiAction =
   | { readonly _tag: "OpenAddProject" }
   | { readonly _tag: "OpenNewThreadIn" }
   | { readonly _tag: "OpenChangeTheme" }
+  | { readonly _tag: "OpenImportVcsPlugin"; readonly environmentId: EnvironmentId }
   | {
       readonly _tag: "OpenChildSearch";
       readonly mode: "files" | "content";
@@ -166,6 +169,8 @@ export function reduceCommandPaletteUiState(
       return openWithIntent({ kind: "new-thread-in" });
     case "OpenChangeTheme":
       return openWithIntent({ kind: "change-theme" });
+    case "OpenImportVcsPlugin":
+      return openWithIntent({ kind: "import-vcs-plugin", environmentId: action.environmentId });
   }
 }
 
