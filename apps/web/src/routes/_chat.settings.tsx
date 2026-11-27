@@ -199,7 +199,7 @@ export const Route = createFileRoute("/_chat/settings")({
       throw redirect({
         to: moved,
         search: true,
-        hash: location.hash === "telemetry-endpoints" ? "telemetry-export" : true,
+        hash: true,
         replace: true,
       });
     }

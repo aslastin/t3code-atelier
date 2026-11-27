@@ -10,6 +10,7 @@ import {
   type DesktopSshEnvironmentTarget,
 } from "@t3tools/contracts";
 import {
+  formatDesktopSshTarget,
   RelayConnectionRegistration,
   RelayConnectionTarget,
 } from "@t3tools/client-runtime/connection";
@@ -20,7 +21,6 @@ import {
 import * as Option from "effect/Option";
 
 import { cn } from "../../lib/utils";
-import { formatDesktopSshTarget } from "./EnvironmentRow";
 import { Input } from "../ui/input";
 import { CommandShortcut } from "../ui/command";
 import {

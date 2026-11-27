@@ -130,13 +130,19 @@ vi.mock(import("./SettingsScopeContext"), async (original) => {
       const environment = {
         environmentId: "env",
         label: "MAC1",
+        connection: { phase: "connected" },
         serverConfig: {
           ...state.serverConfig,
           observability: running,
           settings: { ...DEFAULT_SERVER_SETTINGS, observability: state.observability },
         },
       };
-      return { scope: { kind: "environment" }, environment, connectedEnvironments: [environment] };
+      return {
+        scope: { kind: "environment", label: environment.label },
+        environment,
+        environments: [environment],
+        connectedEnvironments: [environment],
+      };
     }) as never,
   };
 });
@@ -294,6 +300,17 @@ describe("TelemetryExportSettings", () => {
       expect(heading.top).toBeGreaterThanOrEqual(bounds.top);
       expect(heading.bottom).toBeLessThanOrEqual(bounds.bottom);
     });
+  });
+
+  it("focuses the incompatibility message for an endpoint link to an older server", async () => {
+    setup();
+    const { telemetry: _telemetry, ...legacyObservability } = activeExport;
+    state.serverConfig.observability = legacyObservability;
+    await using screen = await render(<TelemetrySettings />);
+    const message = screen.getByRole("status").element();
+    expect(message.textContent).toContain("Incompatible server");
+    expect(scrollToSettingsTarget("telemetry-endpoints")).toBe(true);
+    expect(message).toHaveFocus();
   });
 
   it("does not resend a field the user restored after another client changed it", async () => {

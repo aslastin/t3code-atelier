@@ -235,7 +235,15 @@ export function TelemetrySettings() {
             {row("otlp", m(channels.otlp))}
           </div>
         )}
-        <div role="status" className="text-xs text-muted-foreground">
+        <SettingsSearchTarget
+          id={
+            scope.kind === "environment" && targets[0]?.issue === "incompatible"
+              ? "telemetry-endpoints"
+              : undefined
+          }
+          role="status"
+          className="text-xs text-muted-foreground"
+        >
           {targets.map(({ env, issue }) => {
             const outcome = issue ?? report.get(env.environmentId);
             return outcome ? (
@@ -244,7 +252,7 @@ export function TelemetrySettings() {
               </p>
             ) : null;
           })}
-        </div>
+        </SettingsSearchTarget>
         {expanded !== undefined && (scope.kind === "all" || targets[0]?.status) && (
           <Activity mode={expanded ? "visible" : "hidden"}>
             <TelemetryExportSettings />

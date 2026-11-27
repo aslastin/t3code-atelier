@@ -43,6 +43,7 @@ test(
       await expect(screen.getByText(/Showing diagnostics for Scenario/)).toBeVisible();
       await app.open("/settings/diagnostics#telemetry-endpoints");
       await expect(browser).toHaveURL(/\/settings\/maintenance/);
+      await expect(browser.locator("#telemetry-endpoints")).toBeFocused();
 
       const exportSection = browser.locator("#telemetry-export");
       const traces = exportSection.getByRole("textbox", "Traces endpoint");
