@@ -920,6 +920,50 @@ describe("ManifestVcsDriver", () => {
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
+  it.live("changed-files never removes files on a file system mounted in the checkout", () =>
+    Effect.gen(function* () {
+      const realFs = yield* FileSystem.FileSystem;
+      // A folder reported on another device, as a mount point is.
+      let mount: string | null = null;
+      const mounted = FileSystem.FileSystem.of({
+        ...realFs,
+        stat: (target) =>
+          realFs
+            .stat(target)
+            .pipe(
+              Effect.map((info) =>
+                mount !== null && (target === mount || target.startsWith(`${mount}/`))
+                  ? { ...info, dev: info.dev + 1n }
+                  : info,
+              ),
+            ),
+      });
+      yield* Effect.gen(function* () {
+        const { driver, repository } = yield* setup({ checkpoints: ["changed-files"] });
+        const checkpoints = driver!.checkpoints;
+        yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
+        const restore = { cwd: repository, checkpointRef: ref("0") };
+        // An added folder loses its own files; one mounted in it is kept, as a repository is.
+        NodeFS.mkdirSync(`${repository}/generated/mnt`, { recursive: true });
+        NodeFS.writeFileSync(`${repository}/generated/own.txt`, "own\n");
+        NodeFS.writeFileSync(`${repository}/generated/mnt/data.txt`, "data\n");
+        mount = `${repository}/generated/mnt`;
+        yield* checkpoints.restoreCheckpoint(restore);
+        assert.isFalse(NodeFS.existsSync(`${repository}/generated/own.txt`));
+        assert.isTrue(NodeFS.existsSync(`${repository}/generated/mnt/data.txt`));
+        // A changed file on a mount is refused before anything changes, so a rollback stops
+        // before the conversation does.
+        NodeFS.rmSync(`${repository}/generated`, { recursive: true });
+        NodeFS.writeFileSync(`${repository}/sub/b.txt`, "changed\n");
+        mount = `${repository}/sub`;
+        assert.isFalse(yield* checkpoints.verifyRestorable!(restore));
+        const refused = yield* checkpoints.restoreCheckpoint(restore).pipe(Effect.flip);
+        assert.include(refused.message, "another file system mounted in the checkout");
+        assert.strictEqual(NodeFS.readFileSync(`${repository}/sub/b.txt`, "utf8"), "changed\n");
+      }).pipe(Effect.provideService(FileSystem.FileSystem, mounted));
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   it.live("changed-files restores nothing through a linked folder or into a nested scope", () =>
     Effect.gen(function* () {
       const { driver, repository, plugins } = yield* setup({ checkpoints: ["changed-files"] });

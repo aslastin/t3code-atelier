@@ -772,7 +772,13 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
    * directory read can descend into a linked folder. Null when a folder cannot be read.
    */
   const walk = Effect.fnUntraced(function* (absolute: string) {
-    const found: Array<{ readonly path: string; readonly kind: "link" | "folder" | "file" }> = [];
+    const found: Array<{
+      readonly path: string;
+      readonly kind: "link" | "folder" | "file" | "mount";
+    }> = [];
+    const device = Option.getOrUndefined(
+      (yield* fs.stat(absolute).pipe(Effect.option)).pipe(Option.map((info) => info.dev)),
+    );
     const pending = [""];
     while (pending.length > 0) {
       const relative = pending.pop()!;
@@ -789,6 +795,11 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         }
         const info = yield* fs.stat(entryPath).pipe(Effect.option);
         const folder = Option.isSome(info) && info.value.type === "Directory";
+        // Another file system mounted inside is never walked, so never emptied.
+        if (folder && device !== undefined && info.value.dev !== device) {
+          found.push({ path: entry, kind: "mount" });
+          continue;
+        }
         found.push({ path: entry, kind: folder ? "folder" : "file" });
         if (folder) pending.push(entry);
       }
@@ -801,6 +812,9 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     if (Option.isSome(yield* fs.readLink(absolute).pipe(Effect.option))) return [];
     const info = yield* fs.stat(absolute).pipe(Effect.option);
     if (Option.isNone(info) || info.value.type !== "Directory") return [];
+    // A mount, like a repository, holds files no snapshot saved: it is kept as one.
+    const rootDevice = yield* fs.stat(location.root).pipe(Effect.option);
+    if (Option.isSome(rootDevice) && rootDevice.value.dev !== info.value.dev) return [folder];
     const walked = yield* walk(absolute);
     if (walked === null) return null;
     const entries = walked.map((entry) => entry.path);
@@ -809,6 +823,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     const markers = context.repositoryMarkers().map((marker) => marker.toLowerCase());
     const roots = new Set<string>();
     const add = (relative: string) => roots.add(relative === "" ? folder : `${folder}/${relative}`);
+    for (const entry of walked) if (entry.kind === "mount") add(entry.path);
     for (const entry of entries) {
       const parts = entry.split("/");
       const lower = entry.toLowerCase();
@@ -886,6 +901,30 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     return undefined;
   });
 
+  /** The folder on the way to `file` that another file system is mounted on, if any. */
+  const enclosingMount = Effect.fnUntraced(function* (
+    location: Location,
+    file: string,
+    devices: Map<string, bigint | null>,
+  ) {
+    const device = (folder: string) =>
+      fs.stat(path.join(location.root, folder)).pipe(
+        Effect.map((info): bigint | null => info.dev),
+        Effect.orElseSucceed(() => null),
+      );
+    if (!devices.has("")) devices.set("", yield* device(""));
+    const root = devices.get("")!;
+    if (root === null) return undefined;
+    const parts = file.split("/");
+    for (let index = 1; index < parts.length; index++) {
+      const folder = parts.slice(0, index).join("/");
+      if (!devices.has(folder)) devices.set(folder, yield* device(folder));
+      const found = devices.get(folder);
+      if (found !== null && found !== root) return folder;
+    }
+    return undefined;
+  });
+
   // Checked before anything changes. Writing a file where a folder now is removes the folder,
   // with all it holds.
   const restoreProblem = Effect.fnUntraced(function* (
@@ -902,9 +941,13 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     if (replaced !== undefined)
       return `${replaced} is now a repository of its own, so the checkpoint's file there cannot be restored.`;
     const known = new Map<string, boolean>();
+    const devices = new Map<string, bigint | null>();
     for (const file of [...change.write, ...change.remove]) {
       const problem = yield* linkedParentProblem(location, file);
       if (problem !== undefined) return problem;
+      const mount = yield* enclosingMount(location, file, devices);
+      if (mount !== undefined)
+        return `${mount} is another file system mounted in the checkout, so ${file} cannot be restored inside it.`;
       const repository = yield* enclosingRepository(location, file, known);
       if (repository !== undefined)
         return `${repository} is now a repository of its own, so ${file} cannot be restored inside it.`;
@@ -916,7 +959,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       if (nested === null)
         return `${file} is now a folder that cannot be read, so its file cannot be restored.`;
       if (nested.length > 0)
-        return `${file} is now a folder holding a repository of its own, so its file cannot be restored.`;
+        return `${file} is now a folder holding a repository or a mount of its own, so its file cannot be restored.`;
     }
     return undefined;
   });
@@ -1145,7 +1188,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     if (info.type !== "Directory") return [folder];
     // A link is removed itself; its target, maybe outside the checkout, is never visited.
     return ((yield* walk(absolute)) ?? [])
-      .filter((entry) => entry.kind !== "folder")
+      .filter((entry) => entry.kind === "file" || entry.kind === "link")
       .map((entry) => `${folder}/${entry.path}`);
   });
 
