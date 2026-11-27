@@ -44,6 +44,7 @@ import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
 import { isWithinRoot } from "./KnownWorkspaces.ts";
 import * as TaskFolderStore from "./TaskFolderStore.ts";
 import { projectFolders, parseGitmodulesPaths, providePluginDrivers } from "./WorkspaceFolders.ts";
+import { holdsRepository } from "./holdsRepository.ts";
 import { withWorkspaceLease } from "./workspaceLease.ts";
 
 // Each worktree is a checkout: enough at once to finish four repositories together, few enough
@@ -253,6 +254,13 @@ const make = Effect.gen(function* () {
     }
     return false;
   });
+  // Atelier fork: a forced removal never deletes through a VCS plugin's checkout a removal left
+  // behind, or a file system mounted inside: such a checkout can be a whole monorepo. Git
+  // checkouts left there are this service's own to delete, as before.
+  const holdsCheckout = (folder: string) =>
+    holdsRepository(fileSystem, path, folder, plugins?.installedMarkers() ?? [], {
+      bareRepositories: false,
+    });
   // Physical ancestors, as a plugin's driver finds its repository root.
   const insidePluginRepository = Effect.fnUntraced(function* (folder: string) {
     const markers = plugins?.installedMarkers() ?? [];
@@ -930,7 +938,12 @@ const make = Effect.gen(function* () {
         ),
         Effect.orElseSucceed(() => false),
       );
-      if (!projectGone && input.force && input.inspect === undefined) {
+      if (
+        !projectGone &&
+        input.force &&
+        input.inspect === undefined &&
+        !(yield* holdsCheckout(projectPath))
+      ) {
         // Forced: what is left are files the thread wrote beside the links.
         projectGone = yield* fileSystem.remove(projectPath, { recursive: true, force: true }).pipe(
           Effect.as(true),
@@ -942,7 +955,12 @@ const make = Effect.gen(function* () {
     }
     if (kept.length === 0) {
       let rootGone = yield* removeLinks(taskFolder.root).pipe(Effect.orElseSucceed(() => false));
-      if (!rootGone && input.force && input.inspect === undefined) {
+      if (
+        !rootGone &&
+        input.force &&
+        input.inspect === undefined &&
+        !(yield* holdsCheckout(taskFolder.root))
+      ) {
         rootGone = yield* fileSystem.remove(taskFolder.root, { recursive: true, force: true }).pipe(
           Effect.as(true),
           Effect.orElseSucceed(() => false),

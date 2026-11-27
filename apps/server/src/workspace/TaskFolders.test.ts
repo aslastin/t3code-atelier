@@ -378,6 +378,7 @@ it.live(
       const { taskFolder } = yield* create("feature", undefined, "develop");
       // Left out of the folder like any repository not chosen, never linked to its checkout.
       assert.isFalse(yield* fileSystem.exists(path.join(taskFolder.root, "docs")));
+
       assert.deepEqual(
         state.pluginCreated?.map((created) => created.refName),
         ["main"],

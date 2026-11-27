@@ -15,6 +15,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import { holdsRepository as holdsRepositoryBelow } from "../workspace/holdsRepository.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -461,33 +462,12 @@ export const layer: Layer.Layer<
               // unrestorable later does not cost the files left there. A repository or a mount
               // inside, which no checkpoint saved, keeps it even then; the walk stops at the
               // first one, so a mount is neither read through nor deleted with the folder.
-              const holdsRepository = Effect.gen(function* () {
-                const markers = [".git", ...rootMarkers()];
-                const device = (yield* fileSystem.stat(path.join(aside, "folder"))).dev;
-                const queue = [path.join(aside, "folder")];
-                for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
-                  const folder = next;
-                  const entries = yield* fileSystem.readDirectory(folder);
-                  const names = new Set(entries.map((entry) => entry.toLowerCase()));
-                  // A bare repository: HEAD beside its objects and refs.
-                  if (names.has("head") && names.has("objects") && names.has("refs")) return true;
-                  for (const marker of markers) {
-                    if (!names.has(marker.split("/")[0]!.toLowerCase())) continue;
-                    if (!marker.includes("/")) return true;
-                    if (yield* fileSystem.exists(path.join(folder, marker))) return true;
-                  }
-                  for (const entry of entries) {
-                    const child = path.join(folder, entry);
-                    if (Option.isSome(yield* fileSystem.readLink(child).pipe(Effect.option)))
-                      continue;
-                    const info = yield* fileSystem.stat(child);
-                    if (info.type !== "Directory") continue;
-                    if (info.dev !== device) return true;
-                    queue.push(child);
-                  }
-                }
-                return false;
-              }).pipe(Effect.orElseSucceed(() => true));
+              const holdsRepository = holdsRepositoryBelow(
+                fileSystem,
+                path,
+                path.join(aside, "folder"),
+                [".git", ...rootMarkers()],
+              );
               yield* Effect.addFinalizer((exit) =>
                 Effect.gen(function* () {
                   if (Exit.isSuccess(exit) && !(yield* holdsRepository)) {
