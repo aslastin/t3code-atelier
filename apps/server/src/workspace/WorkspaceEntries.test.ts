@@ -1221,6 +1221,14 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
         expect(folder.entries).toEqual([{ path: "src/index.ts", kind: "file" }]);
         // Clients open its folders one at a time, never all at once.
         expect(folder.treeWalkUnavailable).toBe(true);
+        // The Git repository around it lists none of its ignored files.
+        yield* writeTextFile(project, "app.log");
+        yield* writeTextFile(cwd, ".gitignore", "*.log\n");
+        yield* git(cwd, ["add", "app/src/index.ts"]);
+        expect(yield* workspaceEntries.listIgnoredFiles({ cwd: project }).pipe(inPlugin)).toEqual({
+          files: [],
+          truncated: false,
+        });
         const inside = yield* searchWorkspaceEntries({
           cwd: nested,
           query: "tool",

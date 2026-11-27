@@ -633,6 +633,8 @@ export const make = Effect.gen(function* () {
     "WorkspaceEntries.listIgnoredFiles",
   )(function* (input) {
     const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
+    // Atelier fork: a Git repository around a VCS plugin's checkout would list its whole tree.
+    if (yield* inPluginRepository(normalizedCwd)) return { files: [], truncated: false };
     // `--directory` reports a folder holding nothing but ignored files as one
     // `name/` entry, which is how `node_modules` and build output drop out.
     const result = yield* vcsProcess
