@@ -95,6 +95,61 @@ const withState = <A, E>(
   return test(state).pipe(Effect.provide(layerFor(state)), Effect.scoped);
 };
 
+it.live("never empties a file system mounted inside a plain project's task folder", () => {
+  const state: TaskFoldersTestState = { workspaceRoot: "/unset", trackedFolders: [], thread: null };
+  // A folder reported on another device, as a mount point is.
+  let mount: string | null = null;
+  const onMount = (target: string) =>
+    mount !== null && (target === mount || target.startsWith(`${mount}/`));
+  const mountedFileSystem = Layer.effect(
+    FileSystem.FileSystem,
+    Effect.map(FileSystem.FileSystem, (fs) =>
+      FileSystem.FileSystem.of({
+        ...fs,
+        stat: (target) =>
+          fs
+            .stat(target)
+            .pipe(Effect.map((info) => (onMount(target) ? { ...info, dev: info.dev + 1n } : info))),
+      }),
+    ),
+  ).pipe(Layer.provide(NodeServices.layer));
+  return Effect.gen(function* () {
+    const { fileSystem, path, tmp, repository } = yield* fixture;
+    const shop = path.join(tmp, "shop");
+    const web = yield* repository("shop/web");
+    yield* fileSystem.writeFileString(path.join(shop, "AGENTS.md"), "rules\n");
+    state.workspaceRoot = shop;
+    state.trackedFolders = tracked(web);
+    const { taskFolder } = yield* create("feature", [{ path: web }]);
+    // Holding nothing but a link, it would read as one of this service's own folders.
+    const mnt = path.join(taskFolder.projectPath, "mnt");
+    yield* fileSystem.makeDirectory(mnt);
+    yield* fileSystem.symlink(path.join(shop, "AGENTS.md"), path.join(mnt, "kept-link"));
+    mount = mnt;
+    const taskFolders = yield* TaskFolders.TaskFolders;
+    yield* taskFolders.remove({ root: taskFolder.root, force: false, forget: true });
+    assert.isTrue(
+      Option.isSome(yield* fileSystem.readLink(path.join(mnt, "kept-link")).pipe(Effect.option)),
+    );
+  }).pipe(
+    Effect.provide(
+      layerTaskFoldersWithGit(state).pipe(
+        Layer.provideMerge(
+          GitVcsDriver.layer.pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "t3-task-folders-" }),
+            ),
+            Layer.provideMerge(
+              Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, mountedFileSystem),
+            ),
+          ),
+        ),
+      ),
+    ),
+    Effect.scoped,
+  );
+});
+
 it.live("lays a plain wrapper out as links around its repositories' worktrees", () =>
   withState((state) =>
     Effect.gen(function* () {

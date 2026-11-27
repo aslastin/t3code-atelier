@@ -723,6 +723,12 @@ const make = Effect.gen(function* () {
     return true;
   });
 
+  // Atelier fork: a file system mounted here is neither walked nor emptied, as a checkout is not.
+  const isMount = (target: string) =>
+    Effect.all([fileSystem.stat(target), fileSystem.stat(path.dirname(target))]).pipe(
+      Effect.map(([own, parent]) => own.dev !== parent.dev),
+    );
+
   /** Unlinks links and removes the folders that leaves empty; files and checkouts stay. */
   const removeLinks: (
     target: string,
@@ -735,6 +741,7 @@ const make = Effect.gen(function* () {
       if (!(yield* exists(target))) return true;
       if ((yield* fileSystem.stat(target)).type !== "Directory") return false;
       if (yield* isRepository(target)) return false;
+      if (yield* isMount(target)) return false;
       let empty = true;
       for (const name of yield* fileSystem.readDirectory(target)) {
         if (!(yield* removeLinks(path.join(target, name)))) empty = false;
@@ -749,6 +756,7 @@ const make = Effect.gen(function* () {
       if (!(yield* exists(target))) return true;
       if ((yield* fileSystem.stat(target)).type !== "Directory") return false;
       if (yield* isRepository(target)) return false;
+      if (yield* isMount(target)) return false;
       for (const name of yield* fileSystem.readDirectory(target)) {
         if (!(yield* holdsOnlyLinks(path.join(target, name)))) return false;
       }
