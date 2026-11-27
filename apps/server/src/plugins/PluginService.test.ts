@@ -182,13 +182,16 @@ describe("PluginService", () => {
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
-  it.live("refuses a manifest whose command escapes the plugin folder", () =>
+  it.live("refuses a manifest whose command or icon is not in the plugin folder", () =>
     Effect.gen(function* () {
       const error = yield* setup({
         extraManifest: { check: ["./../outside.mjs"] },
       }).pipe(Effect.flip);
       assert.strictEqual(error._tag, "PluginError");
       assert.include(error.message, "check:");
+      // So is an icon it names that is not there.
+      const icon = yield* setup({ extraManifest: { icon: "missing.svg" } }).pipe(Effect.flip);
+      assert.include(icon.message, "icon: missing.svg");
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 

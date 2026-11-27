@@ -213,7 +213,7 @@ export const resolvePluginFile = Effect.fn("pluginManifest.resolvePluginFile")(
   Effect.orElseSucceed(() => null),
 );
 
-/** Errors for `./` commands that do not resolve to a file in the plugin folder. */
+/** Errors for `./` commands and an icon that do not resolve to a file in the plugin folder. */
 export const checkPluginFiles = Effect.fn("pluginManifest.checkPluginFiles")(function* (
   fs: FileSystem.FileSystem,
   path: Path.Path,
@@ -229,6 +229,10 @@ export const checkPluginFiles = Effect.fn("pluginManifest.checkPluginFiles")(fun
         `${name === "check" ? "check" : `commands.${name}`}: ${argv[0]} is not a file inside the plugin folder.`,
       );
   }
+  if (manifest.icon !== undefined && (yield* readIcon(fs, path, directory, manifest)) === null)
+    errors.push(
+      `icon: ${manifest.icon} must be an SVG file inside the plugin folder, at most 64 KB.`,
+    );
   return errors;
 });
 
