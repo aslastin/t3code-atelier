@@ -348,6 +348,8 @@ const cleanupFixture = (
     readonly listsGitWorktree?: boolean;
     /** The checkout is a file system mounted of its own, as a virtual checkout is. */
     readonly mounted?: boolean;
+    /** A folder inside the checkout, relative to it, is a file system mounted there. */
+    readonly innerMount?: string;
   },
 ) =>
   Effect.gen(function* () {
@@ -410,20 +412,33 @@ const cleanupFixture = (
     const context = yield* Layer.build(StorageCleanup.layer).pipe(
       Effect.provideService(
         FileSystem.FileSystem,
-        plugin?.mounted
-          ? FileSystem.FileSystem.of({
-              ...fs,
-              stat: (target) =>
-                fs
-                  .stat(target)
-                  .pipe(
-                    Effect.map((info) =>
-                      target === pluginWorktree || target.startsWith(`${pluginWorktree}/`)
-                        ? { ...info, dev: info.dev + 1n }
-                        : info,
+        plugin?.mounted || plugin?.innerMount !== undefined
+          ? (() => {
+              const mount = plugin.mounted
+                ? pluginWorktree
+                : `${pluginWorktree}/${plugin.innerMount}`;
+              const onMount = (target: string) =>
+                target === mount || target.startsWith(`${mount}/`);
+              return FileSystem.FileSystem.of({
+                ...fs,
+                stat: (target) =>
+                  fs
+                    .stat(target)
+                    .pipe(
+                      Effect.map((info) =>
+                        onMount(target) ? { ...info, dev: info.dev + 1n } : info,
+                      ),
                     ),
-                  ),
-            })
+                lstat: (target) =>
+                  fs
+                    .lstat(target)
+                    .pipe(
+                      Effect.map((info) =>
+                        onMount(target) ? { ...info, dev: info.dev + 1n } : info,
+                      ),
+                    ),
+              });
+            })()
           : fs,
       ),
       Effect.provideService(GitVcsDriver.GitVcsDriver, {
@@ -2559,6 +2574,26 @@ describe("VCS plugin worktrees", () => {
         (candidate) => candidate.threadId === thread.id,
       );
       expect(entry?.outcome).toBe("removed");
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("keeps a VCS plugin checkout with a file system mounted inside", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, {
+        recreates: true,
+        innerMount: "mnt",
+      });
+      // Not walked into, so what it holds is unknown and the checkout stays.
+      yield* fixture.fs.makeDirectory(`${fixture.pluginWorktree}/mnt/data`, { recursive: true });
+      const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry?.outcome).toBe("kept");
+      expect(yield* fixture.fs.exists(`${fixture.pluginWorktree}/mnt/data`)).toBe(true);
     }).pipe(Effect.provide(cleanupTestLayer)),
   );
 

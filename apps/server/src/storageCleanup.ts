@@ -666,6 +666,8 @@ const make = Effect.gen(function* () {
       }
       const skipped = yield* sharedPnpmVirtualStore(root);
       const incomplete = { bytes: null, reason: "worktree could not be fully inspected" };
+      // A file system mounted below is not walked: it can be a whole monorepo.
+      const rootDevice = (yield* fs.stat(root)).dev;
       // A plain folder is not a checkout, so a repository at its root counts like one below it.
       const repositories = new Set(inspectRepositories === "plain-folder" ? [] : [pathKey(root)]);
       // A VCS plugin's checkout below the root is a repository of its own, as a `.git` is.
@@ -735,6 +737,7 @@ const make = Effect.gen(function* () {
             if (inStore && !inspectRepositories) return empty;
             const stat = yield* fs.lstat(target);
             if (stat.type === "SymbolicLink") return empty;
+            if (stat.type === "Directory" && stat.dev !== rootDevice) return null;
             if ((yield* fs.realPath(target)) !== target) return null;
             if (stat.type === "Directory") {
               if (!inStore) {
