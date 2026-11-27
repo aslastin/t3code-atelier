@@ -11567,10 +11567,20 @@
       "v": "v"
     }
   ],
+  "9965f2bf1ce6819f": [
+    "Check ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " again"
+  ],
   "a5861af92b344936": "Its installed copy is deleted, and its repositories are no longer detected until you import the plugin again. Turn it off instead to keep it installed.",
   "8c87144bb1681580": "Import a plugin folder from this server",
   "1f190833cb8cefd1": "Choose folder…",
   "e30b840393c5dc4c": "Import",
+  "3c29d619c9072db5": "Reload the list",
   "954573ade31e4d7d": "Plugins add a version control system T3 Code does not ship. See the plugin guide for the manifest format.",
   "0424112d5a0ecd71": "Auto",
   "3f0e1b77e45d53a9": "Tap to toggle, hold to talk",

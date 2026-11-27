@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, PluginListResult, PluginSummary } from "@t3tools/contracts";
+import { CircleCheckIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { T, useGT, useMessages, Var } from "gt-react";
 
@@ -24,7 +25,9 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { RefreshIcon } from "../ui/refresh-icon";
+import { Spinner } from "../ui/spinner";
 import { Switch } from "../ui/switch";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SettingsSection } from "./settingsLayout";
 
 // Atelier fork: VCS plugins installed on the environment, with the way in and out.
@@ -163,15 +166,26 @@ function PluginRow({
           {failure ? <p className="text-xs text-destructive">{failure}</p> : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Button
-            size="icon-xs"
-            variant="ghost-muted"
-            disabled={!canManage || busy || !plugin.enabled}
-            onClick={() => void run(() => recheck({ environmentId, input }))}
-            aria-label={gt("Re-check {plugin}", { plugin: plugin.label })}
-          >
-            <RefreshIcon refreshing={busy} />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="icon-xs"
+                  variant="ghost-muted"
+                  disabled={!canManage || busy || !plugin.enabled}
+                  onClick={() => void run(() => recheck({ environmentId, input }))}
+                  aria-label={gt("Re-check {plugin}", { plugin: plugin.label })}
+                >
+                  {busy ? <Spinner /> : <CircleCheckIcon />}
+                </Button>
+              }
+            />
+            <TooltipPopup>
+              <T>
+                Check <Var>{plugin.label}</Var> again
+              </T>
+            </TooltipPopup>
+          </Tooltip>
           <Switch
             checked={plugin.enabled}
             disabled={!canManage || busy}
@@ -329,15 +343,24 @@ export function VcsPluginSettings({
     <SettingsSection
       title={`${gt("VCS plugins")}${titleSuffix}`}
       headerAction={
-        <Button
-          size="icon-xs"
-          variant="ghost-muted"
-          onClick={list.refresh}
-          disabled={list.isPending}
-          aria-label={gt("Refresh VCS plugins")}
-        >
-          <RefreshIcon refreshing={list.isPending} />
-        </Button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                size="icon-xs"
+                variant="ghost-muted"
+                onClick={list.refresh}
+                disabled={list.isPending}
+                aria-label={gt("Refresh VCS plugins")}
+              >
+                <RefreshIcon refreshing={list.isPending} />
+              </Button>
+            }
+          />
+          <TooltipPopup>
+            <T>Reload the list</T>
+          </TooltipPopup>
+        </Tooltip>
       }
     >
       {result.plugins.map((plugin) => (

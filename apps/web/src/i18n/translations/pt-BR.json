@@ -11557,10 +11557,20 @@
       "v": "v"
     }
   ],
+  "9965f2bf1ce6819f": [
+    "Verificar ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " novamente"
+  ],
   "a5861af92b344936": "A cópia instalada é excluída, e seus repositórios deixam de ser detectados até você importar o plugin novamente. Desative-o em vez disso para mantê-lo instalado.",
   "8c87144bb1681580": "Importar uma pasta de plugin deste servidor",
   "1f190833cb8cefd1": "Escolher pasta…",
   "e30b840393c5dc4c": "Importar",
+  "3c29d619c9072db5": "Recarregar a lista",
   "954573ade31e4d7d": "Plugins adicionam um sistema de controle de versão que o T3 Code não inclui. Veja o guia de plugins para o formato do manifesto.",
   "0424112d5a0ecd71": "Automático",
   "3f0e1b77e45d53a9": "Toque para alternar, segure para falar",

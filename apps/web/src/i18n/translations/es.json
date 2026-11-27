@@ -11552,10 +11552,19 @@
       "v": "v"
     }
   ],
+  "9965f2bf1ce6819f": [
+    "Volver a comprobar ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
   "a5861af92b344936": "Se elimina su copia instalada y sus repositorios dejan de detectarse hasta que vuelvas a importar el plugin. Desactívalo en su lugar para mantenerlo instalado.",
   "8c87144bb1681580": "Importar una carpeta de plugin de este servidor",
   "1f190833cb8cefd1": "Elegir carpeta…",
   "e30b840393c5dc4c": "Importar",
+  "3c29d619c9072db5": "Volver a cargar la lista",
   "954573ade31e4d7d": "Los plugins añaden un sistema de control de versiones que T3 Code no incluye. Consulta la guía de plugins para el formato del manifiesto.",
   "0424112d5a0ecd71": "Automático",
   "3f0e1b77e45d53a9": "Toca para alternar, mantén para hablar",

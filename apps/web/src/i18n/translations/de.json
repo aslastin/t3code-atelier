@@ -11558,10 +11558,19 @@
       "v": "v"
     }
   ],
+  "9965f2bf1ce6819f": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " erneut prüfen"
+  ],
   "a5861af92b344936": "Die installierte Kopie wird gelöscht, und seine Repositorys werden erst wieder erkannt, wenn du das Plugin erneut importierst. Schalte es stattdessen aus, um es installiert zu lassen.",
   "8c87144bb1681580": "Plugin-Ordner von diesem Server importieren",
   "1f190833cb8cefd1": "Ordner auswählen…",
   "e30b840393c5dc4c": "Importieren",
+  "3c29d619c9072db5": "Liste neu laden",
   "954573ade31e4d7d": "Plugins fügen eine Versionsverwaltung hinzu, die T3 Code nicht mitbringt. Das Manifestformat steht im Plugin-Leitfaden.",
   "0424112d5a0ecd71": "Automatisch",
   "3f0e1b77e45d53a9": "Tippen zum Umschalten, halten zum Sprechen",

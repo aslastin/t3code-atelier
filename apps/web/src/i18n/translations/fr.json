@@ -11557,10 +11557,19 @@
       "v": "v"
     }
   ],
+  "9965f2bf1ce6819f": [
+    "Vérifier à nouveau ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
   "a5861af92b344936": "Sa copie installée est supprimée et ses dépôts ne sont plus détectés tant que vous n'importez pas à nouveau le plugin. Désactivez-le plutôt pour le garder installé.",
   "8c87144bb1681580": "Importer un dossier de plugin depuis ce serveur",
   "1f190833cb8cefd1": "Choisir un dossier…",
   "e30b840393c5dc4c": "Importer",
+  "3c29d619c9072db5": "Recharger la liste",
   "954573ade31e4d7d": "Les plugins ajoutent un système de contrôle de version que T3 Code ne fournit pas. Le format du manifeste est décrit dans le guide des plugins.",
   "0424112d5a0ecd71": "Auto",
   "3f0e1b77e45d53a9": "Appuyer pour basculer, maintenir pour parler",

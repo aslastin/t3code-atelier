@@ -11565,10 +11565,20 @@
       "v": "v"
     }
   ],
+  "9965f2bf1ce6819f": [
+    "Kontrollera ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " igen"
+  ],
   "a5861af92b344936": "Den installerade kopian tas bort, och dess repositorier identifieras inte längre förrän du importerar pluginet igen. Stäng av det i stället för att behålla det installerat.",
   "8c87144bb1681580": "Importera en pluginmapp från den här servern",
   "1f190833cb8cefd1": "Välj mapp…",
   "e30b840393c5dc4c": "Importera",
+  "3c29d619c9072db5": "Läs in listan igen",
   "954573ade31e4d7d": "Plugin lägger till ett versionshanteringssystem som T3 Code inte levereras med. Se pluginguiden för manifestformatet.",
   "0424112d5a0ecd71": "Auto",
   "3f0e1b77e45d53a9": "Tryck för att växla, håll ned för att prata",
