@@ -205,13 +205,25 @@ it.layer(NodeServices.layer)("WorkspaceFolders", (it) => {
         recursive: true,
       });
       yield* fileSystem.writeFileString(path.join(workspaceRoot, "web", ".kite", "HEAD"), "main\n");
-      // A plugin that cannot create worktrees, or is turned off.
+      // A plugin that cannot create worktrees.
       yield* fileSystem.makeDirectory(path.join(workspaceRoot, "docs", ".other"), {
         recursive: true,
       });
       yield* fileSystem.writeFileString(path.join(workspaceRoot, "docs", ".other", "HEAD"), "x\n");
+      // Its marker wins over `.git` at the same root, as the driver registry decides.
+      for (const marker of [".git", ".other"])
+        yield* fileSystem.makeDirectory(path.join(workspaceRoot, "both", marker), {
+          recursive: true,
+        });
+      yield* fileSystem.writeFileString(path.join(workspaceRoot, "both", ".other", "HEAD"), "x\n");
+      // Off, so no driver reads it.
+      yield* fileSystem.makeDirectory(path.join(workspaceRoot, "off", ".gone"), {
+        recursive: true,
+      });
+      yield* fileSystem.writeFileString(path.join(workspaceRoot, "off", ".gone", "HEAD"), "x\n");
       const plugins = {
-        installedMarkers: () => [".kite/HEAD", ".other/HEAD"],
+        markers: () => [".kite/HEAD", ".other/HEAD"],
+        installedMarkers: () => [".kite/HEAD", ".other/HEAD", ".gone/HEAD"],
         worktreeMarkers: () => [".kite/HEAD"],
       } as unknown as VcsPluginDrivers["Service"];
       const found = yield* WorkspaceFolders.discoverFolders(workspaceRoot).pipe(
@@ -219,7 +231,7 @@ it.layer(NodeServices.layer)("WorkspaceFolders", (it) => {
       );
       assert.deepEqual(
         found.map((folder) => folder.name),
-        ["api", "docs", "web"],
+        ["api", "both", "docs", "off", "web"],
       );
       // Both are repositories, but only one whose plugin can create worktrees is offered one.
       yield* Effect.gen(function* () {
@@ -229,7 +241,9 @@ it.layer(NodeServices.layer)("WorkspaceFolders", (it) => {
           folders.map((folder) => [folder.name, folder.state, folder.worktrees]),
           [
             ["api", "git", undefined],
+            ["both", "git", false],
             ["docs", "git", false],
+            ["off", "git", false],
             ["web", "git", undefined],
           ],
         );

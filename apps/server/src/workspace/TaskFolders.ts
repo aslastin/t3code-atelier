@@ -253,12 +253,14 @@ const make = Effect.gen(function* () {
     }
     return false;
   });
-  // A plugin that cannot create worktrees leaves its repository shared, linked like a plain folder.
+  // As the driver registry decides on its own: an available plugin's marker wins over `.git`.
   const canGetWorktree = Effect.fnUntraced(function* (folder: string) {
-    for (const marker of [".git", ...(plugins?.worktreeMarkers() ?? [])]) {
-      if (yield* exists(path.join(folder, marker))) return true;
-    }
-    return false;
+    const has = Effect.fnUntraced(function* (markers: ReadonlyArray<string>) {
+      for (const marker of markers) if (yield* exists(path.join(folder, marker))) return true;
+      return false;
+    });
+    if (yield* has(plugins?.markers() ?? [])) return yield* has(plugins!.worktreeMarkers());
+    return yield* exists(path.join(folder, ".git"));
   });
   const trackedFolders = (project: {
     readonly workspaceRoot: string;
@@ -434,11 +436,16 @@ const make = Effect.gen(function* () {
       yield* trackedFolders(project),
       (folder) => {
         const folderPath = path.resolve(folder.path);
-        return Effect.all([canGetWorktree(folderPath), isSubmodule(folderPath)]).pipe(
-          Effect.map(([git, submodule]) => ({
+        return Effect.all([
+          isRepository(folderPath),
+          canGetWorktree(folderPath),
+          isSubmodule(folderPath),
+        ]).pipe(
+          Effect.map(([git, worktree, submodule]) => ({
             name: folder.name,
             path: folderPath,
             git,
+            worktree,
             submodule,
           })),
         );
@@ -463,9 +470,11 @@ const make = Effect.gen(function* () {
       tracked.map((folder) => folder.path),
     );
     const reachable = tracked.filter((folder) => !unreachable.includes(folder.path));
+    // A repository whose plugin cannot create worktrees is left out of the folder, not linked.
+    const offered = reachable.filter((folder) => folder.worktree);
     let repositories: ReadonlyArray<ProjectTrackedFolder>;
     if (input.repositories === undefined) {
-      repositories = reachable.length <= TASK_FOLDER_DEFAULT_REPOSITORIES_MAX ? reachable : [];
+      repositories = offered.length <= TASK_FOLDER_DEFAULT_REPOSITORIES_MAX ? offered : [];
     } else {
       const selected = new Map<string, ProjectTrackedFolder>();
       for (const requested of input.repositories) {
@@ -480,6 +489,12 @@ const make = Effect.gen(function* () {
               folder === undefined
                 ? `"${requested.path}" is not a tracked folder of project "${project.title}".`
                 : `"${requested.path}" is not a Git repository, so it cannot get a worktree.`,
+          });
+        }
+        if (!folder.worktree) {
+          return yield* new TaskFolderError({
+            operation: "plan",
+            detail: `"${requested.path}" belongs to a VCS plugin that cannot create worktrees now.`,
           });
         }
         if (unreachable.includes(folder.path)) {

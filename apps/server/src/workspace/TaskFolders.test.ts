@@ -325,6 +325,7 @@ it.live("gives a VCS plugin's project folder a checkout, not links to the origin
         Layer.provide(
           Layer.succeed(VcsPluginDrivers, {
             hasAny: () => true,
+            markers: () => [".kite/HEAD", ".other/HEAD"],
             installedMarkers: () => [".kite/HEAD", ".other/HEAD"],
             worktreeMarkers: () => [".kite/HEAD", ".other/HEAD"],
           } as unknown as VcsPluginDrivers["Service"]),
@@ -364,9 +365,11 @@ it.live(
       const chosen = yield* taskFolders
         .plan({ projectId, repositories: [{ path: docs }] })
         .pipe(Effect.flip);
-      assert.include(chosen.detail, "cannot get a worktree");
+      assert.include(chosen.detail, "cannot create worktrees");
       // The base asked for is one the plugin's repository does not have.
-      yield* create("feature", undefined, "develop");
+      const { taskFolder } = yield* create("feature", undefined, "develop");
+      // Left out of the folder like any repository not chosen, never linked to its checkout.
+      assert.isFalse(yield* fileSystem.exists(path.join(taskFolder.root, "docs")));
       assert.deepEqual(
         state.pluginCreated?.map((created) => created.refName),
         ["main"],
@@ -377,6 +380,8 @@ it.live(
           Layer.provide(
             Layer.succeed(VcsPluginDrivers, {
               hasAny: () => true,
+              // Other is available, but cannot create worktrees.
+              markers: () => [".kite/HEAD", ".other/HEAD"],
               installedMarkers: () => [".kite/HEAD", ".other/HEAD"],
               worktreeMarkers: () => [".kite/HEAD"],
             } as unknown as VcsPluginDrivers["Service"]),

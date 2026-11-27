@@ -137,11 +137,15 @@ const folderProbes = Effect.gen(function* () {
   const classify = Effect.fnUntraced(function* (
     folder: ProjectTrackedFolder,
   ): Effect.fn.Return<WorkspaceFolder> {
-    if (yield* exists(path.join(folder.path, ".git"))) return { ...folder, state: "git" };
-    if (yield* hasPluginMarker(folder.path, (plugins) => plugins.installedMarkers()))
+    // As the driver registry decides on its own: an available plugin's marker wins over `.git`.
+    if (yield* hasPluginMarker(folder.path, (plugins) => plugins.markers()))
       return (yield* hasPluginMarker(folder.path, (plugins) => plugins.worktreeMarkers()))
         ? { ...folder, state: "git" }
         : { ...folder, state: "git", worktrees: false };
+    if (yield* exists(path.join(folder.path, ".git"))) return { ...folder, state: "git" };
+    // A plugin turned off or unavailable: still a repository, but it cannot get a worktree.
+    if (yield* hasPluginMarker(folder.path, (plugins) => plugins.installedMarkers()))
+      return { ...folder, state: "git", worktrees: false };
     return { ...folder, state: (yield* exists(folder.path)) ? "plain" : "missing" };
   });
 

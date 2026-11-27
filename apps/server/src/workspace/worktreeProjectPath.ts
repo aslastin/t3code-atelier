@@ -32,6 +32,29 @@ export const worktreeProjectFolder = Effect.fn("worktreeProjectFolder")(
   Effect.orElseSucceed(() => null),
 );
 
+/** Whether `folder` is a checkout root: Git's, or an installed VCS plugin's. */
+export const isCheckoutRoot = Effect.fn("isCheckoutRoot")(
+  function* (
+    fs: FileSystem.FileSystem,
+    path: Path.Path,
+    folder: string,
+    /** Marker paths of VCS plugins; those of every installed plugin when left out. */
+    markers?: ReadonlyArray<string>,
+  ) {
+    const rootMarkers =
+      markers ??
+      Option.match(yield* Effect.serviceOption(VcsPluginDrivers), {
+        onNone: () => [],
+        onSome: (plugins) => plugins.installedMarkers(),
+      });
+    for (const marker of [".git", ...rootMarkers]) {
+      if (yield* fs.exists(path.join(folder, marker))) return true;
+    }
+    return false;
+  },
+  Effect.orElseSucceed(() => false),
+);
+
 // A removed checkout has no gitfile. Match the source project's subfolder component by component
 // so recovery can find the same root, while a stored checkout root keeps its original meaning.
 export const worktreeRootForProject = Effect.fn("worktreeRootForProject")(

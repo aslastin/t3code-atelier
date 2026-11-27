@@ -40,7 +40,12 @@ import {
   withExclusiveWorkspaceReservation,
   withSharedWorkspaceReservation,
 } from "../workspace/workspaceLease.ts";
-import { relativeProjectFolder, worktreeProjectFolder } from "../workspace/worktreeProjectPath.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
+import {
+  isCheckoutRoot,
+  relativeProjectFolder,
+  worktreeProjectFolder,
+} from "../workspace/worktreeProjectPath.ts";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -297,6 +302,7 @@ const make = Effect.gen(function* () {
   const terminals = yield* TerminalManager.TerminalManager;
   const git = yield* GitWorkflow.GitWorkflowService;
   const fs = yield* FileSystem.FileSystem;
+  const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
   const path = yield* Path.Path;
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
   const setupScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
@@ -1592,9 +1598,12 @@ const make = Effect.gen(function* () {
           workspaceStrategy.type === "existing_worktree" &&
           !input.initialMessage?.sourcePlanRef &&
           Option.isNone(launchReceipt) &&
-          (yield* fs
-            .exists(path.join(workspaceStrategy.worktreePath, ".git"))
-            .pipe(Effect.orElseSucceed(() => false)))
+          (yield* isCheckoutRoot(
+            fs,
+            path,
+            workspaceStrategy.worktreePath,
+            plugins?.installedMarkers(),
+          ))
         ) {
           const root = yield* git
             .repositoryRoot(project.workspaceRoot)

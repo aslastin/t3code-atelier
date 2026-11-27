@@ -5,7 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
-import { worktreeRootForProject } from "./worktreeProjectPath.ts";
+import { isCheckoutRoot, worktreeRootForProject } from "./worktreeProjectPath.ts";
 
 it.effect("finds a VCS plugin's checkout root by the markers of the installed plugins", () =>
   Effect.gen(function* () {
@@ -34,10 +34,24 @@ it.effect("finds a VCS plugin's checkout root by the markers of the installed pl
           hasAny: () => false,
           markers: () => [],
           installedMarkers: () => [".kite/HEAD"],
-          worktreeMarkers: () => [".kite/HEAD"],
+          worktreeMarkers: () => [],
         } as unknown as VcsPluginDrivers["Service"]),
       ),
       worktree,
+    );
+    // A selected checkout gets the project's folder inside it only when it is one.
+    const plugins = {
+      installedMarkers: () => [".kite/HEAD"],
+    } as unknown as VcsPluginDrivers["Service"];
+    assert.isTrue(
+      yield* isCheckoutRoot(fs, path, worktree).pipe(
+        Effect.provideService(VcsPluginDrivers, plugins),
+      ),
+    );
+    assert.isFalse(
+      yield* isCheckoutRoot(fs, path, path.join(worktree, "app")).pipe(
+        Effect.provideService(VcsPluginDrivers, plugins),
+      ),
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

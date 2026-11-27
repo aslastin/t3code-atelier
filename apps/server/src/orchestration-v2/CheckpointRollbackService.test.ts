@@ -503,7 +503,7 @@ it.effect.each([
               // Kite is off: its marker is installed but not among the running plugins'.
               markers: () => [],
               installedMarkers: () => [".kite/HEAD"],
-              worktreeMarkers: () => [".kite/HEAD"],
+              worktreeMarkers: () => [],
               describe: () => undefined,
             }),
             Layer.mock(CheckpointService.CheckpointServiceV2)({
