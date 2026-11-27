@@ -168,8 +168,9 @@ type LimitRecoverySettings = Pick<
   "autoResumeLimitedThreads" | "snoozeLimitedThreads"
 >;
 
-// A folder a plugin marks while the project's VCS did not answer: never handed to Git.
-const UNVERIFIED_PLUGIN = "unverified" as VcsDriverKind;
+// A folder a plugin marks while the project's VCS did not answer or its plugin is off.
+// Not a valid plugin id, so no plugin is ever mistaken for it.
+const UNVERIFIED_PLUGIN = "!unverified" as VcsDriverKind;
 // A plugin may keep native snapshots inside the checkout; a live thread would lose them.
 const NATIVE_CHECKPOINTS_REASON =
   "its VCS plugin's snapshots of the thread's checkpoints are in it";
@@ -405,8 +406,9 @@ const make = Effect.gen(function* () {
     if (!gitWorkflowHasPlugins()) return null;
     // Even beside a `.git`: the plugin's marker decides which VCS owns the folder.
     const project = yield* projectPlugin(projectRoot);
-    if (project === "unanswered") {
-      // The project's VCS did not answer: a folder any plugin marks is not handed to Git.
+    if (project === "unanswered" || project === null) {
+      // The project's VCS did not answer, or its plugin is off: a folder any installed plugin
+      // marks is never handed to Git, which cannot see the plugin's commits or snapshots.
       for (const marker of plugins?.installedMarkers() ?? []) {
         if (
           yield* fs.exists(path.join(worktreePath, marker)).pipe(Effect.orElseSucceed(() => true))
@@ -415,7 +417,6 @@ const make = Effect.gen(function* () {
       }
       return null;
     }
-    if (project === null) return null;
     const { kind, plugin } = project;
     let marked = false;
     for (const marker of plugin.markers) {
@@ -436,7 +437,11 @@ const make = Effect.gen(function* () {
   const pluginCheckoutAround = Effect.fnUntraced(function* (target: string, projectCwd: string) {
     if (!gitWorkflowHasPlugins()) return null;
     const project = yield* projectPlugin(projectCwd);
-    const markers = project === "unanswered" ? [] : (project?.plugin.markers ?? []);
+    // Unanswered, any installed plugin's marker counts: the removal may still resolve upward.
+    const markers =
+      project === "unanswered"
+        ? (plugins?.installedMarkers() ?? [])
+        : (project?.plugin.markers ?? []);
     if (markers.length === 0) return null;
     // Physical ancestors, as the plugin's removal resolves them: a link's own name would
     // check a smaller folder than the one removed.
@@ -1229,7 +1234,7 @@ const make = Effect.gen(function* () {
         // A VCS plugin's checkout passes the checks its own sweep does, and the plugin removes it.
         const pluginKind = yield* pluginWorktreeKind(checkoutPath, checkout.repositoryPath);
         if (pluginKind === UNVERIFIED_PLUGIN)
-          return { keep: "its VCS plugin did not answer", force: false, bytes: null };
+          return { keep: "its VCS plugin is off or did not answer", force: false, bytes: null };
         if (pluginKind !== null) {
           const state = yield* pluginWorktreeState(checkoutPath, branch, rules);
           const recoverable =
@@ -1656,7 +1661,8 @@ const make = Effect.gen(function* () {
                     thread.branch,
                     settings,
                     settingsChangedSinceCheck,
-                    deleted,
+                    // Only when no live thread shares the folder, such as a deleted one's subagent.
+                    deleted && group.length === 0,
                   ).pipe(
                     Effect.tap(({ bytes }) =>
                       Effect.sync(() => checkoutBytes.set(checkout.worktreePath, bytes)),
@@ -1694,7 +1700,8 @@ const make = Effect.gen(function* () {
         // Atelier fork: a VCS plugin's worktree goes through the plugin. Only age, settling and
         // deletion apply; the merge and unchanged rules read Git history a plugin does not expose.
         const pluginKind = yield* pluginWorktreeKind(worktreePath, project.workspaceRoot);
-        if (pluginKind === UNVERIFIED_PLUGIN) return keep("its VCS plugin did not answer");
+        if (pluginKind === UNVERIFIED_PLUGIN)
+          return keep("its VCS plugin is off or did not answer");
         if (pluginKind !== null) {
           if (!eligible) return keep(notDueReason);
           const pluginPathReason = yield* worktreePathReason(worktreePath, false);
@@ -1708,8 +1715,10 @@ const make = Effect.gen(function* () {
           }
           // A live thread's next turn brings its checkout back: the plugin checks the branch out
           // again, so the repository must still list it once the worktree is gone.
+          // A live thread sharing a deleted one's checkout, such as its subagent, still needs it.
+          const forgotten = deleted && group.length === 0;
           const unrecoverable = Effect.fnUntraced(function* (recreates: boolean) {
-            if (deleted) return false;
+            if (forgotten) return false;
             const branch = thread.branch;
             if (!recreates || branch === null) return true;
             const names = yield* gitWorkflow.listLocalBranchNames(project.workspaceRoot);
@@ -1717,7 +1726,7 @@ const make = Effect.gen(function* () {
           });
           const cannotRecreate = `${first.label} could not recreate it for the thread's next turn`;
           if (yield* unrecoverable(first.recreates)) return keep(cannotRecreate);
-          if (!deleted && (yield* holdsNativeCheckpoints(worktreePath)))
+          if (!forgotten && (yield* holdsNativeCheckpoints(worktreePath)))
             return keep(NATIVE_CHECKPOINTS_REASON);
           if (first.changes !== null) return keep(first.changes);
           const blocked = yield* blockedSinceCheck();

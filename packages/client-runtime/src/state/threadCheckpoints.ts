@@ -61,6 +61,8 @@ export function deriveThreadCheckpointSummaries(
       const scope = scopeById.get(checkpoint.scopeId);
       if (
         checkpoint.runId === null ||
+        // A ready one restores; only its diff is unavailable, and the turn's own note says so.
+        checkpoint.status === "ready" ||
         checkpoint.unavailableReason === undefined ||
         scope === undefined ||
         !isRepositoryCheckpointScope(scope)

@@ -525,7 +525,10 @@ it.effect.each([
               get: () => Effect.succeedSome({ workspaceRoot } as never),
             }),
             layerNoTaskFolders,
-            Layer.mock(GitWorkflow.GitWorkflowService)({}),
+            // The project's plugin lists its checkout, so a rewind restores into it.
+            Layer.mock(GitWorkflow.GitWorkflowService)({
+              listWorktrees: () => Effect.succeed([worktreePath]),
+            }),
             Layer.mock(VcsPluginDrivers)({
               hasAny: () => true,
               // Kite is off: its marker is installed but not among the running plugins'.

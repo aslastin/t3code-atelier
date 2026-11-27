@@ -165,6 +165,12 @@ export const layer: Layer.Layer<
     const rootMarkers = () => plugins?.installedMarkers() ?? [];
     // A VCS plugin's checkout carries its marker where a Git checkout carries `.git`, even
     // while that plugin is off: its folder is never a leftover to set aside.
+    const hasPluginMarker = Effect.fnUntraced(function* (folder: string) {
+      for (const marker of plugins?.installedMarkers() ?? []) {
+        if (yield* fileSystem.exists(path.join(folder, marker))) return true;
+      }
+      return false;
+    });
     const hasCheckout = Effect.fnUntraced(function* (folder: string) {
       for (const marker of [".git", ...(plugins?.installedMarkers() ?? [])]) {
         if (yield* fileSystem.exists(path.join(folder, marker))) return true;
@@ -332,6 +338,29 @@ export const layer: Layer.Layer<
           restoreFiles &&
           (yield* fileSystem.exists(worktreePath)) &&
           !(yield* hasCheckout(worktreePath));
+        // Atelier fork: a plugin's shadow checkpoints are keyed by path, so another checkout of
+        // the same VCS put there since would pass for the thread's. Only one the project's VCS
+        // lists is restored into.
+        if (restoreFiles && !leftover && (yield* hasPluginMarker(worktreePath))) {
+          const project = yield* projects.get(context.thread.projectId);
+          const listed = Option.isNone(project)
+            ? null
+            : yield* gitWorkflow
+                .listWorktrees(project.value.workspaceRoot)
+                .pipe(Effect.orElseSucceed((): ReadonlyArray<string> | null => null));
+          const real = (target: string) =>
+            fileSystem.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
+          const own = yield* real(worktreePath);
+          let isListed = false;
+          for (const entry of listed ?? []) if ((yield* real(entry)) === own) isListed = true;
+          if (!isListed)
+            return yield* new CheckpointRollbackExecutionError({
+              reason: "worktree-has-files",
+              threadId: input.threadId,
+              providerThreadId: input.providerThreadId,
+              checkpointId: input.checkpointId,
+            });
+        }
         if (
           (leftover || !(yield* fileSystem.exists(worktreePath))) &&
           (yield* isManagedWorktreePath(worktreePath))
@@ -387,13 +416,31 @@ export const layer: Layer.Layer<
               );
               // Atelier fork: kept until the whole rewind is done. A checkpoint found unrestorable
               // after the checkout came back must not cost the files that were left there.
+              // A repository left inside, with history no checkpoint saved, is kept even then.
+              const holdsRepository = fileSystem.readDirectory(aside, { recursive: true }).pipe(
+                Effect.map((entries) => {
+                  const markers = [".git", ...rootMarkers()].map((marker) => marker.toLowerCase());
+                  return entries.some((entry) => {
+                    const relative = entry.split(path.sep).join("/").toLowerCase();
+                    return markers.some(
+                      (marker) =>
+                        relative.endsWith(`/${marker}`) || relative.includes(`/${marker}/`),
+                    );
+                  });
+                }),
+                Effect.orElseSucceed(() => true),
+              );
               yield* Effect.addFinalizer((exit) =>
-                Exit.isSuccess(exit)
-                  ? fileSystem.remove(aside, { recursive: true, force: true }).pipe(Effect.ignore)
-                  : Effect.logWarning("A failed edit from here kept the folder it set aside", {
-                      worktreePath,
-                      setAside: path.join(aside, "folder"),
-                    }),
+                Effect.gen(function* () {
+                  if (Exit.isSuccess(exit) && !(yield* holdsRepository)) {
+                    yield* fileSystem.remove(aside, { recursive: true, force: true });
+                    return;
+                  }
+                  yield* Effect.logWarning("Edit from here kept the folder it set aside", {
+                    worktreePath,
+                    setAside: path.join(aside, "folder"),
+                  });
+                }).pipe(Effect.ignore),
               );
             } else {
               yield* recreate;
