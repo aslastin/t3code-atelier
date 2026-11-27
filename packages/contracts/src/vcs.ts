@@ -41,6 +41,8 @@ export const VcsDriverCapabilities = Schema.Struct({
   supportsPartialCommit: Schema.optionalKey(Schema.Boolean),
   /** Atelier fork: whether a VCS plugin can pull. */
   supportsPull: Schema.optionalKey(Schema.Boolean),
+  /** Atelier fork: whether a VCS plugin can fetch a worktree's base, for "Start from remote". */
+  supportsFetchBase: Schema.optionalKey(Schema.Boolean),
 });
 export type VcsDriverCapabilities = typeof VcsDriverCapabilities.Type;
 

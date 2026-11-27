@@ -142,7 +142,12 @@ export class GitWorkflowService extends Context.Service<
       readonly refName: string;
       readonly remote?: GitVcsDriver.GitWorktreeBaseRemote;
     }) => Effect.Effect<
-      { readonly commitSha: string; readonly remoteRefName: string } | null,
+      {
+        readonly commitSha: string;
+        readonly remoteRefName: string;
+        /** Atelier fork: a VCS plugin's base as it named it, used as is instead of a Git ref. */
+        readonly baseRefName?: string;
+      } | null,
       VcsWorkflowCommandError
     >;
     readonly resolveDefaultBranchName: (
@@ -843,8 +848,14 @@ export const make = Effect.gen(function* () {
           "GitWorkflowService.resolveWorktreeBaseRemote",
           input.cwd,
           () => git.resolveWorktreeBaseRemote(input),
-          // A driver's worktreeCreate starts from the base it is given; there is nothing to fetch.
-          () => Effect.succeed(null),
+          // A driver's worktreeCreate starts from the base it is given; only a plugin with
+          // `fetchBase` has something to fetch first.
+          (ops) =>
+            Effect.succeed(
+              ops.fetchWorktreeBase === undefined
+                ? null
+                : { remoteName: "remote", branchName: input.refName },
+            ),
         );
       },
     ),
@@ -854,7 +865,16 @@ export const make = Effect.gen(function* () {
           "GitWorkflowService.fetchWorktreeBaseCommit",
           input.cwd,
           () => git.fetchWorktreeBaseCommit(input),
-          () => Effect.succeed(null),
+          (ops) =>
+            ops.fetchWorktreeBase === undefined
+              ? Effect.succeed(null)
+              : ops.fetchWorktreeBase({ cwd: input.cwd, refName: input.refName }).pipe(
+                  Effect.map(({ baseRef }) => ({
+                    commitSha: baseRef,
+                    remoteRefName: baseRef,
+                    baseRefName: baseRef,
+                  })),
+                ),
         );
       },
     ),

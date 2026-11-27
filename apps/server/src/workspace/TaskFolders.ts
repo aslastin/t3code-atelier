@@ -616,7 +616,10 @@ const make = Effect.gen(function* () {
         : null;
     return remoteBase === null
       ? { refName: baseRef, baseRefName: baseRef }
-      : { refName: remoteBase.commitSha, baseRefName: `refs/remotes/${remoteBase.remoteRefName}` };
+      : {
+          refName: remoteBase.commitSha,
+          baseRefName: remoteBase.baseRefName ?? `refs/remotes/${remoteBase.remoteRefName}`,
+        };
   });
 
   /**

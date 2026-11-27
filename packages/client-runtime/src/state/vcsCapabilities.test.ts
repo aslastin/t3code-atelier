@@ -65,8 +65,9 @@ describe("vcsCapabilities", () => {
     expect(vcsAllows(plugin({ supportsPartialCommit: false }), "partialCommit")).toBe(false);
     expect(vcsAllows(plugin(), "partialCommit")).toBe(true);
     expect(vcsAllows(git, "switchRef")).toBe(true);
-    // A plugin that pulls still cannot fetch a worktree's base from the remote.
+    // Pulling is not fetching a worktree's base; only `fetchBase` offers Start from remote.
     expect(vcsAllows(plugin({ supportsPull: true }), "startFromRemote")).toBe(false);
+    expect(vcsAllows(plugin({ supportsFetchBase: true }), "startFromRemote")).toBe(true);
     expect(vcsAllows(git, "startFromRemote")).toBe(true);
   });
 

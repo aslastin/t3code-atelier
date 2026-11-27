@@ -266,6 +266,10 @@ switch (command) {
     out({ subjects: subjects.reverse() });
     break;
   }
+  // The remote is the repository itself here: the fetched base is the branch as it is.
+  case "fetch-base":
+    out({ baseRef: args[0] });
+    break;
   case "branch-rename": {
     const [oldRef, newRef] = args;
     const head = path.join(kite, "HEAD");
@@ -345,6 +349,7 @@ export function writeFakeVcsPlugin(directory: string, options: FakeVcsPluginOpti
           log: [kite, "log"],
           branchCreate: [kite, "branch-create", "{newRef}"],
           branchRename: [kite, "branch-rename", "{oldRef}", "{newRef}"],
+          fetchBase: [kite, "fetch-base", "{ref}"],
           worktreeCreate: [kite, "worktree-add", "{path}", "{newRef}", "{baseRef}"],
           worktreeRemove: [kite, "worktree-remove", "{path}"],
           worktreeAttach: [kite, "worktree-attach", "{path}", "{ref}"],

@@ -2337,6 +2337,42 @@ it.effect("fetches the origin base from the remote it already resolved", () => {
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect("starts a worktree from the base a VCS plugin fetched, named as the plugin gave it", () =>
+  Effect.gen(function* () {
+    const created =
+      yield* Deferred.make<
+        Parameters<GitWorkflow.GitWorkflowService["Service"]["createWorktree"]>[0]
+      >();
+    const harness = makeHarness({
+      fetchWorktreeBaseCommit: () =>
+        Effect.succeed({
+          commitSha: "kite/main",
+          remoteRefName: "kite/main",
+          baseRefName: "kite/main",
+        }),
+      createWorktree: (input) =>
+        Deferred.succeed(created, input).pipe(
+          Effect.as({
+            worktree: { path: "/repo-worktrees/feature", refName: input.newRefName! },
+          } as never),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      yield* launches.launch(
+        launchInput({
+          command: "command:launch:plugin-remote-base",
+          thread: "thread:launch:plugin-remote-base",
+          workspace: { type: "worktree", baseRef: "main", startFromOrigin: true },
+        }),
+      );
+      const input = yield* Deferred.await(created);
+      assert.equal(input.refName, "kite/main");
+      assert.equal(input.baseRefName, "kite/main");
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
 it.effect("shows the fetch diagnosis when preparing a worktree from origin fails", () => {
   const detail =
     "Git could not authenticate with the remote. Check Git credentials or SSH access on the server, then retry.";

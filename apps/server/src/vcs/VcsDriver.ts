@@ -151,6 +151,14 @@ export interface VcsWorkflowOps {
     },
     { readonly branch: string }
   >;
+  /**
+   * Atelier fork: brings a branch up to date from the remote without touching the checkout, and
+   * returns the ref or revision a worktree should start from.
+   */
+  readonly fetchWorktreeBase?: WorkflowOperation<
+    { readonly cwd: string; readonly refName: string },
+    { readonly baseRef: string }
+  >;
   /** Forgets worktrees whose folder is gone, before one is created at the same path again. */
   readonly pruneWorktrees?: WorkflowOperation<{ readonly cwd: string }, void>;
   readonly commit?: WorkflowOperation<

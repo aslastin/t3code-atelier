@@ -547,7 +547,8 @@ const make = Effect.gen(function* () {
         if (remoteBase.base !== null) {
           return {
             startRef: remoteBase.base.commitSha,
-            baseRefName: `refs/remotes/${remoteBase.base.remoteRefName}`,
+            baseRefName:
+              remoteBase.base.baseRefName ?? `refs/remotes/${remoteBase.base.remoteRefName}`,
           };
         }
         // A completed fetch that found no branch means the branch is gone and its
@@ -749,7 +750,7 @@ const make = Effect.gen(function* () {
               .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
             if (remoteBase !== null) {
               startRef = remoteBase.commitSha;
-              baseRefName = `refs/remotes/${remoteBase.remoteRefName}`;
+              baseRefName = remoteBase.baseRefName ?? `refs/remotes/${remoteBase.remoteRefName}`;
               fetchedBase = true;
             }
           }

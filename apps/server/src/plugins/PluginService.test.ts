@@ -359,6 +359,19 @@ describe("ManifestVcsDriver", () => {
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
+  it.live("fetches a worktree's base through the plugin, for Start from remote", () =>
+    Effect.gen(function* () {
+      const { driver, repository } = yield* setup();
+      assert.isTrue(driver!.capabilities?.supportsFetchBase);
+      const fetched = yield* driver!.workflow!.fetchWorktreeBase!({
+        cwd: repository,
+        refName: "main",
+      });
+      assert.deepStrictEqual(fetched, { baseRef: "main" });
+      assert.include(fakeCalls(repository), "fetch-base main");
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   it.live("creates a worktree where T3 puts it, keeps the project subfolder, and removes it", () =>
     Effect.gen(function* () {
       const { driver, repository, home } = yield* setup();

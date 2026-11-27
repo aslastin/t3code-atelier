@@ -6,6 +6,7 @@ import {
   GitCommandError,
   VcsPluginCommitOutput,
   VcsPluginPullOutput,
+  VcsPluginFetchBaseOutput,
   VcsPluginPushOutput,
   VcsPluginRefsOutput,
   VcsPluginRemotesOutput,
@@ -408,6 +409,13 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
         return { branch };
       }),
     }),
+    ...(commands.fetchBase && {
+      fetchWorktreeBase: Effect.fn("ManifestVcsDriver.fetchWorktreeBase")(function* (request) {
+        return yield* json("fetchBase", VcsPluginFetchBaseOutput, request.cwd, {
+          ref: request.refName,
+        });
+      }),
+    }),
     ...(commands.diff && {
       workingDiff: Effect.fn("ManifestVcsDriver.workingDiff")(function* (request) {
         const out = yield* withTextFile(
@@ -618,6 +626,7 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
       supportsBranchCreate: commands.branchCreate !== undefined,
       supportsPartialCommit: usesPlaceholder(commands.commit, "pathsFile"),
       supportsPull: commands.pull !== undefined,
+      supportsFetchBase: commands.fetchBase !== undefined,
     },
     execute: Effect.fn("ManifestVcsDriver.execute")(function* () {
       return yield* unsupported("execute", "Plugins run only their own commands.");

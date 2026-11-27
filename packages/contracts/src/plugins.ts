@@ -38,6 +38,8 @@ export const VcsPluginCommands = Schema.Struct({
   branchCreate: Schema.optionalKey(PluginArgv),
   /** Renames a branch, such as a new worktree's temporary one once its thread has a name. */
   branchRename: Schema.optionalKey(PluginArgv),
+  /** Fetches a branch from the remote without touching the checkout, for "Start from remote". */
+  fetchBase: Schema.optionalKey(PluginArgv),
   /** Checks an existing ref out into a new worktree, to bring back one that was removed. */
   worktreeAttach: Schema.optionalKey(PluginArgv),
   worktreeList: Schema.optionalKey(PluginArgv),
@@ -152,6 +154,11 @@ export const VcsPluginPullOutput = Schema.Struct({
   status: Schema.Literals(["pulled", "skipped_up_to_date"]),
   refName: TrimmedNonEmptyString,
   upstreamRef: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+});
+
+/** The ref or revision a worktree starts from, once `fetchBase` brought it up to date. */
+export const VcsPluginFetchBaseOutput = Schema.Struct({
+  baseRef: TrimmedNonEmptyString,
 });
 
 export const VcsPluginWorktreeCreateOutput = Schema.Struct({
