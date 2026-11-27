@@ -729,7 +729,11 @@ export function useComposerCommandMenu({
         ? pullRequestProjectId === null || pullRequestRepository === null
           ? gt("Pull requests are unavailable for this project.")
           : pullRequestSearch.error
-        : null,
+        : trigger?.kind === "path" && pathSearch.unavailable
+          ? gt(
+              "File search isn't available in this repository yet. Type two or more letters to find threads or models.",
+            )
+          : null,
     onSelect,
   };
 }

@@ -315,6 +315,8 @@ export type ProjectEntry = typeof ProjectEntry.Type;
 export const ProjectSearchEntriesResult = Schema.Struct({
   entries: Schema.Array(ProjectEntry),
   truncated: Schema.Boolean,
+  /** Atelier fork: set when file search is off here, as in a VCS plugin's repository. */
+  unavailable: Schema.optionalKey(Schema.Boolean),
 });
 export type ProjectSearchEntriesResult = typeof ProjectSearchEntriesResult.Type;
 

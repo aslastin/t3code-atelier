@@ -77,6 +77,7 @@ export function ThreadFileNavigatorPane(props: {
       searchQuery={searchQuery}
       searchResultPaths={entriesQuery.searchResultPaths}
       searchTruncated={entriesQuery.searchTruncated}
+      searchUnavailable={entriesQuery.searchUnavailable}
       selectedPath={props.selectedPath ?? entriesQuery.selectedPath}
       onPreviewFile={handlePreviewFile}
       onRefresh={entriesQuery.refresh}

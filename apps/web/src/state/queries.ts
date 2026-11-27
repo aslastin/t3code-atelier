@@ -358,6 +358,7 @@ export function useProjectPathSearch(
     searchedTarget: debouncedTarget,
     searchedQuery: debouncedTarget.query ?? "",
     truncated: result.data?.truncated ?? false,
+    unavailable: hasTarget && result.data?.unavailable === true,
     refresh: result.refresh,
   };
 }

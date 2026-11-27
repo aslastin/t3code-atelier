@@ -1188,7 +1188,7 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
         } as unknown as VcsPluginDrivers["Service"]);
         expect(
           yield* searchWorkspaceEntries({ cwd: project, query: "index", limit: 10 }).pipe(inPlugin),
-        ).toEqual({ entries: [], truncated: false });
+        ).toEqual({ entries: [], truncated: false, unavailable: true });
         expect(yield* workspaceEntries.list({ cwd: project }).pipe(inPlugin)).toEqual({
           entries: [],
           truncated: false,

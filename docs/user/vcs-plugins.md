@@ -30,9 +30,10 @@ plugins whose markers can sit in the same folder: only one of them owns it.
 
 In a plugin's repository, even while the plugin is off, T3 Code does not walk or index the
 project's files: a large repository or a network mount could make that slow or download every
-file. File mentions (`@`), the file tree's filter, and opening a link by file name find nothing,
-and text search (`Ctrl+Shift+F` / `⌘⇧F`) says it is not available. Browsing the file tree one
-folder at a time still works, and a Git repository inside keeps its own search.
+file. File mentions (`@`), the file tree's filter, and text search (`Ctrl+Shift+F` / `⌘⇧F`) say
+file search is not available, though `@` still finds threads and models by name. Opening a link by
+file name finds nothing. Browsing the file tree one folder at a time still works, and a Git
+repository inside keeps its own search.
 
 ## Write a plugin
 

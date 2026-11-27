@@ -115,6 +115,8 @@ export function FileTreeBrowser(props: {
   readonly searchQuery: string;
   readonly searchResultPaths: ReadonlySet<string> | null;
   readonly searchTruncated: boolean;
+  /** Atelier fork: file search is off in this repository, as in a VCS plugin's. */
+  readonly searchUnavailable?: boolean;
   readonly selectedPath: string | null;
   readonly loadingDirectories: ReadonlySet<string>;
   readonly onLoadDirectory: (path: string, retry?: boolean) => void;
@@ -282,12 +284,18 @@ export function FileTreeBrowser(props: {
           ) : (
             <>
               <Text className="text-sm font-t3-bold text-foreground">
-                <T>No files found</T>
+                {props.searchUnavailable ? (
+                  <T>File search isn't available here yet</T>
+                ) : (
+                  <T>No files found</T>
+                )}
               </Text>
               <Text className="mt-1 text-xs leading-normal text-foreground-muted">
-                {props.searchQuery.trim().length > 0
-                  ? gt("Try a different search.")
-                  : gt("The workspace is empty.")}
+                {props.searchUnavailable
+                  ? gt("Clear the search and open folders to browse this repository.")
+                  : props.searchQuery.trim().length > 0
+                    ? gt("Try a different search.")
+                    : gt("The workspace is empty.")}
               </Text>
             </>
           )}

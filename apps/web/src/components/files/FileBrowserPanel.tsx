@@ -637,7 +637,11 @@ export default function FileBrowserPanel({
       {hasNoSearchMatches ? (
         ready && !isPending && !pathSearch.isPending && !error && !pathSearch.error ? (
           <div role="status" className="px-3 py-4 text-xs text-muted-foreground">
-            <T>No matching files.</T>
+            {pathSearch.unavailable ? (
+              <T>File search isn't available in this repository yet. Open folders to browse it.</T>
+            ) : (
+              <T>No matching files.</T>
+            )}
           </div>
         ) : null
       ) : (

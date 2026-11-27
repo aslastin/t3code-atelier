@@ -318,7 +318,8 @@ export const make = Effect.gen(function* () {
   const search: WorkspaceEntries["Service"]["search"] = Effect.fn("WorkspaceEntries.search")(
     function* (input) {
       const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
-      if (yield* inPluginRepository(normalizedCwd)) return { entries: [], truncated: false };
+      if (yield* inPluginRepository(normalizedCwd))
+        return { entries: [], truncated: false, unavailable: true };
       const normalizedQuery = normalizeSearchQuery(input.query, {
         trimLeadingPattern: /^[@./]+/,
       });
