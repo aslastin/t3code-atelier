@@ -178,6 +178,7 @@ export default function FileBrowserPanel({
     error,
     isPending,
     loadingDirectories,
+    treeWalkUnavailable,
   } = useDirectoryEntries(environmentId, cwd);
   const [query, setQuery] = useState("");
   const [expandAll, setExpandAll] = useState(false);
@@ -577,7 +578,7 @@ export default function FileBrowserPanel({
           onValueChange={handleSearchValueChange}
           onClose={closeSearch}
         />
-        {directoryPaths.length > 0 && !hostFolder ? (
+        {directoryPaths.length > 0 && !hostFolder && !treeWalkUnavailable ? (
           <Tooltip>
             <TooltipTrigger
               render={

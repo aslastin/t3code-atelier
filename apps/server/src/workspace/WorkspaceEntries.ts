@@ -558,9 +558,12 @@ export const make = Effect.gen(function* () {
           catch: toError,
         });
         // Atelier fork: a Git repository around a VCS plugin's checkout does not decide what the
-        // plugin's files are; only one nested inside the folder does.
-        if (nestedGitRoots.length === 0 && (yield* inPluginRepository(normalizedCwd)))
-          return { entries, truncated: false };
+        // plugin's files are; only one nested inside the folder does. Its tree is never opened
+        // whole, so clients do not offer to.
+        const pluginRepository = yield* inPluginRepository(normalizedCwd);
+        const walk = pluginRepository ? { treeWalkUnavailable: true } : {};
+        if (nestedGitRoots.length === 0 && pluginRepository)
+          return { entries, truncated: false, ...walk };
         let gitRoot = "";
         let gitPrefix = "";
         // stdin avoids argument limits; ignore classification is optional without git/repositories.
@@ -596,6 +599,7 @@ export const make = Effect.gen(function* () {
           return {
             entries: entries.map((entry) => ({ ...entry, ignored: true })),
             truncated: false,
+            ...walk,
           };
         }
         const ignored = new Set<string>();
@@ -611,6 +615,7 @@ export const make = Effect.gen(function* () {
             ignored.has(entry.path) ? { ...entry, ignored: true } : entry,
           ),
           truncated: false,
+          ...walk,
         };
       }
       // The whole tree at once; one folder at a time, above, reads only that folder.

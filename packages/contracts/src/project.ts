@@ -364,6 +364,8 @@ export type ProjectListEntriesInput = typeof ProjectListEntriesInput.Type;
 export const ProjectListEntriesResult = Schema.Struct({
   entries: Schema.Array(ProjectEntry),
   truncated: Schema.Boolean,
+  /** Atelier fork: a VCS plugin's repository, whose folders open one at a time, never all. */
+  treeWalkUnavailable: Schema.optionalKey(Schema.Boolean),
 });
 export type ProjectListEntriesResult = typeof ProjectListEntriesResult.Type;
 

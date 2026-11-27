@@ -1219,6 +1219,8 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
           .list({ cwd: project, directoryPath: "src" })
           .pipe(inPlugin);
         expect(folder.entries).toEqual([{ path: "src/index.ts", kind: "file" }]);
+        // Clients open its folders one at a time, never all at once.
+        expect(folder.treeWalkUnavailable).toBe(true);
         const inside = yield* searchWorkspaceEntries({
           cwd: nested,
           query: "tool",
