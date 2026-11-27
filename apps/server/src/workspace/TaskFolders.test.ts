@@ -313,6 +313,10 @@ it.live("gives a VCS plugin's project folder a checkout, not links to the origin
     assert.include(unlisted.detail, "is not a worktree of");
     state.pluginWorktrees = [shop, checkout];
     yield* restore;
+    // A plugin may keep a Git clone of its own there; its marker still decides.
+    yield* fileSystem.makeDirectory(path.join(checkout, ".git"));
+    yield* restore;
+    yield* fileSystem.remove(path.join(checkout, ".git"), { recursive: true });
     // Another VCS's checkout at the listed path is not the thread's.
     yield* fileSystem.remove(path.join(checkout, ".kite"), { recursive: true });
     yield* fileSystem.makeDirectory(path.join(checkout, ".other"), { recursive: true });
@@ -327,7 +331,11 @@ it.live("gives a VCS plugin's project folder a checkout, not links to the origin
             hasAny: () => true,
             markers: () => [".kite/HEAD", ".other/HEAD"],
             installedMarkers: () => [".kite/HEAD", ".other/HEAD"],
-            worktreeMarkers: () => [".kite/HEAD", ".other/HEAD"],
+            available: () =>
+              [".kite/HEAD", ".other/HEAD"].map((marker) => ({
+                markers: [marker],
+                worktrees: true,
+              })),
           } as unknown as VcsPluginDrivers["Service"]),
         ),
       ),
@@ -383,7 +391,10 @@ it.live(
               // Other is available, but cannot create worktrees.
               markers: () => [".kite/HEAD", ".other/HEAD"],
               installedMarkers: () => [".kite/HEAD", ".other/HEAD"],
-              worktreeMarkers: () => [".kite/HEAD"],
+              available: () => [
+                { markers: [".kite/HEAD"], worktrees: true },
+                { markers: [".other/HEAD"], worktrees: false },
+              ],
             } as unknown as VcsPluginDrivers["Service"]),
           ),
         ),

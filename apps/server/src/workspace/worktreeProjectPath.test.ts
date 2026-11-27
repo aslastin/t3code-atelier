@@ -34,7 +34,7 @@ it.effect("finds a VCS plugin's checkout root by the markers of the installed pl
           hasAny: () => false,
           markers: () => [],
           installedMarkers: () => [".kite/HEAD"],
-          worktreeMarkers: () => [],
+          available: () => [].map((marker) => ({ markers: [marker], worktrees: true })),
         } as unknown as VcsPluginDrivers["Service"]),
       ),
       worktree,

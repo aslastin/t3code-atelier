@@ -216,6 +216,12 @@ it.layer(NodeServices.layer)("WorkspaceFolders", (it) => {
           recursive: true,
         });
       yield* fileSystem.writeFileString(path.join(workspaceRoot, "both", ".other", "HEAD"), "x\n");
+      for (const marker of [".kite", ".other"]) {
+        yield* fileSystem.makeDirectory(path.join(workspaceRoot, "pair", marker), {
+          recursive: true,
+        });
+        yield* fileSystem.writeFileString(path.join(workspaceRoot, "pair", marker, "HEAD"), "x\n");
+      }
       // Off, so no driver reads it.
       yield* fileSystem.makeDirectory(path.join(workspaceRoot, "off", ".gone"), {
         recursive: true,
@@ -224,14 +230,18 @@ it.layer(NodeServices.layer)("WorkspaceFolders", (it) => {
       const plugins = {
         markers: () => [".kite/HEAD", ".other/HEAD"],
         installedMarkers: () => [".kite/HEAD", ".other/HEAD", ".gone/HEAD"],
-        worktreeMarkers: () => [".kite/HEAD"],
+        // Other comes first and cannot create worktrees, so it owns a folder Kite marks too.
+        available: () => [
+          { markers: [".other/HEAD"], worktrees: false },
+          { markers: [".kite/HEAD"], worktrees: true },
+        ],
       } as unknown as VcsPluginDrivers["Service"];
       const found = yield* WorkspaceFolders.discoverFolders(workspaceRoot).pipe(
         Effect.provideService(VcsPluginDrivers, plugins),
       );
       assert.deepEqual(
         found.map((folder) => folder.name),
-        ["api", "both", "docs", "off", "web"],
+        ["api", "both", "docs", "off", "pair", "web"],
       );
       // Both are repositories, but only one whose plugin can create worktrees is offered one.
       yield* Effect.gen(function* () {
@@ -244,6 +254,7 @@ it.layer(NodeServices.layer)("WorkspaceFolders", (it) => {
             ["both", "git", false],
             ["docs", "git", false],
             ["off", "git", false],
+            ["pair", "git", false],
             ["web", "git", undefined],
           ],
         );

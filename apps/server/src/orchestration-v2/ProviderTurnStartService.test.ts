@@ -450,7 +450,7 @@ effectIt.effect("recreates a missing project subfolder in a VCS plugin's checkou
       Effect.provideService(VcsPluginDrivers, {
         markers: () => [],
         installedMarkers: () => [".kite/HEAD"],
-        worktreeMarkers: () => [],
+        available: () => [].map((marker) => ({ markers: [marker], worktrees: true })),
       } as unknown as VcsPluginDrivers["Service"]),
     );
     expect(yield* fs.exists(`${checkout}/my-project`)).toBe(true);

@@ -137,11 +137,17 @@ const folderProbes = Effect.gen(function* () {
   const classify = Effect.fnUntraced(function* (
     folder: ProjectTrackedFolder,
   ): Effect.fn.Return<WorkspaceFolder> {
-    // As the driver registry decides on its own: an available plugin's marker wins over `.git`.
-    if (yield* hasPluginMarker(folder.path, (plugins) => plugins.markers()))
-      return (yield* hasPluginMarker(folder.path, (plugins) => plugins.worktreeMarkers()))
-        ? { ...folder, state: "git" }
-        : { ...folder, state: "git", worktrees: false };
+    // As the driver registry decides on its own: the first available plugin whose marker the
+    // folder holds owns it, even beside a `.git`.
+    const plugins = yield* Effect.serviceOption(VcsPluginDrivers);
+    for (const plugin of Option.isSome(plugins) ? plugins.value.available() : []) {
+      for (const marker of plugin.markers) {
+        if (yield* exists(path.join(folder.path, marker)))
+          return plugin.worktrees
+            ? { ...folder, state: "git" }
+            : { ...folder, state: "git", worktrees: false };
+      }
+    }
     if (yield* exists(path.join(folder.path, ".git"))) return { ...folder, state: "git" };
     // A plugin turned off or unavailable: still a repository, but it cannot get a worktree.
     if (yield* hasPluginMarker(folder.path, (plugins) => plugins.installedMarkers()))

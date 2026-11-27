@@ -567,6 +567,21 @@ describe("turn changes", () => {
     ]);
   });
 
+  it("says why a tracked repository has no snapshot in its turn's summary", () => {
+    const [summary] = deriveThreadCheckpointSummaries({
+      checkpoints: [
+        checkpoint("root-1", "scope-root", 1, { status: "missing", appRunOrdinal: 1 }),
+        checkpoint("web-1", "scope-web", 1, {
+          status: "missing",
+          unavailableReason: "No Kite checkpoint strategy worked.",
+        }),
+      ],
+      checkpointScopes: scopes,
+      messages: [],
+    });
+    expect(summary?.unavailableReason).toBe("web: No Kite checkpoint strategy worked.");
+  });
+
   it("shows a turn whose own checkpoint is missing when repositories changed", () => {
     expect(summaries.map(turnHasChanges)).toEqual([true, true]);
     expect(turnHasChanges({ files: [] })).toBe(false);

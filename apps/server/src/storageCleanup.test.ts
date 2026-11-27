@@ -519,7 +519,11 @@ const cleanupFixture = (
         // A second plugin's marker is installed too; the project belongs to Kite.
         markers: () => [".kite/HEAD", ".other/HEAD"],
         installedMarkers: () => (plugin === undefined ? [] : [".kite/HEAD", ".other/HEAD"]),
-        worktreeMarkers: () => (plugin === undefined ? [] : [".kite/HEAD", ".other/HEAD"]),
+        available: () =>
+          (plugin === undefined ? [] : [".kite/HEAD", ".other/HEAD"]).map((marker) => ({
+            markers: [marker],
+            worktrees: true,
+          })),
         describe: (kind: string) =>
           plugin && kind === "kite"
             ? { label: "Kite", recreatesWorktrees: plugin.recreates, markers: [".kite/HEAD"] }
@@ -2232,6 +2236,14 @@ describe("VCS plugin worktrees", () => {
       reason: "Has commits that are not pushed",
     },
     {
+      // The plugin's marker decides, as the driver registry does, even beside a gitfile.
+      name: "a worktree with commits that are not pushed beside a gitfile",
+      deleted: true,
+      aheadCount: 2,
+      gitFile: true,
+      reason: "Has commits that are not pushed",
+    },
+    {
       name: "an untracked file",
       deleted: true,
       files: untracked,
@@ -2260,6 +2272,8 @@ describe("VCS plugin worktrees", () => {
         { recreates: row.recreates === true },
       );
       const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      if (row.gitFile)
+        yield* fixture.fs.writeFileString(`${fixture.pluginWorktree}/.git`, "gitdir: elsewhere\n");
       fixture.setThreads(row.deleted ? [] : [thread]);
       fixture.setDeletedThreads(row.deleted ? [thread] : []);
       fixture.setPluginStatus({

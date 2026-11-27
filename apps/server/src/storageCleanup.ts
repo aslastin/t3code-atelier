@@ -379,7 +379,7 @@ const make = Effect.gen(function* () {
     );
   };
   // A VCS plugin's worktree: the plugin that owns the project lists it, and the folder carries
-  // that plugin's marker, not `.git`. Its kind, or null for anything else.
+  // that plugin's marker. Its kind, or null for anything else.
   const projectPlugin = Effect.fnUntraced(function* (projectRoot: string) {
     const project = yield* gitWorkflow
       .localStatus({ cwd: projectRoot })
@@ -393,8 +393,7 @@ const make = Effect.gen(function* () {
     projectRoot: string,
   ) {
     if (!gitWorkflowHasPlugins()) return null;
-    if (yield* fs.exists(path.join(worktreePath, ".git")).pipe(Effect.orElseSucceed(() => true)))
-      return null;
+    // Even beside a `.git`: the plugin's marker decides which VCS owns the folder.
     const project = yield* projectPlugin(projectRoot);
     if (project === null) return null;
     const { kind, plugin } = project;
