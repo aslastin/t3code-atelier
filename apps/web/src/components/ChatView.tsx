@@ -3687,7 +3687,12 @@ export default function ChatView(props: ChatViewProps) {
                     ? { onWorktreeSetupWorkLocally: onWorktreeSetupWorkLocallyStable }
                     : {})}
                   {...(onOpenWorktreeSetupTerminal ? { onOpenWorktreeSetupTerminal } : {})}
-                  isPreparingWorktree={isPreparingWorktree}
+                  // Atelier fork: a launch into the current checkout prepares no worktree.
+                  isPreparingWorktree={
+                    isPreparingWorktree &&
+                    serverProjection?.runs.find((run) => run.id === activeActivityRun?.runId)
+                      ?.workspacePreparation?.type !== "root"
+                  }
                   footer={timelineFooter}
                   listRef={legendListRef}
                   runs={serverProjection?.runs ?? []}
