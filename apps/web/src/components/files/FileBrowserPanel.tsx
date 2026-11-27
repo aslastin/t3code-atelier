@@ -472,9 +472,10 @@ export default function FileBrowserPanel({
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- expands every directory in the Pierre tree model while expand-all is on and no search is active
   useEffect(() => {
-    if (expandAll && !query.trim())
+    // Atelier fork: a tree found to hold a VCS plugin's checkout stops expanding at once.
+    if (expandAll && !treeWalkUnavailable && !query.trim())
       setAllDirectoriesExpanded(model, expandableDirectoryPaths, true);
-  }, [expandableDirectoryPaths, expandAll, model, query]);
+  }, [expandableDirectoryPaths, expandAll, model, query, treeWalkUnavailable]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reveals an externally selected path in the Pierre tree model by expanding, selecting and scrolling
   useEffect(() => {
