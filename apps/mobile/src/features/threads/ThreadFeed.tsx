@@ -65,7 +65,7 @@ import {
 } from "@t3tools/client-runtime/user-message";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
-import { turnChanges } from "@t3tools/client-runtime/state/thread-repositories";
+import { turnChanges, turnHasChanges } from "@t3tools/client-runtime/state/thread-repositories";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
@@ -2764,6 +2764,21 @@ function TurnDiffStat(props: {
   readonly onOpenTurnDiff: (checkpoint: ThreadCheckpointSummary) => void;
 }) {
   const gt = useGT();
+  // Atelier fork: a VCS plugin's turn without a snapshot, or one that cannot be compared.
+  const reason = props.checkpoint.unavailableReason;
+  if (!turnHasChanges(props.checkpoint))
+    return reason === undefined ? null : (
+      <Text className="px-2 py-1 text-xs text-foreground-muted">
+        {props.checkpoint.status === "ready"
+          ? gt("This turn's changes cannot be shown: {reason}", { reason })
+          : gt(
+              "No checkpoint for this turn, so its changes cannot be shown or rolled back: {reason}",
+              {
+                reason,
+              },
+            )}
+      </Text>
+    );
   const { repositories, rootFiles, totals } = turnChanges(props.checkpoint);
   const { additions, deletions } = totals;
   const folderCount = repositories.length + (rootFiles.length > 0 ? 1 : 0);
