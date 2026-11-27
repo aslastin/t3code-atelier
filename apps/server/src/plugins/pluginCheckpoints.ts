@@ -823,12 +823,21 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     }
     // A marker reached through a link, such as a metadata folder that is one, is not walked:
     // the folder holding such a link is probed as the driver would.
-    const heads = new Set([".git", ...markers.map((marker) => marker.split("/")[0]!)]);
+    // Any folder of a marker's path can be the link, so each of its leading parts is matched.
+    const leads = [".git", ...markers].flatMap((marker) => {
+      const parts = marker.split("/");
+      return parts
+        .slice(0, Math.max(1, parts.length - 1))
+        .map((_, index) => parts.slice(0, index + 1).join("/"));
+    });
     const probed = new Set([""]);
     for (const entry of walked) {
-      const name = entry.path.split("/").at(-1)!.toLowerCase();
-      if (entry.kind === "link" && heads.has(name))
-        probed.add(entry.path.split("/").slice(0, -1).join("/"));
+      if (entry.kind !== "link") continue;
+      const lower = entry.path.toLowerCase();
+      for (const lead of leads) {
+        if (lower === lead) probed.add("");
+        else if (lower.endsWith(`/${lead}`)) probed.add(entry.path.slice(0, -lead.length - 1));
+      }
     }
     for (const relative of probed) {
       if (yield* isRepositoryRoot(relative === "" ? absolute : path.join(absolute, relative)))

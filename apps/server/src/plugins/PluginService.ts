@@ -271,13 +271,17 @@ const make = Effect.gen(function* () {
   }, Effect.provideContext(services));
 
   /** An entry whose check passed, with its driver. */
-  // One per plugin id, so a re-check's new driver waits on the deletion the old one started.
-  const nativeSnapshotLocks = new Map<string, Semaphore.Semaphore>();
-  const nativeSnapshotsFor = Effect.fnUntraced(function* (id: string) {
-    const existing = nativeSnapshotLocks.get(id);
+  // One set per plugin id, so a re-check's new driver waits on what the old one started: a
+  // native snapshot deletion, or a worktree creation between its check and its command.
+  const pluginLocks = new Map<
+    string,
+    { readonly native: Semaphore.Semaphore; readonly creating: Semaphore.Semaphore }
+  >();
+  const locksFor = Effect.fnUntraced(function* (id: string) {
+    const existing = pluginLocks.get(id);
     if (existing !== undefined) return existing;
-    const created = yield* Semaphore.make(1);
-    nativeSnapshotLocks.set(id, created);
+    const created = { native: yield* Semaphore.make(1), creating: yield* Semaphore.make(1) };
+    pluginLocks.set(id, created);
     return created;
   });
 
@@ -294,7 +298,7 @@ const make = Effect.gen(function* () {
       worktreesDirectory: worktreesDirectory.pipe(Effect.provideService(Path.Path, path)),
       installedMarkers: () =>
         [...entries.values()].flatMap((other) => other.manifest?.detect.markers ?? []),
-      nativeSnapshots: yield* nativeSnapshotsFor(manifest.id),
+      locks: yield* locksFor(manifest.id),
     });
     return {
       ...entry,
@@ -485,46 +489,48 @@ const make = Effect.gen(function* () {
         const target = path.join(directory, id);
         const previous = path.join(directory, `.previous-${id}.${NodeCrypto.randomUUID()}`);
         const hadPrevious = yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false));
-        // Uninterruptible: a cancelled import never leaves the running server without its copy.
+        // Uninterruptible from the swap to the registry: a cancelled import never leaves the
+        // running server without its copy, or with a driver for the copy it replaced.
         yield* Effect.gen(function* () {
-          if (hadPrevious) yield* fs.rename(target, previous);
-          // A failed swap puts the installed copy back where it was.
-          yield* fs
-            .rename(staging, target)
-            .pipe(
-              Effect.tapError(() =>
-                hadPrevious ? fs.rename(previous, target).pipe(Effect.ignore) : Effect.void,
-              ),
-            );
-        }).pipe(
-          Effect.uninterruptible,
-          Effect.mapError((cause) => failure(operation, cause.message, id)),
-          Effect.tapError(() => cleanupStaging),
-        );
-        if (hadPrevious)
-          yield* fs.remove(previous, { recursive: true, force: true }).pipe(Effect.ignore);
-        // Rebuild the driver on the installed folder, keeping what the check found: running the
-        // check again could find something else than what was approved.
-        const installed = yield* load(id, checked.enabled);
-        entries.set(
-          id,
-          checked.status === "available"
-            ? (yield* sameManifest(path.join(directory, id))) && installed.manifest !== null
-              ? yield* withDriver(
-                  installed,
-                  installed.manifest!,
-                  checked.version!,
-                  checked.checkedAt!,
-                )
-              : yield* check(installed)
-            : {
-                ...installed,
-                status: checked.status,
-                version: checked.version,
-                problems: checked.problems,
-                checkedAt: checked.checkedAt,
-              },
-        );
+          yield* Effect.gen(function* () {
+            if (hadPrevious) yield* fs.rename(target, previous);
+            // A failed swap puts the installed copy back where it was.
+            yield* fs
+              .rename(staging, target)
+              .pipe(
+                Effect.tapError(() =>
+                  hadPrevious ? fs.rename(previous, target).pipe(Effect.ignore) : Effect.void,
+                ),
+              );
+          }).pipe(
+            Effect.mapError((cause) => failure(operation, cause.message, id)),
+            Effect.tapError(() => cleanupStaging),
+          );
+          if (hadPrevious)
+            yield* fs.remove(previous, { recursive: true, force: true }).pipe(Effect.ignore);
+          // Rebuild the driver on the installed folder, keeping what the check found: running the
+          // check again could find something else than what was approved.
+          const installed = yield* load(id, checked.enabled);
+          entries.set(
+            id,
+            checked.status === "available"
+              ? (yield* sameManifest(path.join(directory, id))) && installed.manifest !== null
+                ? yield* withDriver(
+                    installed,
+                    installed.manifest!,
+                    checked.version!,
+                    checked.checkedAt!,
+                  )
+                : yield* check(installed)
+              : {
+                  ...installed,
+                  status: checked.status,
+                  version: checked.version,
+                  problems: checked.problems,
+                  checkedAt: checked.checkedAt,
+                },
+          );
+        }).pipe(Effect.uninterruptible);
         return snapshot();
       }),
     );

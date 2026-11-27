@@ -227,10 +227,10 @@ describe("PluginService", () => {
         const cutIcon = yield* plugins.importFolder(cut).pipe(Effect.flip);
         assert.include(cutIcon.message, "icon: icon.svg", svg);
       }
-      // A comment after the document is still a whole icon.
+      // A comment after the document is still a whole icon, as is `=` inside a value.
       NodeFS.writeFileSync(
         `${cut}/icon.svg`,
-        '<svg xmlns="http://www.w3.org/2000/svg"><circle r="3"/></svg>\n<!-- license -->\n',
+        '<svg xmlns="http://www.w3.org/2000/svg" aria-label="x=1 x=2"><circle r="3"/></svg>\n<!-- license -->\n',
       );
       yield* plugins.importFolder(cut);
     }).pipe(Effect.provide(layer), Effect.scoped),
@@ -806,6 +806,12 @@ describe("ManifestVcsDriver", () => {
           extraManifest: { detect: { markers: [".other/HEAD"] } },
         }),
       );
+      yield* plugins.importFolder(
+        writeFakeVcsPlugin(NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-deep-plugin-`), {
+          id: "deep",
+          extraManifest: { detect: { markers: [".deep/store/HEAD"] } },
+        }),
+      );
       NodeFS.mkdirSync(`${repository}/generated/clone/.git`, { recursive: true });
       NodeFS.writeFileSync(`${repository}/generated/clone/.git/HEAD`, "ref: refs/heads/main\n");
       NodeFS.writeFileSync(`${repository}/generated/clone/work.txt`, "work\n");
@@ -825,6 +831,12 @@ describe("ManifestVcsDriver", () => {
       NodeFS.mkdirSync(`${repository}/generated/linked`);
       NodeFS.symlinkSync(metadata, `${repository}/generated/linked/.kite`);
       NodeFS.writeFileSync(`${repository}/generated/linked/work.txt`, "work\n");
+      // Or a folder further along a marker's path.
+      const store = NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-deep-store-`);
+      NodeFS.writeFileSync(`${store}/HEAD`, "main\n");
+      NodeFS.mkdirSync(`${repository}/generated/deeper/.deep`, { recursive: true });
+      NodeFS.symlinkSync(store, `${repository}/generated/deeper/.deep/store`);
+      NodeFS.writeFileSync(`${repository}/generated/deeper/work.txt`, "work\n");
       yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("0") });
       for (const kept of [
         "clone/.git/HEAD",
@@ -833,6 +845,7 @@ describe("ManifestVcsDriver", () => {
         "deep/one/theirs/work.txt",
         "bare/HEAD",
         "linked/work.txt",
+        "deeper/work.txt",
       ])
         assert.isTrue(NodeFS.existsSync(`${repository}/generated/${kept}`), kept);
       NodeFS.rmSync(`${repository}/generated`, { recursive: true });

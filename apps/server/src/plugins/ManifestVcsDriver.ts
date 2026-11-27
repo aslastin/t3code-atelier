@@ -41,8 +41,9 @@ export interface ManifestVcsDriverInput {
   readonly worktreesDirectory: Effect.Effect<string | null>;
   /** Marker paths of every installed plugin, so a checkpoint restore can tell their checkouts. */
   readonly installedMarkers?: () => ReadonlyArray<string>;
-  /** Kept across rebuilds of the plugin's driver, so its native snapshots stay serialized. */
-  readonly nativeSnapshots?: Semaphore.Semaphore;
+  /** Kept across rebuilds of the plugin's driver, so its native snapshots and new worktrees
+   * stay serialized. */
+  readonly locks?: { readonly native: Semaphore.Semaphore; readonly creating: Semaphore.Semaphore };
 }
 
 /** Marker probes only: detection never starts a process. */
@@ -279,7 +280,7 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
 
   const commands = manifest.commands;
   // One creation at a time: the occupancy check and the plugin's command are not one step.
-  const creating = yield* Semaphore.make(1);
+  const creating = input.locks?.creating ?? (yield* Semaphore.make(1));
   const workflow: VcsDriver.VcsWorkflowOps = {
     status: (request) => status(request.cwd),
     listRefs: Effect.fn("ManifestVcsDriver.listRefs")(function* (request) {
@@ -549,7 +550,7 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
       ...new Set(manifest.detect.markers.map((marker) => marker.split(/[/\\]/)[0]!)),
     ],
     repositoryMarkers: () => [...manifest.detect.markers, ...(input.installedMarkers?.() ?? [])],
-    ...(input.nativeSnapshots === undefined ? {} : { nativeSnapshots: input.nativeSnapshots }),
+    ...(input.locks === undefined ? {} : { nativeSnapshots: input.locks.native }),
     repositoryRoot,
   });
 

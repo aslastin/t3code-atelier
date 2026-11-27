@@ -264,7 +264,9 @@ const isWholeSvg = (text: string) => {
     if (match === null || closedRoot) return false;
     const name = match[2]!;
     // An attribute given twice makes the document invalid XML.
-    const attributes = [...match[3]!.matchAll(/([^\s"'<>/=]+)\s*=/g)].map((found) => found[1]);
+    const attributes = [
+      ...match[3]!.matchAll(/\s+([^\s"'<>/=]+)\s*=\s*(?:"[^"<]*"|'[^'<]*')/g),
+    ].map((found) => found[1]);
     if (new Set(attributes).size !== attributes.length) return false;
     if (match[1] === "/") {
       if (open.pop() !== name || match[4] === "/" || attributes.length > 0) return false;
