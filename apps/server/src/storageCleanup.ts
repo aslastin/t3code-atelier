@@ -1196,13 +1196,15 @@ const make = Effect.gen(function* () {
     // copied settings can point at the developer's real worktrees.
     const isWorktreeDevHome =
       (yield* resolveWorktreeT3Home(config.baseDir)) === path.resolve(config.baseDir);
+    const homeWorktreesDir = path.join(config.baseDir, "worktrees");
     for (const directory of isWorktreeDevHome
-      ? [config.worktreesDir]
+      ? [...new Set([config.worktreesDir, homeWorktreesDir])]
       : managedWorktreesDirectories(
           serverSettings,
           config.worktreesDir,
           path,
           yield* HostProcess.HomeDirectory,
+          homeWorktreesDir,
         )) {
       const root = yield* fs.exists(directory).pipe(
         Effect.flatMap((exists) => (exists ? fs.realPath(directory) : Effect.succeed(null))),

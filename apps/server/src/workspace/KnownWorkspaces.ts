@@ -90,6 +90,7 @@ export const make = Effect.gen(function* () {
         config.worktreesDir,
         path,
         home,
+        path.join(config.baseDir, "worktrees"),
       );
       const managed = (yield* Effect.forEach(managedDirectories, resolveRoot)).filter(
         (root) => root !== null,
