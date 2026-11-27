@@ -1355,8 +1355,35 @@ const GITLINK_MODE = "160000";
 const DIFF_HEADER =
   /^diff --git (?:"a\/((?:[^"\\]|\\.)*)"|a\/(.+?)) (?:"b\/((?:[^"\\]|\\.)*)"|b\/(.+?))$/m;
 
+/** A `--- a/x` or `+++ b/x` line's path, quoted or not; null for `/dev/null` or none. */
+function patchLinePath(section: string, marker: "---" | "+++"): string | null | undefined {
+  const side = marker === "---" ? "a" : "b";
+  const line = new RegExp(`^${marker === "---" ? "---" : "\\+\\+\\+"} (.+)$`, "m").exec(
+    section.split(/^@@/m)[0]!,
+  )?.[1];
+  if (line === undefined) return undefined;
+  if (line === "/dev/null") return null;
+  if (line.startsWith(`"${side}/`) && line.endsWith('"')) return unquoteGitPath(line.slice(3, -1));
+  return line.startsWith(`${side}/`) ? line.slice(2).replace(/\t$/, "") : undefined;
+}
+
 /** The old and new paths of a patch section, quoted or not. */
 function diffHeaderPaths(section: string): readonly [string, string] | null {
+  // The `---` and `+++` lines name each path whole; the header splits ambiguously on " b/".
+  const from = patchLinePath(section, "---");
+  const to = patchLinePath(section, "+++");
+  if (from !== undefined && to !== undefined && (from !== null || to !== null))
+    return [from ?? to!, to ?? from!];
+  // Without them, as Git reads it: one path named twice.
+  const same = /^diff --git a\/(.+) b\/(.+)$/m.exec(section);
+  if (same !== null) {
+    const rest = `${same[1]} b/${same[2]}`;
+    const half = (rest.length - 3) / 2;
+    if (Number.isInteger(half) && rest.slice(half, half + 3) === " b/") {
+      const path = rest.slice(0, half);
+      if (rest.slice(half + 3) === path) return [path, path];
+    }
+  }
   const header = DIFF_HEADER.exec(section);
   if (header === null) {
     // Without prefixes (`diff.noprefix`), as Git reads it: one path named twice.
@@ -1366,9 +1393,9 @@ function diffHeaderPaths(section: string): readonly [string, string] | null {
     const from = rest.slice(0, half);
     return rest[half] === " " && rest.slice(half + 1) === from ? [from, from] : null;
   }
-  const from = header[1] !== undefined ? unquoteGitPath(header[1]) : header[2]!;
-  const to = header[3] !== undefined ? unquoteGitPath(header[3]) : header[4]!;
-  return [from, to];
+  const headerFrom = header[1] !== undefined ? unquoteGitPath(header[1]) : header[2]!;
+  const headerTo = header[3] !== undefined ? unquoteGitPath(header[3]) : header[4]!;
+  return [headerFrom, headerTo];
 }
 
 /** Git pathspecs for a diff limited to `files` and leaving out `excludes`, all literal. */

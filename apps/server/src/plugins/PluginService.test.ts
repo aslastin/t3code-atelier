@@ -376,6 +376,16 @@ describe("ManifestVcsDriver", () => {
       });
       assert.include(selected, "new.txt");
       assert.notInclude(selected, "a/a.txt");
+      // A header that splits two ways, `a/dir b/file.txt b/dir b/file.txt`, is read whole.
+      NodeFS.writeFileSync(`${repository}/dir`, "one\n");
+      NodeFS.mkdirSync(`${repository}/dir b`);
+      NodeFS.writeFileSync(`${repository}/dir b/file.txt`, "two\n");
+      const onlyDir = yield* driver!.workflow!.workingDiff!({
+        cwd: repository,
+        filePaths: ["dir"],
+      });
+      assert.include(onlyDir, "+one");
+      assert.notInclude(onlyDir, "+two");
 
       // One path per line: a name with a line break cannot be listed for the plugin.
       const ambiguous = yield* driver!.workflow!.commit!({
