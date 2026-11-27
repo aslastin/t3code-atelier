@@ -112,9 +112,10 @@ export function validateManifest(manifest: VcsPluginManifest): ReadonlyArray<str
     }
   }
   for (const marker of manifest.detect.markers) {
-    if (!isSafeRelativePath(marker))
+    // Only `/` separates folders, so every platform and every check reads the same path.
+    if (!isSafeRelativePath(marker) || marker.includes("\\"))
       errors.push(
-        `detect.markers: "${marker}" must be a path inside the repository folder, with no spaces around it.`,
+        `detect.markers: "${marker}" must be a path inside the repository folder, with no spaces around it and \`/\` between folders.`,
       );
   }
   if (manifest.icon !== undefined) {
@@ -246,17 +247,21 @@ const isWholeSvg = (text: string) => {
     .replace(/<!DOCTYPE[^>]*>/i, "")
     .trim();
   if (!/^<svg[\s>/]/i.test(body) || !/<\/svg\s*>$/i.test(body)) return false;
+  // Every `<` starts a whole tag, so a quote left open cannot hide one.
+  const tag = /<(\/?)([A-Za-z_][\w:.-]*)(?:\s+[^\s"'<>/=]+\s*=\s*(?:"[^"<]*"|'[^'<]*'))*\s*(\/?)>/y;
   const open: string[] = [];
   let closedRoot = false;
-  for (const tag of body.matchAll(/<(\/?)([A-Za-z_][\w:.-]*)(?:"[^"]*"|'[^']*'|[^'">])*?(\/?)>/g)) {
-    if (closedRoot) return false;
-    const name = tag[2]!;
-    if (tag[1] === "/") {
-      if (open.pop() !== name) return false;
-    } else if (tag[3] !== "/") open.push(name);
+  for (let at = body.indexOf("<"); at !== -1; at = body.indexOf("<", tag.lastIndex)) {
+    tag.lastIndex = at;
+    const match = tag.exec(body);
+    if (match === null || closedRoot) return false;
+    const name = match[2]!;
+    if (match[1] === "/") {
+      if (open.pop() !== name || match[3] === "/") return false;
+    } else if (match[3] !== "/") open.push(name);
     if (open.length === 0) closedRoot = true;
   }
-  return closedRoot && open.length === 0;
+  return closedRoot;
 };
 
 /** The icon's SVG text, or null when it is missing, too large, or outside the folder. */

@@ -408,6 +408,21 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
           request.cwd,
           request.path ?? (yield* managedWorktreePath(root, newRef, request.cwd)),
         );
+        // As `git worktree add`: never into a folder that holds anything, or one that cannot be
+        // looked into. The plugin's own command might write over its files.
+        const occupied = yield* fs.readDirectory(worktreePath).pipe(
+          Effect.map((names) => names.length > 0),
+          Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(false)),
+          Effect.orElseSucceed(() => true),
+        );
+        if (occupied)
+          return yield* new GitCommandError({
+            vcs: kind,
+            operation: `${kind}.worktreeCreate`,
+            command: "worktreeCreate",
+            cwd: request.cwd,
+            detail: `${worktreePath} already holds files, so no checkout is created there.`,
+          });
         yield* fs
           .makeDirectory(path.dirname(worktreePath), { recursive: true })
           .pipe(Effect.ignore);
@@ -447,7 +462,18 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
             cwd: request.cwd,
             detail: `${requested} is not a ${manifest.label} worktree.`,
           });
-        const target = marked?.root ?? requested;
+        const listed = runner.has("worktreeList") ? yield* listWorktreePaths(request.cwd) : [];
+        const isListed = Effect.fnUntraced(function* (candidate: string) {
+          const realCandidate = yield* real(candidate);
+          for (const entry of listed) {
+            if (path.resolve(entry) === candidate || (yield* real(entry)) === realCandidate)
+              return true;
+          }
+          return false;
+        });
+        // A listed path names that checkout itself, never one around it that a stale entry's
+        // folder happens to sit in.
+        const target = (yield* isListed(requested)) ? requested : (marked?.root ?? requested);
         const refuse = (detail: string) =>
           new GitCommandError({
             vcs: kind,
@@ -474,20 +500,15 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
           inside(realTarget, realCwd)
         )
           return yield* refuse("The repository itself is not a worktree.");
-        // A folder still there must be the plugin's checkout, forced or not: a stale entry can
-        // name a folder put in its place since.
-        if (marked === null && (yield* fs.exists(target).pipe(Effect.orElseSucceed(() => true))))
-          return yield* refuse(`${target} is not a ${manifest.label} checkout.`);
-        if (runner.has("worktreeList")) {
-          const listed = yield* listWorktreePaths(request.cwd);
-          let isListed = false;
-          for (const entry of listed) {
-            if (path.resolve(entry) === target || (yield* real(entry)) === realTarget)
-              isListed = true;
-          }
-          if (!isListed)
-            return yield* refuse(`${manifest.label} does not list ${target} as a worktree.`);
+        // A folder still there must be the plugin's checkout, its marker at its own root, forced
+        // or not: a stale entry can name a folder put in its place since.
+        if (yield* fs.exists(target).pipe(Effect.orElseSucceed(() => true))) {
+          const own = yield* detect(target);
+          if (own === null || (yield* real(own.root)) !== realTarget)
+            return yield* refuse(`${target} is not a ${manifest.label} checkout.`);
         }
+        if (runner.has("worktreeList") && !(yield* isListed(target)))
+          return yield* refuse(`${manifest.label} does not list ${target} as a worktree.`);
         // As `git worktree remove` without --force: local work keeps the checkout.
         if (
           request.force !== true &&

@@ -54,7 +54,14 @@ const executable = (file) => {
 const changes = () => {
   const base = path.join(kite, "base");
   const baseFiles = new Set(walk(base));
-  const work = new Set(walk(root));
+  // A test lists paths Kite ignores in .kite/ignored, one per line.
+  const ignoredFile = path.join(kite, "ignored");
+  const ignored = fs.existsSync(ignoredFile)
+    ? fs.readFileSync(ignoredFile, "utf8").split("\n").filter(Boolean)
+    : [];
+  const work = new Set(
+    walk(root).filter((file) => !ignored.some((entry) => file === entry || file.startsWith(entry + "/"))),
+  );
   const files = [];
   const addedDirs = new Set();
   for (const file of work) {

@@ -219,6 +219,8 @@ describe("PluginService", () => {
         "<svg><path",
         '<svg><svg><circle r="3"/></svg>',
         '<svg xmlns="http://www.w3.org/2000/svg"><g></svg>',
+        '<svg><g a="</svg>',
+        '<svg viewBox="0 0 16 16"><path d="M1 1"></svg>',
       ]) {
         NodeFS.writeFileSync(`${cut}/icon.svg`, svg);
         const cutIcon = yield* plugins.importFolder(cut).pipe(Effect.flip);
@@ -383,6 +385,18 @@ describe("ManifestVcsDriver", () => {
       yield* workflow.removeWorktree!({ cwd: `${repository}/sub`, path: worktree.projectPath! });
       assert.isFalse(NodeFS.existsSync(worktree.path));
       assert.deepStrictEqual(yield* workflow.listWorktrees!({ cwd: repository }), []);
+
+      // Never into a folder that holds files: the plugin's command could write over them.
+      NodeFS.mkdirSync(worktree.path);
+      NodeFS.writeFileSync(`${worktree.path}/a.txt`, "mine\n");
+      const occupied = yield* workflow.createWorktree!({
+        cwd: `${repository}/sub`,
+        refName: "t3code/feature",
+        path: worktree.path,
+      }).pipe(Effect.flip);
+      assert.include(occupied.message, "already holds files");
+      assert.strictEqual(NodeFS.readFileSync(`${worktree.path}/a.txt`, "utf8"), "mine\n");
+      NodeFS.rmSync(worktree.path, { recursive: true });
 
       // Brought back on the branch it had, as T3 Code does after cleanup removed a worktree.
       yield* workflow.pruneWorktrees!({ cwd: `${repository}/sub` });
@@ -739,6 +753,15 @@ describe("ManifestVcsDriver", () => {
       );
       assert.isTrue(NodeFS.existsSync(`${linkedFolder}/file.txt`));
       NodeFS.rmSync(`${repository}/shortcut`);
+      // Nor one inside a new folder.
+      NodeFS.mkdirSync(`${repository}/added`);
+      NodeFS.symlinkSync(linkedFolder, `${repository}/added/shortcut`);
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("2b") });
+      assert.isTrue(
+        yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("2b") }),
+      );
+      assert.isTrue(NodeFS.existsSync(`${linkedFolder}/file.txt`));
+      NodeFS.rmSync(`${repository}/added`, { recursive: true });
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
@@ -870,6 +893,22 @@ describe("ManifestVcsDriver", () => {
       assert.isFalse(yield* checkpoints.verifyRestorable!(aroundChild));
       yield* checkpoints.restoreCheckpoint(aroundChild).pipe(Effect.flip);
       assert.isTrue(NodeFS.existsSync(`${repository}/bundle/child/theirs.txt`));
+      NodeFS.rmSync(`${repository}/bundle`, { recursive: true });
+      NodeFS.rmSync(`${repository}/.kite/base/bundle`);
+
+      // Nor is a deleted file's path removed when files Kite does not report sit there now.
+      for (const copy of [`${repository}/.kite/base/bundle`, `${repository}/bundle`])
+        NodeFS.writeFileSync(copy, "bundle\n");
+      NodeFS.rmSync(`${repository}/bundle`);
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("5a") });
+      NodeFS.mkdirSync(`${repository}/bundle`);
+      NodeFS.writeFileSync(`${repository}/bundle/private.txt`, "notes\n");
+      NodeFS.writeFileSync(`${repository}/.kite/ignored`, "bundle/private.txt\n");
+      const overIgnored = { cwd: repository, checkpointRef: ref("5a") };
+      assert.isFalse(yield* checkpoints.verifyRestorable!(overIgnored));
+      yield* checkpoints.restoreCheckpoint(overIgnored).pipe(Effect.flip);
+      assert.isTrue(NodeFS.existsSync(`${repository}/bundle/private.txt`));
+      NodeFS.rmSync(`${repository}/.kite/ignored`);
       NodeFS.rmSync(`${repository}/bundle`, { recursive: true });
       NodeFS.rmSync(`${repository}/.kite/base/bundle`);
 

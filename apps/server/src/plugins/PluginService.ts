@@ -85,6 +85,7 @@ interface PluginEntry {
 
 const PluginState = Schema.Struct({ disabled: Schema.Array(Schema.String) });
 const decodeState = Schema.decodeUnknownEffect(Schema.fromJsonString(PluginState));
+const encodeState = Schema.encodeEffect(Schema.fromJsonString(PluginState));
 
 const summarize = (entry: PluginEntry): PluginSummary => ({
   id: entry.manifest?.id ?? entry.folder,
@@ -136,10 +137,20 @@ const make = Effect.gen(function* () {
     Effect.map((state) => new Set(state.disabled)),
     Effect.orElseSucceed(() => new Set<string>()),
   );
+  // Written beside and renamed over, so an interrupted write never reads as "nothing disabled".
   const writeDisabled = (disabled: ReadonlySet<string>) =>
     fs.makeDirectory(directory, { recursive: true }).pipe(
       Effect.andThen(
-        fs.writeFileString(statePath, JSON.stringify({ disabled: [...disabled].toSorted() })),
+        Effect.gen(function* () {
+          const staged = `${statePath}.${NodeCrypto.randomUUID()}.tmp`;
+          yield* fs.writeFileString(
+            staged,
+            yield* encodeState({ disabled: [...disabled].toSorted() }).pipe(Effect.orDie),
+          );
+          yield* fs
+            .rename(staged, statePath)
+            .pipe(Effect.tapError(() => fs.remove(staged, { force: true }).pipe(Effect.ignore)));
+        }),
       ),
       Effect.mapError((cause) =>
         failure("plugins.setEnabled", `Could not save plugin settings: ${cause.message}`),
@@ -313,8 +324,8 @@ const make = Effect.gen(function* () {
     const leftover = path.join(directory, name);
     if (name.startsWith(".previous-")) {
       const aside = yield* readManifest(fs, path, leftover);
-      // The name carries the folder too, for a copy whose manifest no longer reads.
-      const id = aside.manifest?.id ?? /^\.previous-(.+)\.[0-9a-f-]{36}$/.exec(name)?.[1];
+      // The name records the folder it came from; an older copy's name has only its manifest.
+      const id = /^\.previous-(.+)\.[0-9a-f-]{36}$/.exec(name)?.[1] ?? aside.manifest?.id;
       if (
         id !== undefined &&
         !(yield* fs.exists(path.join(directory, id)).pipe(Effect.orElseSucceed(() => true)))
@@ -323,7 +334,11 @@ const make = Effect.gen(function* () {
         continue;
       }
     }
-    if (name.startsWith(".previous-") || name.startsWith(".import-"))
+    if (
+      name.startsWith(".previous-") ||
+      name.startsWith(".import-") ||
+      name.startsWith(`${STATE_FILE_NAME}.`)
+    )
       yield* fs.remove(leftover, { recursive: true, force: true }).pipe(Effect.ignore);
   }
 
