@@ -669,10 +669,20 @@ const make = Effect.gen(function* () {
       // A plugin checkout mounted of its own is a virtual checkout of the whole repository:
       // walking it reads all of it through the mount. Its plugin's status decides alone, and
       // an orphan's size stays unknown.
-      if (inspectRepositories === "plugin" || inspectRepositories === false) {
-        const [own, parent] = yield* Effect.all([fs.stat(root), fs.stat(path.dirname(root))]);
-        if (own.dev !== parent.dev) return { bytes: null, reason: null };
+      const [own, parent, grandparent] = yield* Effect.all([
+        fs.stat(root),
+        fs.stat(path.dirname(root)),
+        fs.stat(path.dirname(path.dirname(root))),
+      ]);
+      if (own.dev !== parent.dev) {
+        if (inspectRepositories === "plugin" || inspectRepositories === false)
+          return { bytes: null, reason: null };
+        // Anything else mounted at its root is kept: what it holds is not this folder's.
+        return { bytes: null, reason: "worktree could not be fully inspected" };
       }
+      // An orphan inside a mount, such as a folder of a checkout listed as a worktree.
+      if (inspectRepositories === false && own.dev !== grandparent.dev)
+        return { bytes: null, reason: null };
       const skipped = yield* sharedPnpmVirtualStore(root);
       const incomplete = { bytes: null, reason: "worktree could not be fully inspected" };
       // A file system mounted below is not walked: it can be a whole monorepo.

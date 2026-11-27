@@ -350,6 +350,8 @@ const cleanupFixture = (
     readonly mounted?: boolean;
     /** A folder inside the checkout, relative to it, is a file system mounted there. */
     readonly innerMount?: string;
+    /** The Git worktree is a file system mounted of its own. */
+    readonly gitWorktreeMounted?: boolean;
   },
 ) =>
   Effect.gen(function* () {
@@ -412,11 +414,13 @@ const cleanupFixture = (
     const context = yield* Layer.build(StorageCleanup.layer).pipe(
       Effect.provideService(
         FileSystem.FileSystem,
-        plugin?.mounted || plugin?.innerMount !== undefined
+        plugin?.mounted || plugin?.innerMount !== undefined || plugin?.gitWorktreeMounted
           ? (() => {
-              const mount = plugin.mounted
-                ? pluginWorktree
-                : `${pluginWorktree}/${plugin.innerMount}`;
+              const mount = plugin.gitWorktreeMounted
+                ? worktree
+                : plugin.mounted
+                  ? pluginWorktree
+                  : `${pluginWorktree}/${plugin.innerMount}`;
               const onMount = (target: string) =>
                 target === mount || target.startsWith(`${mount}/`);
               return FileSystem.FileSystem.of({
@@ -2593,6 +2597,24 @@ describe("VCS plugin worktrees", () => {
         (candidate) => candidate.threadId === thread.id,
       );
       expect(entry?.outcome).toBe("removed");
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("keeps a Git worktree that is a file system mounted of its own", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, {
+        recreates: true,
+        gitWorktreeMounted: true,
+      });
+      const thread = shell({ branch: "feature", worktreePath: fixture.worktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry?.outcome).toBe("kept");
+      expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
     }).pipe(Effect.provide(cleanupTestLayer)),
   );
 
