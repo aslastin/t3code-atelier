@@ -195,7 +195,9 @@ export const make = Effect.gen(function* () {
           () => false,
         ),
       );
-    for (let folder = path.resolve(cwd); ; folder = path.dirname(folder)) {
+    // Physical ancestors, as the driver finds the repository: a link can point into one.
+    const start = yield* Effect.promise(() => NodeFSP.realpath(cwd).catch(() => path.resolve(cwd)));
+    for (let folder = start; ; folder = path.dirname(folder)) {
       for (const marker of markers) {
         if (yield* exists(path.join(folder, marker))) return true;
       }
@@ -227,9 +229,17 @@ export const make = Effect.gen(function* () {
       const normalizedCwd = yield* normalizeWorkspaceRoot(cwd).pipe(
         Effect.orElseSucceed(() => cwd),
       );
+      let pluginRepository: boolean | undefined;
       for (const variant of WorkspaceSearchIndex.WORKSPACE_SEARCH_INDEX_VARIANTS) {
         const indexKey = WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, variant);
         if (!(yield* RcMap.has(workspaceSearchIndexes.rcMap, indexKey))) {
+          continue;
+        }
+        // An index made before a plugin claimed the folder is dropped, never refreshed.
+        pluginRepository ??= yield* inPluginRepository(normalizedCwd);
+        if (pluginRepository) {
+          lastSearchedAt.delete(indexKey);
+          yield* workspaceSearchIndexes.invalidate(indexKey);
           continue;
         }
         const searchedAt = lastSearchedAt.get(indexKey) ?? 0;

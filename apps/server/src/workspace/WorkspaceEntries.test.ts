@@ -1207,6 +1207,12 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
           })
           .pipe(inPlugin, Effect.flip);
         expect(contents._tag).toBe("WorkspaceEntriesSearchUnavailableError");
+        // Opened through a link to the subfolder, it is still the plugin's repository.
+        const linked = `${yield* makeTempDir()}/linked`;
+        yield* Effect.promise(() => NodeFSP.symlink(project, linked));
+        expect(
+          yield* searchWorkspaceEntries({ cwd: linked, query: "index", limit: 10 }).pipe(inPlugin),
+        ).toEqual({ entries: [], truncated: false, unavailable: true });
         expect(create).not.toHaveBeenCalled();
 
         const folder = yield* workspaceEntries
@@ -1219,6 +1225,27 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
           limit: 10,
         }).pipe(inPlugin);
         expect(inside.entries.map((entry) => entry.path)).toContain("lib/tool.ts");
+      }),
+    );
+
+    it.effect("drops an index made before a plugin claimed the folder", () =>
+      Effect.gen(function* () {
+        const create = vi.spyOn(FileFinder, "create");
+        const cwd = yield* makeTempDir();
+        yield* writeTextFile(cwd, "src/index.ts");
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        yield* searchWorkspaceEntries({ cwd, query: "index", limit: 10 });
+        const made = create.mock.calls.length;
+        expect(made).toBeGreaterThan(0);
+        // A plugin's checkout now: refreshing drops the index instead of walking the tree.
+        yield* writeTextFile(cwd, ".kite/HEAD", "main\n");
+        yield* workspaceEntries.refresh(cwd).pipe(
+          Effect.provideService(VcsPluginDrivers, {
+            installedMarkers: () => [".kite/HEAD"],
+          } as unknown as VcsPluginDrivers["Service"]),
+        );
+        yield* searchWorkspaceEntries({ cwd, query: "index", limit: 10 });
+        expect(create.mock.calls.length).toBeGreaterThan(made);
       }),
     );
   });
