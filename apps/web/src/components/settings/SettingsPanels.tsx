@@ -2503,7 +2503,9 @@ export function MaintenanceSettingsPanel() {
             </Button>
           }
         />
-        <TelemetrySettings key={JSON.stringify(scope.environmentIds)} />
+        <TelemetrySettings
+          key={scope.kind === "environment" ? `environment:${scope.environmentId}` : scope.kind}
+        />
       </SettingsSection>
     </SettingsPageContainer>
   );

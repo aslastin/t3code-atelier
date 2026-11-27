@@ -132,7 +132,9 @@ export function TelemetryExportSettings() {
   const all = scope.kind === "all";
   return (
     <SettingsSearchTarget id="telemetry-endpoints" className="space-y-2 py-2">
-      <h3 className="text-base font-semibold">{gt("OpenTelemetry export")}</h3>
+      <h3 data-settings-scroll-target className="text-base font-semibold">
+        {gt("OpenTelemetry export")}
+      </h3>
       <SettingsGroup>
         {all && (
           <p className="px-4 py-3 text-center text-sm text-muted-foreground">
@@ -172,9 +174,13 @@ function EnvironmentExportPanel({
 }) {
   // Mount on the first expansion, then retain this environment's unsaved edits when folded.
   const [expanded, setExpanded] = useState<boolean>();
+  const triggerId = useId();
   return (
     <Collapsible open={expanded === true} onOpenChange={setExpanded}>
-      <CollapsibleTrigger className="group flex w-full min-w-0 items-center gap-3 rounded-lg px-3 py-3 text-left outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-4">
+      <CollapsibleTrigger
+        id={triggerId}
+        className="group flex w-full min-w-0 items-center gap-3 rounded-lg px-3 py-3 text-left outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-4"
+      >
         <EnvironmentMachineIcon
           aria-hidden
           kind={resolveEnvironmentMachineKind(environment.serverConfig)}
@@ -198,7 +204,7 @@ function EnvironmentExportPanel({
       </CollapsibleTrigger>
       <CollapsiblePanel keepMounted animate={false}>
         {expanded !== undefined && (
-          <TelemetryExportForm environment={environment} active={expanded} />
+          <TelemetryExportForm environment={environment} active={expanded} labelledBy={triggerId} />
         )}
       </CollapsiblePanel>
     </Collapsible>
@@ -208,9 +214,11 @@ function EnvironmentExportPanel({
 function TelemetryExportForm({
   environment,
   active = true,
+  labelledBy,
 }: {
   environment: ExportEnvironment;
   active?: boolean;
+  labelledBy?: string;
 }) {
   const messages = useMessages();
   const gt = useGT();
@@ -272,7 +280,8 @@ function TelemetryExportForm({
 
   return (
     <form
-      aria-label={environment.label}
+      aria-labelledby={labelledBy}
+      aria-label={labelledBy ? undefined : environment.label}
       className="grid gap-4 px-4 py-4 sm:px-5"
       onSubmit={async (event) => {
         event.preventDefault();

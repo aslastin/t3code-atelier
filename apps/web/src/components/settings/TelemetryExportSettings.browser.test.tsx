@@ -7,6 +7,7 @@ const { state, updateSettings, checkOtlpEndpoint, checkOtlpEndpointCommand } = v
   state: {
     allEnvironments: false,
     compareConnect: false,
+    duplicateLabels: false,
     listeners: new Set<() => void>(),
     observability: {} as typeof DEFAULT_SERVER_SETTINGS.observability,
     serverConfig: { environment: { capabilities: {} } } as {
@@ -29,12 +30,19 @@ function exportEnvironments() {
     environment: { ...state.serverConfig.environment, platform: { machine: "server" } },
   };
   return [
-    { environmentId: "ready", label: "Ready", connected: true, serverConfig },
+    {
+      environmentId: "ready",
+      label: "Ready",
+      displayUrl: "http://ready.example",
+      connected: true,
+      serverConfig,
+    },
     ...(state.compareConnect
       ? [
           {
             environmentId: "other",
-            label: "Other",
+            label: state.duplicateLabels ? "Ready" : "Other",
+            displayUrl: "http://other.example",
             connected: true,
             serverConfig: {
               ...serverConfig,
@@ -134,6 +142,7 @@ vi.mock(import("./SettingsScopeContext"), async (original) => {
 });
 import { TelemetryExportSettings } from "./TelemetryExportSettings";
 import { TelemetrySettings } from "./TelemetrySettings";
+import { scrollToSettingsTarget } from "./settingsLayout";
 
 const activeExport: ServerObservability = {
   localTracingEnabled: true,
@@ -151,6 +160,7 @@ const activeExport: ServerObservability = {
 function setup() {
   state.allEnvironments = false;
   state.compareConnect = false;
+  state.duplicateLabels = false;
   updateSettings.mockClear();
   checkOtlpEndpoint.mockReset();
   state.observability = DEFAULT_SERVER_SETTINGS.observability;
@@ -201,18 +211,23 @@ describe("TelemetryExportSettings", () => {
     setup();
     state.allEnvironments = true;
     state.compareConnect = true;
+    state.duplicateLabels = true;
     state.serverConfig.environment.capabilities.otlpEndpointCheck = true;
     state.observability = {
       ...DEFAULT_SERVER_SETTINGS.observability,
       otlpTracesUrl: "http://ready/v1/traces",
     };
-    await using screen = await render(<TelemetryExportSettings />, {
+    await using screen = await render(<TelemetrySettings />, {
       router: "/settings/maintenance",
     });
-    const ready = screen.getByRole("button", { name: /Ready/ });
-    const other = screen.getByRole("button", { name: /Other/ });
-    const readyForm = screen.getByRole("form", { name: "Ready" });
-    const otherForm = screen.getByRole("form", { name: "Other" });
+    const disclosure = screen.getByRole("button", { name: "What to send" });
+    await userEvent.click(disclosure);
+    const readyName = /ready\.example/;
+    const otherName = /other\.example/;
+    const ready = screen.getByRole("button", { name: readyName });
+    const other = screen.getByRole("button", { name: otherName });
+    const readyForm = screen.getByRole("form", { name: readyName });
+    const otherForm = screen.getByRole("form", { name: otherName });
     expect(checkOtlpEndpoint).not.toHaveBeenCalled();
 
     await userEvent.click(ready);
@@ -241,7 +256,44 @@ describe("TelemetryExportSettings", () => {
       environmentId: "other",
       input: { patch: { observability: { otlpMetricsUrl: "http://other/v1/metrics" } } },
     });
+    await userEvent.click(disclosure);
+    const probesBefore = checkOtlpEndpoint.mock.calls.length;
+    state.compareConnect = false;
+    state.serverConfig.observability = {
+      ...activeExport,
+      telemetry: { ...activeExport.telemetry!, revisions: { otlp: 1, connect: 0 } },
+    };
+    await screen.rerender(<TelemetrySettings />);
+    await expect.element(readyForm).not.toBeInTheDocument();
+    expect(checkOtlpEndpoint).toHaveBeenCalledTimes(probesBefore);
+    await userEvent.click(disclosure);
     await expect.element(readyTraces).toHaveValue("http://draft/v1/traces");
+    await expect.element(other).not.toBeInTheDocument();
+    expect(checkOtlpEndpoint).toHaveBeenCalledTimes(probesBefore + 1);
+  });
+
+  it("scrolls the receiver heading into a short settings viewport", async () => {
+    setup();
+    await using screen = await render(
+      <div data-testid="viewport" style={{ width: 400, height: 260, overflow: "auto" }}>
+        <div style={{ height: 450 }} />
+        <TelemetryExportSettings />
+        <div style={{ height: 450 }} />
+      </div>,
+    );
+    const viewport = screen.getByTestId("viewport").element();
+    screen.getByRole("form").element().setAttribute("style", "min-height: 400px");
+    viewport.scrollTop = viewport.scrollHeight;
+    scrollToSettingsTarget("telemetry-endpoints");
+    await vi.waitFor(() => {
+      const heading = screen
+        .getByRole("heading", { name: "OpenTelemetry export" })
+        .element()
+        .getBoundingClientRect();
+      const bounds = viewport.getBoundingClientRect();
+      expect(heading.top).toBeGreaterThanOrEqual(bounds.top);
+      expect(heading.bottom).toBeLessThanOrEqual(bounds.bottom);
+    });
   });
 
   it("does not resend a field the user restored after another client changed it", async () => {

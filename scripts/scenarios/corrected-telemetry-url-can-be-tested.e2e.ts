@@ -77,7 +77,17 @@ test(
         await analytics.isEnabled(),
         "Analytics respects the environment's telemetry settings",
       ).toBe(selectable);
-      await exportSection.getByRole("textbox", "Metrics endpoint").fill(`${origin}/v1/metrics`);
+      const metrics = exportSection.getByRole("textbox", "Metrics endpoint");
+      await metrics.fill(`${origin}/v1/metrics`);
+      const channels = exportSection.getByRole("button", "What to send");
+      await channels.tap();
+      await expect(metrics).toHaveCount(0);
+      await channels.tap();
+      expect(
+        await metrics.isVisible(),
+        "The edited receiver stays expanded after reopening What to send",
+      ).toBe(true);
+      await expect(metrics).toHaveValue(`${origin}/v1/metrics`);
       await exportSection.getByRole("button", "Save").tap();
       await exportSection.getByText("Saved", { exact: true }).waitFor();
       await exportSection.getByRole("switch", "My OpenTelemetry receiver").tap();

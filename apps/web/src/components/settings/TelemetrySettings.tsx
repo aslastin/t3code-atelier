@@ -4,7 +4,7 @@ import {
   type TelemetryStatus,
 } from "@t3tools/contracts";
 import { msg, useGT, useMessages } from "gt-react";
-import { useState, useSyncExternalStore } from "react";
+import { Activity, useState, useSyncExternalStore } from "react";
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentsWithScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -70,7 +70,7 @@ export function TelemetrySettings() {
   const searchTarget = useSettingsSearchTargetId();
   const targetsDisclosure =
     searchTarget === "telemetry-export" || searchTarget === "telemetry-endpoints";
-  const [expanded, setExpanded] = useState(targetsDisclosure);
+  const [expanded, setExpanded] = useState<boolean | undefined>(targetsDisclosure || undefined);
   const [previousTarget, setPreviousTarget] = useState(searchTarget);
   const desktopAllowsRelay = useSyncExternalStore(
     subscribeRelayTelemetryEnabled,
@@ -167,9 +167,9 @@ export function TelemetrySettings() {
     const anyOn = eligible.some((t) => telemetryChoiceSelected(t, key));
     const mixed = anyOn && eligible.some((t) => !telemetryChoiceSelected(t, key));
     const next = nextTelemetryChoice(eligible, key);
-    const states = targets.flatMap((target) => {
+    const states = targets.map((target) => {
       const { env, status, blockedByDesktop } = target;
-      if (!status) return [];
+      if (!status) return null;
       const state =
         key === "enabled"
           ? summary(status, telemetryChoiceIssue(target, key, true) === "allBlocked")
@@ -180,7 +180,11 @@ export function TelemetrySettings() {
               : status[key] === "off" && !status.preferences.enabled && status.preferences[key]
                 ? gt("Selected · sending paused")
                 : m(reasons[status[key]]);
-      return [targets.length === 1 ? state : `${env.label} · ${state}`];
+      return (
+        <span key={env.environmentId} className="text-xs text-muted-foreground">
+          {targets.length === 1 ? state : `${env.label} · ${state}`}
+        </span>
+      );
     });
     return (
       <label key={key} className="flex items-center justify-between gap-4 py-2">
@@ -193,11 +197,7 @@ export function TelemetrySettings() {
               </span>
             )}
           </span>
-          {states.map((state) => (
-            <span key={state} className="text-xs text-muted-foreground">
-              {state}
-            </span>
-          ))}
+          {states}
         </span>
         <Switch
           size="sm"
@@ -220,7 +220,7 @@ export function TelemetrySettings() {
           type="button"
           size="xs"
           variant="outline"
-          aria-expanded={expanded}
+          aria-expanded={expanded === true}
           aria-controls="telemetry-channels"
           onClick={() => setExpanded(!expanded)}
         >
@@ -245,7 +245,11 @@ export function TelemetrySettings() {
             ) : null;
           })}
         </div>
-        {expanded && (scope.kind === "all" || targets[0]?.status) && <TelemetryExportSettings />}
+        {expanded !== undefined && (scope.kind === "all" || targets[0]?.status) && (
+          <Activity mode={expanded ? "visible" : "hidden"}>
+            <TelemetryExportSettings />
+          </Activity>
+        )}
       </div>
     </SettingsSearchTarget>
   );
