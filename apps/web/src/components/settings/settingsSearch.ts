@@ -980,11 +980,16 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "telemetry-export",
-    title: msg("OpenTelemetry export"),
-    to: "/settings/diagnostics",
+    title: msg("Send telemetry"),
+    to: "/settings/maintenance",
     targetId: "telemetry-export",
-    scope: "environment",
-    searchTerms: [msg("OTel OTLP telemetry export endpoints logs traces metrics Grafana")],
+    scope: "environment-defaults",
+    searchTerms: [
+      msg("What to send"),
+      msg("OTel OTLP telemetry export endpoints logs traces metrics Grafana"),
+      msg("OpenTelemetry export"),
+      msg("OpenTelemetry OTLP PostHog Axiom T3 Connect traces metrics logs"),
+    ],
   },
   {
     id: "diagnostics",
@@ -1523,6 +1528,7 @@ const RENAMED_SETTINGS_PATHS: Readonly<Record<string, SettingsPath>> = {
   "/settings/beta": "/settings/labs",
 };
 const SPLIT_SETTINGS_PATHS: ReadonlySet<string> = new Set([
+  "/settings/diagnostics",
   "/settings/general",
   "/settings/appearance",
   "/settings/source-control",
@@ -1531,6 +1537,7 @@ const SPLIT_SETTINGS_PATHS: ReadonlySet<string> = new Set([
 ]);
 // Section anchors that moved but are not search results themselves.
 const MOVED_SECTION_ANCHORS: Readonly<Record<string, SettingsPath>> = {
+  "telemetry-endpoints": "/settings/maintenance",
   "authorized-clients": "/settings/access",
   "text-generation": "/settings/threads",
   about: "/settings/about",
@@ -1549,10 +1556,11 @@ export function movedSettingsPath(pathname: string, hash: string): SettingsPath 
 }
 
 export function getSettingsSearchTargetScope(targetId: string) {
+  const rowId = targetId === "telemetry-endpoints" ? "telemetry-export" : targetId;
   const items: readonly SettingsSearchItem[] = SETTINGS_SEARCH_ITEMS;
   const item =
-    items.find((candidate) => candidate.id === targetId) ??
-    items.find((candidate) => candidate.targetId === targetId);
+    items.find((candidate) => candidate.id === rowId) ??
+    items.find((candidate) => candidate.targetId === rowId);
   return item
     ? {
         title: item.title,

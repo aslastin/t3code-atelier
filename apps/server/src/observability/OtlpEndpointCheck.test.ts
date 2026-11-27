@@ -71,6 +71,15 @@ const check = (input: Parameters<OtlpEndpointCheck.OtlpEndpointCheck["Service"][
   });
 
 describe("OtlpEndpointCheck", () => {
+  it.effect("does not contact a receiver until export is enabled", () => {
+    const { requests, layer } = checkWith(200);
+    return Effect.gen(function* () {
+      assert.deepEqual(yield* check({ signal: "traces", url: "http://localhost/v1/traces" }), {
+        _tag: "Disabled",
+      });
+      assert.lengthOf(requests, 0);
+    }).pipe(Effect.provide(layer));
+  });
   it.effect("keeps T3 credentials paired with each running signal endpoint", () => {
     const signalExport = { ...DEFAULT_SIGNAL_EXPORT, headers: { "x-api-key": "secret" } };
     const { requests, layer } = checkWith(200, {
@@ -101,6 +110,7 @@ describe("OtlpEndpointCheck", () => {
 
   it.effect("does not send export credentials when the signal has no running endpoint", () => {
     const { requests, layer } = checkWith(200, {
+      otlpTracesUrl: "https://collector.example.com/v1/traces",
       otlpLogsUrl: undefined,
       otlpLogsExport: { ...DEFAULT_SIGNAL_EXPORT, headers: { authorization: "Bearer t3" } },
       otelEnvironment: OtelEnvironment.none,

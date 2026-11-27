@@ -56,7 +56,7 @@ const runCli = (args: ReadonlyArray<string>) =>
 const makeConfig = (baseDir: string) =>
   Effect.gen(function* () {
     const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
-    return {
+    return ServerConfig.make({
       logLevel: "Info",
       traceMinLevel: "Info",
       traceTimingEnabled: true,
@@ -86,7 +86,7 @@ const makeConfig = (baseDir: string) =>
       logWebSocketEvents: false,
       tailscaleServeEnabled: false,
       tailscaleServePort: 443,
-    } satisfies ServerConfig.ServerConfig["Service"];
+    });
   });
 
 const withProjectService = <A, E>(

@@ -19,11 +19,20 @@ export const DesktopBackendBootstrap = Schema.Struct({
   desktopBootstrapSecret: Schema.optionalKey(Schema.String),
   // Absent means the backend must hydrate PATH, as WSL and older desktops require.
   shellEnvironmentPrepared: Schema.optionalKey(Schema.Boolean),
+  // WSL receives the host's final T3 telemetry permission as a second line on its bootstrap pipe.
+  pendingHostTelemetry: Schema.optionalKey(Schema.Literal(true)),
   tailscaleServeEnabled: Schema.Boolean,
   tailscaleServePort: PortSchema,
   otlpTracesUrl: Schema.optional(Schema.String),
   otlpMetricsUrl: Schema.optional(Schema.String),
   otlpLogsUrl: Schema.optional(Schema.String),
+  legacyWindowsOtlp: Schema.optionalKey(
+    Schema.Struct({
+      otlpTracesUrl: Schema.optionalKey(TrimmedNonEmptyString),
+      otlpMetricsUrl: Schema.optionalKey(TrimmedNonEmptyString),
+      otlpLogsUrl: Schema.optionalKey(TrimmedNonEmptyString),
+    }),
+  ),
   desktopTelemetryFd: Schema.optionalKey(PositiveInt),
   desktopTelemetryControlFd: Schema.optionalKey(PositiveInt),
   // Whether the spawning desktop app can install updates when the server requests one.

@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 
 import {
   BearerConnectionProfile,
+  SshConnectionProfile,
   type ConnectionCatalogEntry,
   type ConnectionRoute,
 } from "./catalog.ts";
@@ -11,9 +12,11 @@ import {
   BearerConnectionTarget,
   ConnectionTransientError,
   RelayConnectionTarget,
+  SshConnectionTarget,
   type SupervisorConnectionState,
 } from "./model.ts";
 import {
+  connectionCatalogDisplayUrl,
   connectionStatusText,
   connectionStatusTitle,
   environmentMcpUrl,
@@ -56,6 +59,30 @@ function supervisorState(overrides: Partial<SupervisorConnectionState>): Supervi
 }
 
 describe("connection presentation", () => {
+  it("includes the SSH port in the address shown for each environment", () => {
+    const target = new SshConnectionTarget({
+      connectionId: "ssh",
+      environmentId: TARGET.environmentId,
+      label: "Ready",
+    });
+    const displayUrl = (port: number | null, username: string | null) =>
+      connectionCatalogDisplayUrl({
+        enabled: true,
+        target,
+        profile: Option.some(
+          new SshConnectionProfile({
+            connectionId: target.connectionId,
+            environmentId: target.environmentId,
+            label: target.label,
+            target: { alias: "work", hostname: "gateway", username, port },
+          }),
+        ),
+      });
+    expect(displayUrl(22, "dev")).toBe("dev@gateway:22");
+    expect(displayUrl(2222, "dev")).toBe("dev@gateway:2222");
+    expect(displayUrl(null, null)).toBe("gateway");
+  });
+
   it("copies the T3 Connect MCP address first, then the route this device is connected over", () => {
     const route = (connectionId: string, httpBaseUrl: string): ConnectionRoute => {
       const target = new BearerConnectionTarget({ ...TARGET, connectionId });

@@ -1,7 +1,12 @@
+import * as NodePath from "@effect/platform-node/NodePath";
+import * as Path from "effect/Path";
+import * as SubscriptionRef from "effect/SubscriptionRef";
+import { isValidDistroName } from "../wsl/wslPathParsing.ts";
 import * as NodeOS from "node:os";
 
-import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
+import { isT3TelemetryEnabled } from "@t3tools/shared/otelEnvironment";
+import * as TelemetrySettingsFile from "@t3tools/shared/telemetrySettingsFile";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -14,7 +19,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import serverPackageJson from "../../../server/package.json" with { type: "json" };
@@ -28,18 +32,6 @@ import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
-
-export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedError<DesktopBackendObservabilitySettingsReadError>()(
-  "DesktopBackendObservabilitySettingsReadError",
-  {
-    settingsPath: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Failed to read persisted backend observability settings at ${this.settingsPath}.`;
-  }
-}
 
 export class DesktopBackendConfiguration extends Context.Service<
   DesktopBackendConfiguration,
@@ -65,12 +57,6 @@ interface BackendObservabilitySettings {
   readonly otlpMetricsUrl: Option.Option<string>;
   readonly otlpLogsUrl: Option.Option<string>;
 }
-
-const emptyBackendObservabilitySettings: BackendObservabilitySettings = {
-  otlpTracesUrl: Option.none(),
-  otlpMetricsUrl: Option.none(),
-  otlpLogsUrl: Option.none(),
-};
 
 const DESKTOP_BACKEND_ENV_NAMES = [
   "T3CODE_PORT",
@@ -153,19 +139,6 @@ const mergeWslEnv = (
   return parts.length > 0 ? parts.join(":") : undefined;
 };
 
-const logBackendObservabilitySettingsReadFailure = (
-  settingsPath: string,
-  cause: PlatformError.PlatformError,
-) => {
-  const error = new DesktopBackendObservabilitySettingsReadError({ settingsPath, cause });
-  return Effect.logWarning(error).pipe(
-    Effect.annotateLogs({
-      component: "desktop-backend-configuration",
-      error,
-    }),
-  );
-};
-
 function resourceMonitorBinaryName(platform: NodeJS.Platform): string {
   return platform === "win32" ? "t3-resource-monitor.exe" : "t3-resource-monitor";
 }
@@ -202,42 +175,6 @@ const resolveResourceMonitorPath = Effect.fn(
   }
 
   return Option.none<string>();
-});
-
-const readPersistedBackendObservabilitySettings = Effect.gen(function* () {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  const raw = yield* fileSystem.readFileString(environment.serverSettingsPath).pipe(
-    Effect.asSome,
-    Effect.catchTags({
-      PlatformError: (cause) =>
-        cause.reason._tag === "NotFound"
-          ? Effect.succeedNone
-          : logBackendObservabilitySettingsReadFailure(environment.serverSettingsPath, cause).pipe(
-              Effect.as(Option.none()),
-            ),
-    }),
-  );
-  if (Option.isNone(raw)) {
-    return emptyBackendObservabilitySettings;
-  }
-
-  const parsed = parsePersistedServerObservabilitySettings(raw.value);
-  return {
-    otlpTracesUrl: Option.fromNullishOr(parsed.otlpTracesUrl),
-    otlpMetricsUrl: Option.fromNullishOr(parsed.otlpMetricsUrl),
-    otlpLogsUrl: Option.fromNullishOr(parsed.otlpLogsUrl),
-  };
-});
-
-const readBackendObservabilitySettings = Effect.gen(function* () {
-  const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  const persisted = yield* readPersistedBackendObservabilitySettings;
-  return {
-    otlpTracesUrl: Option.orElse(environment.otlpTracesUrl, () => persisted.otlpTracesUrl),
-    otlpMetricsUrl: Option.orElse(environment.otlpMetricsUrl, () => persisted.otlpMetricsUrl),
-    otlpLogsUrl: Option.orElse(environment.otlpLogsUrl, () => persisted.otlpLogsUrl),
-  } satisfies BackendObservabilitySettings;
 });
 
 interface SharedBootstrapInput {
@@ -591,6 +528,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   input: SharedBootstrapInput & {
     readonly port: number;
     readonly distro: string | null;
+    readonly shellEnvironment: DesktopShellEnvironment.DesktopShellEnvironment["Service"];
   },
 ): Effect.fn.Return<
   DesktopBackendManager.DesktopBackendStartConfig,
@@ -607,6 +545,23 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
 
   // wslhost loopback forwarding is unreliable on some Windows hosts; advertise the WSL IP instead.
   const wslBindHost = "0.0.0.0";
+  yield* input.shellEnvironment.installIntoProcess;
+  const pendingHostTelemetry = !(yield* input.shellEnvironment.discoveryFinished);
+  // Older desktops passed the Windows settings URLs to every WSL backend.
+  const reader = yield* TelemetrySettingsFile.reader.pipe(
+    Effect.provideService(Path.Path, environment.path),
+  );
+  const { telemetry, otlpTracesUrl, otlpMetricsUrl, otlpLogsUrl } = yield* reader.read(
+    environment.serverSettingsPath,
+  );
+  const legacyWindowsOtlp =
+    !telemetry && (otlpTracesUrl || otlpMetricsUrl || otlpLogsUrl)
+      ? {
+          ...(otlpTracesUrl && { otlpTracesUrl }),
+          ...(otlpMetricsUrl && { otlpMetricsUrl }),
+          ...(otlpLogsUrl && { otlpLogsUrl }),
+        }
+      : undefined;
 
   const bootstrap = {
     mode: "desktop" as const,
@@ -619,6 +574,8 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     // PortSchema rejects 0 even when Tailscale Serve is disabled.
     tailscaleServeEnabled: false,
     tailscaleServePort: 443,
+    ...(legacyWindowsOtlp && { legacyWindowsOtlp }),
+    ...(pendingHostTelemetry && { pendingHostTelemetry: true as const }),
     ...buildObservabilityFragment(input.observabilitySettings),
   };
 
@@ -674,7 +631,9 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   const distroArgs = distroForConfig ? ["-d", distroForConfig] : [];
   const forwardedEnv: Record<string, string> = { [DESKTOP_HOST_SCOPE_ENV]: input.hostScope };
   const forwardedEnvNames: string[] = [DESKTOP_HOST_SCOPE_ENV];
+  const forwardTelemetryBan = !pendingHostTelemetry && !isT3TelemetryEnabled(env);
   for (const name of WSL_FORWARDED_ENV_NAMES) {
+    if (name === "T3CODE_TELEMETRY_ENABLED" && !forwardTelemetryBan) continue;
     const value = env[name];
     if (value !== undefined && value.length > 0) {
       forwardedEnv[name] = value;
@@ -684,7 +643,8 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
 
   const parentEnvWithoutT3Home: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(env)) {
-    if (key === "T3CODE_HOME") continue;
+    if (key === "T3CODE_HOME" || (!forwardTelemetryBan && key === "T3CODE_TELEMETRY_ENABLED"))
+      continue;
     parentEnvWithoutT3Home[key] = value;
   }
   const wslEnv = mergeWslEnv(parentEnvWithoutT3Home.WSLENV, forwardedEnvNames);
@@ -704,6 +664,12 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     extendEnv: false,
     bootstrap,
     bootstrapDelivery: "stdin" as const,
+    ...(pendingHostTelemetry && {
+      hostTelemetryDecision: input.shellEnvironment.awaitSettledDiscovery.pipe(
+        Effect.andThen(input.shellEnvironment.discoveryFinished),
+        Effect.map((known) => known && isT3TelemetryEnabled(env)),
+      ),
+    }),
     httpBaseUrl,
     captureOutput: true,
     ...(runningDistro !== null ? { runningDistro } : {}),
@@ -750,6 +716,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       "--exec",
       "env",
       `PATH=${launchPath}`,
+      ...(pendingHostTelemetry ? ["T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING=1"] : []),
       ...(preflight.t3Home === null ? [] : [`T3CODE_HOME=${preflight.t3Home}`]),
       ...command,
       "--bootstrap-fd",
@@ -757,9 +724,8 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       ...devUrlArgs,
     ],
     preflightFailure: Option.none(),
-    ...(preflight.runtimeId === undefined
-      ? {}
-      : { wslRuntimeId: preflight.runtimeId, wslT3Home: preflight.t3Home }),
+    wslT3Home: preflight.t3Home,
+    ...(preflight.runtimeId === undefined ? {} : { wslRuntimeId: preflight.runtimeId }),
   } satisfies DesktopBackendManager.DesktopBackendStartConfig;
 });
 
@@ -803,14 +769,10 @@ export const make = Effect.gen(function* () {
       bootstrapSecret,
       yield* Clock.currentTimeMillis,
     ).pipe(Effect.provideService(Mac.Mac, mac));
-    const observabilitySettings = yield* readBackendObservabilitySettings.pipe(
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
-    );
     return {
       bootstrapToken,
       bootstrapSecret,
-      observabilitySettings,
+      observabilitySettings: environment,
       hostScope: yield* hostScope,
     } satisfies SharedBootstrapInput;
   });
@@ -822,6 +784,7 @@ export const make = Effect.gen(function* () {
     yield* wslEnvironment.preWarm(persistedSettings.wslDistro);
     return yield* resolveWslStartConfig({
       ...shared,
+      shellEnvironment,
       port: backendExposure.port,
       distro: persistedSettings.wslDistro,
     }).pipe(
@@ -876,13 +839,44 @@ export const make = Effect.gen(function* () {
     resolvePrimary: Effect.gen(function* () {
       const { useWsl, wslRequested } = yield* describePrimary;
       if (useWsl) {
-        return yield* buildWslPrimaryConfig;
+        const config = yield* buildWslPrimaryConfig;
+        let path: string | null = null;
+        if (
+          Option.isNone(config.preflightFailure) &&
+          config.runningDistro &&
+          isValidDistroName(config.runningDistro)
+        ) {
+          const explicitHome = config.wslT3Home;
+          const home =
+            explicitHome ??
+            Option.getOrNull(
+              (yield* wslEnvironment.getUserHome(config.runningDistro)).pipe(
+                Option.map((value) => `${value}/.t3`),
+              ),
+            );
+          if (home) {
+            const stateDir = environment.isDevelopment && !explicitHome ? "dev" : "userdata";
+            const windows = yield* Effect.service(Path.Path).pipe(
+              Effect.provide(NodePath.layerWin32),
+            );
+            path = windows.join(
+              String.raw`\\wsl.localhost`,
+              config.runningDistro,
+              home,
+              stateDir,
+              "settings.json",
+            );
+          }
+        }
+        yield* SubscriptionRef.set(environment.telemetrySettingsPath, path);
+        return config;
       }
       if (wslRequested) {
         yield* Effect.logWarning(
           "WSL-only backend requested but WSL is unavailable; starting the Windows primary instead.",
         );
       }
+      yield* SubscriptionRef.set(environment.telemetrySettingsPath, environment.serverSettingsPath);
       return yield* buildWindowsPrimaryConfig;
     }).pipe(Effect.withSpan("desktop.backendConfiguration.resolvePrimary")),
     resolvePrimaryLabel: Effect.gen(function* () {
@@ -896,7 +890,7 @@ export const make = Effect.gen(function* () {
     resolveWsl: Effect.fnUntraced(
       function* (input) {
         const shared = yield* sharedInputs;
-        return yield* resolveWslStartConfig({ ...shared, ...input }).pipe(
+        return yield* resolveWslStartConfig({ ...shared, ...input, shellEnvironment }).pipe(
           Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
           Effect.provideService(DesktopWslEnvironment.DesktopWslEnvironment, wslEnvironment),
           Effect.provideService(DesktopWslServerTree.DesktopWslServerTree, wslServerTree),

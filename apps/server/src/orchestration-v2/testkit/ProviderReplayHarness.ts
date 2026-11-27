@@ -116,7 +116,7 @@ export function makeReplayServerConfig(
       yield* fs.makeDirectory(directory, { recursive: true });
     }
 
-    return {
+    return ServerConfig.make({
       logLevel: "Error",
       traceMinLevel: "Info",
       traceTimingEnabled: true,
@@ -156,7 +156,6 @@ export function makeReplayServerConfig(
       browserArtifactsDir: path.join(stateDir, "browser-artifacts"),
       environmentThemesDir,
       logsDir,
-      serverLogPath: path.join(logsDir, "server.log"),
       serverTracePath: path.join(logsDir, "server.trace.ndjson"),
       providerLogsDir,
       providerEventLogPath: path.join(providerLogsDir, "events.log"),
@@ -165,7 +164,7 @@ export function makeReplayServerConfig(
       environmentIdPath: path.join(stateDir, "environment-id"),
       serverRuntimeStatePath: path.join(stateDir, "server-runtime.json"),
       secretsDir: path.join(stateDir, "secrets"),
-    };
+    });
   });
 }
 

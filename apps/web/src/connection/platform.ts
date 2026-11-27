@@ -352,6 +352,8 @@ const ANALYTICS_DEVICE_ID_KEY = "t3code:analytics-device-id";
 
 // Lives as long as this browser profile's site data. Storage can be blocked, which only drops the id.
 const analyticsDevice = {
+  // The destination has not yet authenticated or supplied its telemetry permissions.
+  reportDuringHandshake: false,
   id: Effect.sync(
     Option.liftThrowable(() => {
       const existing = window.localStorage.getItem(ANALYTICS_DEVICE_ID_KEY);

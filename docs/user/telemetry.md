@@ -1,9 +1,17 @@
-# Product usage data
+# Telemetry in T3 Code Atelier
 
-The T3 Code server sends product usage events to T3 Code's own endpoint at `ingest.t3.codes`,
-associated with a hashed account or installation identifier. To count how many installations one person
-uses, the server also sends hashed account identifiers: your T3 Connect account, your OpenAI and
-Claude accounts when you are signed in, and a random identifier for each device that connects. The endpoint keeps a copy of each
+Open **Settings > Maintenance** and find **Send telemetry** in the **Diagnostics** section. Choose one environment or **All environments**. Open **What to send**, select the channels you want, then turn on **Send telemetry**. Switching it off takes effect immediately and remembers your choices and receiver addresses.
+
+A fresh installation starts with every channel off. When you upgrade, a receiver you previously configured in settings or through the environment continues receiving its configured signals. Product analytics and T3 Connect tracing each require an explicit choice.
+
+The settings apply to the selected server. The Atelier browser and desktop renderer follow their authenticated primary server's permissions. Desktop main follows its embedded environment. **All environments** reports which servers confirmed the change, which are unavailable and which need an update. A disconnected server keeps its previous settings.
+
+## Product usage data
+
+With product analytics enabled, the server sends product usage events to T3 Code's own endpoint at `ingest.t3.codes`,
+associated with a hashed account or installation identifier. To count installations, the server can report hashed identifiers for signed-in T3 Connect, OpenAI and
+Claude accounts. Official clients can also supply a hashed device identifier when they connect. Atelier
+clients omit analytics identifiers from the connection handshake. The endpoint keeps a copy of each
 event and forwards events to PostHog. Events include the provider, model, reasoning effort,
 permission mode, turn and request results, duration, release channel, and token counts when
 available. Child-agent token counts are reported separately from the main agent's. Model names
@@ -14,29 +22,17 @@ raw provider events, or child-agent output.
 
 ## Relay connection diagnostics
 
-T3 Code sends relay connection traces to Axiom to diagnose T3 Connect connectivity. These are
-separate from product events. Depending on the client version, traces can include connection
-timings, environment identifiers and the connected machine's name. Failed spans can include error
-messages and stack traces; error text can quote a value the app was handling.
+Builds configured for T3 Connect tracing can send relay connection traces to Axiom. Depending on the client version, traces can include connection timings, environment identifiers and the connected machine's name. Failed spans can include error messages and stack traces. Error text can quote a value the app was handling.
 
-To disable product events and relay tracing from the server, set
-`T3CODE_TELEMETRY_ENABLED=false` in its environment before starting it. Relay tracing also stops
-when `T3CODE_OTEL_SDK_DISABLED` or `OTEL_SDK_DISABLED` turns OpenTelemetry export off.
+Setting `T3CODE_TELEMETRY_ENABLED=false` or disabling telemetry through [managed policy](./managed-policy.md#other-capabilities) blocks product events and T3 Connect tracing. Your own OpenTelemetry receiver remains available. The effective `T3CODE_OTEL_SDK_DISABLED` or `OTEL_SDK_DISABLED` setting disables OpenTelemetry exports, including Connect traces. The T3-specific variable takes precedence.
 
-An administrator can turn product events and relay tracing off in the server and desktop app with
-a [managed policy](./managed-policy.md#other-capabilities). This does not control traces sent by
-separate browser or mobile clients.
+Blocked channels appear off and their switches are locked. Changes made under **All environments** skip those channels and preserve their saved choices. Setting `T3CODE_TELEMETRY_ENABLED=true` lets you choose whether to send T3 telemetry. You can always turn off **Send telemetry** if it was enabled.
 
-The desktop app reads `T3CODE_TELEMETRY_ENABLED` from your shell profile (for example `~/.zshrc`) on macOS and
-Linux, so export it there and restart the app. On Windows, set it as a user environment variable.
-
-The web app in a browser, including one the `t3` CLI opens, does not read these environment
-variables. When its build has relay tracing configured, it sends its own connection traces even
-if the server has opted out. The browser app has no relay tracing toggle.
+The desktop app reads `T3CODE_TELEMETRY_ENABLED` from your shell profile on macOS and Linux. On Windows, set it as a user environment variable. Restart the app after changing its startup environment.
 
 ## Mobile app diagnostics
 
-When the iOS or Android app crashes or hits an error, it sends a report to T3 Code: the error
+Official clients use their own controls. When the official iOS or Android app crashes or hits an error, it sends a report to T3 Code: the error
 message, the stack trace, the app version, and the device model and OS version. Each launch also
 sends startup timings, and every report carries a random ID for the install. Reports go through
 the T3 Connect relay to Axiom. They do not include your threads, prompts, or connection details,
@@ -62,14 +58,9 @@ publishing setting.
 
 ## Export diagnostics to your own receiver
 
-To send traces, metrics, or logs to an OpenTelemetry receiver, open
-**Settings > Maintenance > Diagnostics**, select an environment, and enter each signal's OTLP HTTP
-endpoint under **OpenTelemetry export** (for example `http://localhost:4318/v1/traces`). Save, then
-restart that environment's server. The receiver must be reachable from the server's machine.
-**Test** sends an empty export from the server to check an endpoint before or after you save it;
-saved endpoints are checked when the section opens. Checks send authentication headers only to
-the signal's currently running endpoint and do not follow redirects. To check a new endpoint
-that requires authentication, save it and restart the server first.
+For receiver-only export, open **What to send**, select **My OpenTelemetry receiver**, and leave both T3 channels off. Under **All environments**, expand the environment whose receiver you want to configure. Each environment saves its own addresses. When one environment is selected, its form opens directly. Enter and save the OTLP HTTP endpoint for each signal you want (for example `http://localhost:4318/v1/traces`). Turn on **Send telemetry**. Changes take effect immediately.
+
+The receiver must be reachable from that server. When the channel is active, opening the endpoint settings checks the saved addresses. **Test** sends an empty export from the server. Checks send authentication headers only to the currently configured endpoint for that signal and do not follow redirects. Save a new address before testing it with authentication.
 
 `T3CODE_OTLP_*_URL` and standard `OTEL_EXPORTER_OTLP_*` environment variables override the saved
 settings. An overridden signal shows **Set by environment** and names the variable that set it, and its

@@ -7,7 +7,7 @@ import {
   hostedAppUrlConfig,
   makeCloudCliOAuthConfig,
   makeRelayUrlConfig,
-  resolveRelayClientTracingConfig,
+  relayClientTracingDestination,
 } from "./publicConfig.ts";
 
 const provideEnv = (env: Readonly<Record<string, string>>) =>
@@ -55,7 +55,7 @@ it.effect("derives direct Clerk OAuth endpoints from statically injected public 
   }),
 );
 
-it("product opt-out disables relay tracing with either built-in or runtime credentials", () => {
+it("resolves relay credentials independently of the current telemetry choice", () => {
   const fallback = {
     tracesUrl: "https://embedded.example.test/v1/traces",
     tracesDataset: "embedded-dataset",
@@ -66,9 +66,9 @@ it("product opt-out disables relay tracing with either built-in or runtime crede
     T3CODE_OTEL_SDK_DISABLED: "false",
   };
 
-  assert.equal(resolveRelayClientTracingConfig(env, fallback), null);
-  assert.equal(
-    resolveRelayClientTracingConfig(
+  assert.deepEqual(relayClientTracingDestination(env, fallback), fallback);
+  assert.deepEqual(
+    relayClientTracingDestination(
       {
         ...env,
         T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: "https://runtime.example.test/v1/traces",
@@ -77,6 +77,10 @@ it("product opt-out disables relay tracing with either built-in or runtime crede
       },
       fallback,
     ),
-    null,
+    {
+      tracesUrl: "https://runtime.example.test/v1/traces",
+      tracesDataset: "runtime-dataset",
+      tracesToken: "runtime-token",
+    },
   );
 });

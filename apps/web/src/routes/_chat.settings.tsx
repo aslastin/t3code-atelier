@@ -195,7 +195,14 @@ export const Route = createFileRoute("/_chat/settings")({
       throw redirect({ to: "/settings/general", replace: true });
     }
     const moved = movedSettingsPath(location.pathname, location.hash);
-    if (moved) throw redirect({ to: moved, search: true, hash: true, replace: true });
+    if (moved) {
+      throw redirect({
+        to: moved,
+        search: true,
+        hash: true,
+        replace: true,
+      });
+    }
   },
   component: SettingsRouteLayout,
 });

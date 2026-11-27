@@ -24,9 +24,15 @@ export function settingsScopeEnvironmentLabels(
       other.environmentId !== environment.environmentId && other.label === environment.label,
   );
   const address = settingsScopeEnvironmentAddress(environment);
-  const secondary = duplicates.some((other) => settingsScopeEnvironmentAddress(other) === address)
-    ? environment.displayUrl || environment.environmentId
-    : address;
+  let secondary = address;
+  if (
+    environment.displayUrl &&
+    duplicates.some((other) => settingsScopeEnvironmentAddress(other) === address)
+  ) {
+    secondary = duplicates.some((other) => other.displayUrl === environment.displayUrl)
+      ? `${environment.displayUrl} · ${environment.environmentId}`
+      : environment.displayUrl;
+  }
   return {
     primary: environment.label,
     secondary: duplicates.length ? secondary : "",

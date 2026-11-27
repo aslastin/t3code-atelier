@@ -122,6 +122,7 @@ import { BackgroundActivitySettingsRow } from "./BackgroundActivitySettings";
 import { AdvancedSettings } from "./AdvancedSettings";
 import { PullRequestLinksOpenInAppSetting } from "./IntegrationsSettings";
 import { StorageCleanupSections } from "./StorageSettings";
+import { TelemetrySettings } from "./TelemetrySettings";
 import { UpdateTrackSwitchDialog } from "./UpdateTrackSwitchDialog";
 import { environmentIdsKey } from "~/state/environmentAtomList";
 import { environmentSessionStatesAtom } from "~/state/session";
@@ -2501,6 +2502,9 @@ export function MaintenanceSettingsPanel() {
               <T>View diagnostics</T>
             </Button>
           }
+        />
+        <TelemetrySettings
+          key={scope.kind === "environment" ? `environment:${scope.environmentId}` : scope.kind}
         />
       </SettingsSection>
     </SettingsPageContainer>

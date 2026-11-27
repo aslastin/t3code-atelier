@@ -1,3 +1,4 @@
+import { bindExporter, switchingTracer, type ExportChannel } from "./telemetryConsent.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -6,7 +7,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Tracer from "effect/Tracer";
 import type { HttpClient } from "effect/http";
-import { OtlpSerialization, OtlpTracer } from "effect/observability";
+import { OtlpExporter, OtlpSerialization, OtlpTracer } from "effect/observability";
 
 export interface RelayClientTracingConfig {
   readonly tracesUrl: string;
@@ -150,13 +151,17 @@ function gatedTracer(delegate: Tracer.Tracer, isEnabled: () => boolean): Tracer.
 export function layer(
   config: RelayClientTracingConfig | null,
   resource: RelayClientTracingResource,
-  options?: { readonly isEnabled?: () => boolean },
+  options?: {
+    readonly isEnabled?: () => boolean;
+    readonly channel?: ExportChannel;
+    readonly refresh?: Effect.Effect<void>;
+  },
 ): Layer.Layer<never, never, HttpClient.HttpClient> {
   if (config === null) {
     return Layer.succeed(RelayClientTracer, Option.none());
   }
 
-  const layerTracer = OtlpTracer.layer({
+  const settings = {
     url: config.tracesUrl,
     headers: {
       Authorization: `Bearer ${config.tracesToken}`,
@@ -174,7 +179,19 @@ export function layer(
         ...resource.attributes,
       },
     },
-  }).pipe(Layer.provide(OtlpSerialization.layerJson));
+  };
+  const layerTracer = (
+    options?.channel
+      ? Layer.effect(
+          Tracer.Tracer,
+          bindExporter(
+            options.channel,
+            (url) => OtlpTracer.make({ ...settings, url }),
+            options.refresh,
+          ).pipe(Effect.map(switchingTracer)),
+        ).pipe(Layer.provide(OtlpExporter.layerFlusher))
+      : OtlpTracer.layer(settings)
+  ).pipe(Layer.provide(OtlpSerialization.layerJson));
 
   return Layer.effect(
     RelayClientTracer,

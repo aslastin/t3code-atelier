@@ -1,3 +1,4 @@
+import * as ClientTracing from "../observability/clientTracing";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import type * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -10,11 +11,7 @@ import * as PrimaryEnvironmentHttpLayer from "../environments/primary/httpLayer"
 
 import * as Dpop from "../cloud/dpop";
 import * as ManagedRelayLayer from "../cloud/managedRelayLayer";
-import {
-  relayTelemetryEnabled,
-  resolveCloudPublicConfig,
-  resolveRelayTracingConfig,
-} from "../cloud/publicConfig";
+import { resolveCloudPublicConfig, resolveRelayTracingConfig } from "../cloud/publicConfig";
 import * as ClientTracer from "../observability/clientTracer";
 
 function configuredRelayUrl(): string {
@@ -31,7 +28,7 @@ const layerRelayTracing = RelayTracing.layer(
     serviceInstanceId: ClientTracer.serviceInstanceId,
     client: typeof window !== "undefined" && window.desktopBridge ? "desktop" : "web",
   },
-  { isEnabled: () => relayTelemetryEnabled() === true },
+  { channel: ClientTracing.connect },
 ).pipe(Layer.provide(layerHttpClient));
 
 type RuntimeLayerSource =
@@ -68,6 +65,7 @@ const layerRuntime = Layer.mergeAll(
   Dpop.layer,
   Socket.layerWebSocketConstructorGlobal,
   ClientTracer.layer,
+  ClientTracing.layer,
   layerRelayTracing,
   ManagedRelayLayer.layer(configuredRelayUrl()).pipe(
     Layer.provide(Layer.mergeAll(layerHttpClient, Dpop.layer)),

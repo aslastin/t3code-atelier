@@ -1,3 +1,4 @@
+import { usePrimaryEnvironment } from "../state/environments";
 import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
@@ -92,10 +93,6 @@ export const Route = createRootRoute({
     }
 
     const authGateState = await resolveInitialServerAuthGateState();
-    if (authGateState.status === "authenticated") {
-      // Idempotent, so every navigation can ask for it.
-      void configureClientTracing();
-    }
     if (
       authGateState.status === "authenticated" &&
       getDesktopSnapShotBridge() &&
@@ -153,6 +150,17 @@ function RootRouteBranch() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
+  const primary = usePrimaryEnvironment();
+  const observability =
+    primaryEnvironmentAuthenticated && primary?.connection.phase === "connected"
+      ? primary.serverConfig?.observability
+      : undefined;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- revoke the renderer exporters when their authenticated environment changes
+  useEffect(() => {
+    configureClientTracing(observability);
+  }, [observability]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- revoke both exporters when the authenticated client unmounts
+  useEffect(() => () => configureClientTracing(), []);
   // A sync IPC read; the setting only changes across a relaunch.
   const [localEnvironmentDisabled] = useState(isLocalEnvironmentDisabled);
   // Once true, stays true: a visit to /welcome means the bootstrap already chose a route.

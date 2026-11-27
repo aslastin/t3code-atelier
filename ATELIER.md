@@ -37,6 +37,7 @@ appears in the app version as `+atelier.<N>`.
    to attach a comment and its source to the next message. Added comments on files, diffs, and
    pending pull request reviews have **Edit** next to Delete, and saving keeps the comment's place
    in the composer.
+7. **[Telemetry controls](./docs/user/telemetry.md).** Choose product analytics, T3 Connect tracing, or your own OpenTelemetry receiver per environment and pause all exports with one switch.
 
 ### Plan mode
 

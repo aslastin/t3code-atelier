@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Effect from "effect/Effect";
+import { MixedScheduler } from "effect/Scheduler";
 import * as Tracer from "effect/Tracer";
 // Load the runtime's module graph once at collection, outside the per-test timeout;
 // each case re-evaluates it from that cache after vi.resetModules().
@@ -29,6 +30,25 @@ describe("web runtime relay telemetry policy", () => {
       exports: true,
     },
     {
+      surface: "desktop whose shell settles after its server confirms consent",
+      desktopBridge: { getRelayTelemetryEnabled: () => null },
+      shellResult: true,
+      exports: true,
+    },
+    {
+      surface: "desktop whose shell eventually denies consent",
+      desktopBridge: { getRelayTelemetryEnabled: () => null },
+      shellResult: false,
+      exports: false,
+    },
+    {
+      surface: "desktop disconnected while awaiting its shell",
+      desktopBridge: { getRelayTelemetryEnabled: () => null },
+      shellResult: true,
+      disconnect: true,
+      exports: false,
+    },
+    {
       // The desktop host reads the login shell after the renderer has started.
       surface: "desktop enabled once the login shell is read",
       desktopBridge: { getRelayTelemetryEnabled: answers(null, true) },
@@ -40,59 +60,128 @@ describe("web runtime relay telemetry policy", () => {
       exports: false,
     },
     {
-      surface: "ordinary browser ignores host opt-out",
+      surface: "browser with permission from its authenticated server",
       desktopBridge: undefined,
       exports: true,
     },
-  ])("applies $surface before the first relay span", async ({ desktopBridge, exports }) => {
-    vi.resetModules();
-    vi.stubEnv("T3CODE_TELEMETRY_ENABLED", "false");
-    vi.stubEnv("T3CODE_OTEL_SDK_DISABLED", "true");
-    vi.stubEnv("OTEL_SDK_DISABLED", "true");
-    vi.stubEnv("VITE_RELAY_OTLP_TRACES_URL", "https://telemetry.example.test/v1/traces");
-    vi.stubEnv("VITE_RELAY_OTLP_TRACES_DATASET", "relay-test");
-    vi.stubEnv("VITE_RELAY_OTLP_TRACES_TOKEN", "test-token");
-    vi.stubGlobal("window", { desktopBridge });
-    const fetchFn = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }));
-    vi.stubGlobal("fetch", fetchFn);
-    // Re-import after setting runtime policy: static initialization creates the exporter layer.
-    const { runtime: freshRuntime } = await import("./runtime");
-    const { setDelegate } = await import("../observability/clientTracer");
-    const userSpans: Array<string> = [];
+    {
+      surface: "browser before its server confirms permissions",
+      desktopBridge: undefined,
+      preAuth: true,
+      exports: false,
+    },
+  ])(
+    "applies $surface before the first relay span",
+    async ({ desktopBridge, exports, preAuth, shellResult, disconnect }) => {
+      vi.resetModules();
+      const shell = Promise.withResolvers<boolean>();
+      vi.stubEnv("T3CODE_TELEMETRY_ENABLED", "false");
+      vi.stubEnv("T3CODE_OTEL_SDK_DISABLED", "true");
+      vi.stubEnv("OTEL_SDK_DISABLED", "true");
+      vi.stubEnv("VITE_RELAY_OTLP_TRACES_URL", "https://telemetry.example.test/v1/traces");
+      vi.stubEnv("VITE_RELAY_OTLP_TRACES_DATASET", "relay-test");
+      vi.stubEnv("VITE_RELAY_OTLP_TRACES_TOKEN", "test-token");
+      vi.stubGlobal("window", {
+        location: new URL("http://localhost/"),
+        desktopBridge: desktopBridge && {
+          ...desktopBridge,
+          waitForRelayTelemetryEnabled: () => shell.promise,
+          getAppBranding: () => null,
+          getLocalEnvironmentBootstraps: () => [],
+          getLocalEnvironmentEnabled: () => true,
+          getLocalEnvironmentBearerToken: async () => null,
+        },
+      });
+      const fetchFn = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }));
+      vi.stubGlobal("fetch", fetchFn);
+      // Re-import after setting runtime policy: static initialization creates the exporter layer.
+      const { runtime: freshRuntime } = await import("./runtime");
+      const { setDelegate } = await import("../observability/clientTracer");
+      const userSpans: Array<string> = [];
 
-    try {
-      expect(
-        await freshRuntime.runPromise(
-          Effect.succeed("relay operation completed").pipe(
-            Effect.withSpan("relay.first-operation"),
-            withRelayClientTracing,
+      try {
+        const { configureClientTracing } = await import("../observability/clientTracing");
+        configureClientTracing(
+          preAuth
+            ? undefined
+            : {
+                localTracingEnabled: true,
+                logsDirectoryPath: "/logs",
+                otlpTracesEnabled: false,
+                otlpLogsEnabled: false,
+                otlpMetricsEnabled: false,
+                telemetry: {
+                  preferences: { enabled: true, connect: true, analytics: false, otlp: false },
+                  analytics: "off",
+                  connect: "on",
+                  otlp: "off",
+                },
+              },
+        );
+        if (shellResult !== undefined) {
+          const scheduler = new MixedScheduler();
+          const dispatcher = scheduler.makeDispatcher();
+          vi.spyOn(scheduler, "makeDispatcher").mockReturnValue(dispatcher);
+          await freshRuntime.runPromise(
+            Effect.void.pipe(Effect.withSpan("relay.before-shell"), withRelayClientTracing),
+            { scheduler },
+          );
+          if (disconnect) {
+            configureClientTracing();
+          }
+          shell.resolve(shellResult);
+          await shell.promise;
+          dispatcher.flush();
+        }
+        expect(
+          await freshRuntime.runPromise(
+            Effect.succeed("relay operation completed").pipe(
+              Effect.withSpan("relay.first-operation"),
+              withRelayClientTracing,
+            ),
           ),
-        ),
-      ).toBe("relay operation completed");
+        ).toBe("relay operation completed");
 
-      setDelegate(
-        Tracer.make({
-          span(options) {
-            userSpans.push(options.name);
-            return new Tracer.NativeSpan(options);
-          },
-        }),
+        await freshRuntime.runPromise(Effect.void.pipe(Effect.withSpan("local-diagnostic")));
+        setDelegate(
+          Tracer.make({
+            span(options) {
+              userSpans.push(options.name);
+              return new Tracer.NativeSpan(options);
+            },
+          }),
+        );
+        await freshRuntime.runPromise(Effect.void.pipe(Effect.withSpan("user.work")));
+        expect(userSpans).toEqual(["user.work"]);
+      } finally {
+        setDelegate(null);
+        // Closing the runtime flushes the exporter without waiting for its batch timer.
+        await freshRuntime.dispose();
+      }
+
+      const relayRequests = fetchFn.mock.calls.filter(([url]) =>
+        String(url).startsWith("https://telemetry.example.test"),
       );
-      await freshRuntime.runPromise(Effect.void.pipe(Effect.withSpan("user.work")));
-      expect(userSpans).toEqual(["user.work"]);
-    } finally {
-      setDelegate(null);
-      // Closing the runtime flushes the exporter without waiting for its batch timer.
-      await freshRuntime.dispose();
-    }
-
-    if (exports) {
-      expect(fetchFn).toHaveBeenCalledOnce();
-      expect(String(fetchFn.mock.calls[0]?.[0])).toBe("https://telemetry.example.test/v1/traces");
-      const payload = new TextDecoder().decode(fetchFn.mock.calls[0]?.[1]?.body as Uint8Array);
-      expect(payload).toContain('"name":"relay.first-operation"');
-    } else {
-      expect(fetchFn).not.toHaveBeenCalled();
-    }
-  });
+      if (exports) {
+        expect(relayRequests).toHaveLength(1);
+        const payload = new TextDecoder().decode(relayRequests[0]?.[1]?.body as Uint8Array);
+        expect(payload).toContain('"name":"relay.first-operation"');
+        expect(payload).not.toContain("relay.before-shell");
+      } else {
+        expect(relayRequests).toHaveLength(0);
+      }
+      if (!desktopBridge) {
+        const local = fetchFn.mock.calls.filter(([url]) =>
+          String(url).includes("/api/observability/v1/traces"),
+        );
+        expect(local).toHaveLength(preAuth ? 0 : 1);
+        if (!preAuth) {
+          expect(new Headers(local[0]?.[1]?.headers).get("x-t3-telemetry-revision")).toBe("local");
+          expect(new TextDecoder().decode(local[0]?.[1]?.body as Uint8Array)).toContain(
+            "local-diagnostic",
+          );
+        }
+      }
+    },
+  );
 });

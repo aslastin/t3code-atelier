@@ -41,17 +41,21 @@ const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const httpClient = yield* HttpClient.HttpClient;
 
-  const running = {
-    traces: { url: config.otlpTracesUrl, export: config.otlpTracesExport },
-    metrics: { url: config.otlpMetricsUrl, export: config.otlpMetricsExport },
-    logs: { url: config.otlpLogsUrl, export: config.otlpLogsExport },
-  } satisfies Record<OtlpSignal, unknown>;
-
   const check = Effect.fn("OtlpEndpointCheck.check")(function* ({
     signal,
     url,
   }: OtlpEndpointCheckInput) {
-    const { url: runningUrl, export: signalExport } = running[signal];
+    const lease = config.telemetry[signal].current;
+    const channel = config.telemetry;
+    const enabled = channel.traces.current ?? channel.metrics.current ?? channel.logs.current;
+    if (!enabled || (!lease && config.otelEnvironment[signal]._tag === "Off"))
+      return { _tag: "Disabled" } as const;
+    const runningUrl = lease?.url;
+    const signalExport = {
+      traces: config.otlpTracesExport,
+      metrics: config.otlpMetricsExport,
+      logs: config.otlpLogsExport,
+    }[signal];
     const headers = url === runningUrl ? signalExport.headers : undefined;
     const body = yield* Effect.gen(function* () {
       const serialization = yield* OtlpSerialization.OtlpSerialization;
@@ -59,6 +63,8 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.provide(layerOtlpSerialization(signalExport.protocol)));
     const startedAt = yield* Clock.currentTimeMillis;
     // Close after reading status so open bodies cannot hang; disable tracing to keep URLs and credentials out of spans.
+    if (enabled !== (channel.traces.current ?? channel.metrics.current ?? channel.logs.current))
+      return { _tag: "Disabled" } as const;
     const response = yield* HttpClient.withScope(httpClient)
       .post(url, { body, headers })
       .pipe(

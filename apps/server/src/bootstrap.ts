@@ -76,6 +76,7 @@ export const readBootstrapEnvelope = Effect.fn("readBootstrapEnvelope")(function
   fd: number,
   options?: {
     timeoutMs?: number;
+    nextLine?: (envelope: A) => ((line: string | null) => void) | undefined;
   },
 ): Effect.fn.Return<Option.Option<A>, BootstrapError> {
   const fdReady = yield* isFdReady(fd);
@@ -94,15 +95,25 @@ export const readBootstrapEnvelope = Effect.fn("readBootstrapEnvelope")(function
       crlfDelay: Infinity,
     });
 
+    let receiveNext: ((line: string | null) => void) | undefined;
     const cleanup = () => {
-      stream.removeListener("error", handleError);
+      input.removeListener("error", handleError);
       input.removeListener("line", handleLine);
       input.removeListener("close", handleClose);
       input.close();
       stream.destroy();
     };
 
+    const finishNext = (line: string | null) => {
+      const receive = receiveNext;
+      receiveNext = undefined;
+      cleanup();
+      receive?.(line);
+    };
+
     const handleError = (error: Error) => {
+      if (receiveNext) return finishNext(null);
+      cleanup();
       if (isUnavailableBootstrapFdError(error)) {
         resume(Effect.succeedNone);
         return;
@@ -118,10 +129,14 @@ export const readBootstrapEnvelope = Effect.fn("readBootstrapEnvelope")(function
     };
 
     const handleLine = (line: string) => {
+      if (receiveNext) return finishNext(line);
       const parsed = decodeJsonResult(schema)(line);
       if (Result.isSuccess(parsed)) {
+        receiveNext = options?.nextLine?.(parsed.success);
+        if (!receiveNext) cleanup();
         resume(Effect.succeedSome(parsed.success));
       } else {
+        cleanup();
         resume(
           Effect.fail(
             new BootstrapEnvelopeDecodeError({
@@ -134,14 +149,18 @@ export const readBootstrapEnvelope = Effect.fn("readBootstrapEnvelope")(function
     };
 
     const handleClose = () => {
+      if (receiveNext) return finishNext(null);
+      cleanup();
       resume(Effect.succeedNone);
     };
 
-    stream.once("error", handleError);
-    input.once("line", handleLine);
+    input.once("error", handleError);
+    input.on("line", handleLine);
     input.once("close", handleClose);
 
-    return Effect.sync(cleanup);
+    return Effect.sync(() => {
+      if (!receiveNext) cleanup();
+    });
   }).pipe(Effect.timeoutOption(timeoutMs), Effect.map(Option.flatten));
 });
 

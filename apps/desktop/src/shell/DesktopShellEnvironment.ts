@@ -13,6 +13,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
+import * as PlatformError from "effect/PlatformError";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
@@ -93,8 +94,9 @@ export class DesktopShellEnvironment extends Context.Service<
     readonly awaitDiscovery: Effect.Effect<boolean>;
     /** Whether the user's own login shell, not a fallback, gave the PATH a new terminal gets. */
     readonly awaitUserShellDiscovery: Effect.Effect<boolean>;
-    /** Whether discovery has settled (the user's shell answered or retries ran out), without waiting. */
+    /** Whether the shell that owns the user's telemetry preference has answered. */
     readonly discoveryFinished: Effect.Effect<boolean>;
+    readonly awaitSettledDiscovery: Effect.Effect<void>;
     readonly updates: Stream.Stream<DesktopShellEnvironmentSnapshot>;
   }
 >()("@t3tools/desktop/shell/DesktopShellEnvironment") {}
@@ -130,7 +132,12 @@ const LOGIN_SHELL_ENV_NAMES = [
   "JAVA_HOME",
   "PNPM_HOME",
 ] as const;
-const WINDOWS_PROFILE_ENV_NAMES = ["PATH", "FNM_DIR", "FNM_MULTISHELL_PATH"] as const;
+const WINDOWS_PROFILE_ENV_NAMES = [
+  "PATH",
+  "FNM_DIR",
+  "FNM_MULTISHELL_PATH",
+  "T3CODE_TELEMETRY_ENABLED",
+] as const;
 const LOCALE_ENV_NAMES = ["LANG", "LC_ALL", "LC_CTYPE"] as const;
 const ANDROID_SDK_ENV_NAMES = ["ANDROID_HOME", "ANDROID_SDK_ROOT"] as const;
 const FALLBACK_LC_CTYPE = "en_US.UTF-8";
@@ -278,7 +285,7 @@ const runCommandOutput = Effect.fn("desktop.shellEnvironment.runCommandOutput")(
   readonly shell?: boolean;
 }): Effect.fn.Return<
   string,
-  DesktopShellEnvironmentCommandTimeoutError,
+  DesktopShellEnvironmentCommandTimeoutError | DesktopShellEnvironmentCommandError,
   ChildProcessSpawner.ChildProcessSpawner
 > {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -321,10 +328,6 @@ const runCommandOutput = Effect.fn("desktop.shellEnvironment.runCommandOutput")(
         }),
     ),
     Effect.map(([stdout]) => stdout),
-    Effect.catchTags({
-      DesktopShellEnvironmentCommandError: (error) =>
-        logShellEnvironmentCommandError(error).pipe(Effect.as("")),
-    }),
     Effect.forkDetach,
   );
   const output = yield* Fiber.join(fiber).pipe(
@@ -343,6 +346,20 @@ const runCommandOutput = Effect.fn("desktop.shellEnvironment.runCommandOutput")(
     timeoutMs: Duration.toMillis(input.timeout),
   });
 });
+
+const orEmptyOnCommandError = <R>(
+  effect: Effect.Effect<
+    string,
+    DesktopShellEnvironmentCommandError | DesktopShellEnvironmentCommandTimeoutError,
+    R
+  >,
+) =>
+  effect.pipe(
+    Effect.catchTags({
+      DesktopShellEnvironmentCommandError: (error) =>
+        logShellEnvironmentCommandError(error).pipe(Effect.as("")),
+    }),
+  );
 
 const orEmptyOnTimeout = <R>(
   effect: Effect.Effect<string, DesktopShellEnvironmentCommandTimeoutError, R>,
@@ -374,7 +391,10 @@ const readLoginShellEnvironment = (
         env,
         timeout,
         terminateGrace,
-      }).pipe(Effect.map((output) => extractEnvironment(output, names)));
+      }).pipe(
+        orEmptyOnCommandError,
+        Effect.map((output) => extractEnvironment(output, names)),
+      );
 
 const readLaunchctlPath = (env: NodeJS.ProcessEnv) =>
   runCommandOutput({
@@ -383,7 +403,7 @@ const readLaunchctlPath = (env: NodeJS.ProcessEnv) =>
     command: "/bin/launchctl",
     args: ["getenv", "PATH"],
     timeout: LAUNCHCTL_TIMEOUT,
-  }).pipe(orEmptyOnTimeout, Effect.map(trimNonEmpty));
+  }).pipe(orEmptyOnCommandError, orEmptyOnTimeout, Effect.map(trimNonEmpty));
 
 const readWindowsEnvironment = Effect.fn("desktop.shellEnvironment.readWindowsEnvironment")(
   function* (
@@ -391,8 +411,8 @@ const readWindowsEnvironment = Effect.fn("desktop.shellEnvironment.readWindowsEn
     options: WindowsProbeOptions,
     env: NodeJS.ProcessEnv,
     budget: ProbeBudget,
-  ): Effect.fn.Return<EnvironmentPatch, never, ChildProcessSpawner.ChildProcessSpawner> {
-    if (names.length === 0) return {};
+  ) {
+    let authoritative = true;
 
     const args = [
       "-NoLogo",
@@ -410,22 +430,30 @@ const readWindowsEnvironment = Effect.fn("desktop.shellEnvironment.readWindowsEn
         env,
         timeout: budget.timeout,
         terminateGrace: budget.terminateGrace,
-      }).pipe(orEmptyOnTimeout);
+      }).pipe(
+        Effect.catch((error) => {
+          const absent =
+            error._tag === "DesktopShellEnvironmentCommandError" &&
+            PlatformError.isPlatformError(error.cause) &&
+            error.cause.reason._tag === "NotFound";
+          return logShellEnvironmentCommandError(error).pipe(Effect.as(absent ? undefined : ""));
+        }),
+      );
+      if (output === undefined) continue;
       const environment = extractEnvironment(output, names);
-      if (Object.keys(environment).length > 0) {
-        return environment;
-      }
+      if (environment.PATH) return { environment, command, authoritative };
+      // An installed PowerShell that failed may have a different telemetry setting in its profile.
+      authoritative = false;
     }
-
-    return {};
+    return { environment: {} as EnvironmentPatch, command: undefined, authoritative: false };
   },
 );
 
 const installWindowsEnvironment = Effect.fn("desktop.shellEnvironment.installWindowsEnvironment")(
   function* (
     config: ShellEnvironmentConfig,
-  ): Effect.fn.Return<boolean, never, ChildProcessSpawner.ChildProcessSpawner> {
-    const [noProfile, profile] = yield* Effect.all(
+  ): Effect.fn.Return<ShellDiscovery, never, ChildProcessSpawner.ChildProcessSpawner> {
+    const [baseline, login] = yield* Effect.all(
       [
         readWindowsEnvironment(["PATH"], { loadProfile: false }, config.env, config.budget),
         readWindowsEnvironment(
@@ -437,6 +465,8 @@ const installWindowsEnvironment = Effect.fn("desktop.shellEnvironment.installWin
       ],
       { concurrency: 2 },
     );
+    const noProfile = baseline.environment;
+    const profile = login.environment;
     const mergedPath = mergePaths("win32", [
       trimNonEmpty(profile.PATH),
       trimNonEmpty(knownWindowsCliDirs(config.env).join(";")),
@@ -453,7 +483,18 @@ const installWindowsEnvironment = Effect.fn("desktop.shellEnvironment.installWin
     if (!config.env.FNM_MULTISHELL_PATH && profile.FNM_MULTISHELL_PATH) {
       config.env.FNM_MULTISHELL_PATH = profile.FNM_MULTISHELL_PATH;
     }
-    return Boolean(noProfile.PATH && profile.PATH);
+    if (!config.env.T3CODE_TELEMETRY_ENABLED && profile.T3CODE_TELEMETRY_ENABLED) {
+      config.env.T3CODE_TELEMETRY_ENABLED = profile.T3CODE_TELEMETRY_ENABLED;
+    }
+    const prepared = Boolean(noProfile.PATH && profile.PATH);
+    return {
+      prepared,
+      fromUserShell:
+        prepared &&
+        baseline.authoritative &&
+        login.authoritative &&
+        baseline.command === login.command,
+    };
   },
 );
 
@@ -629,9 +670,7 @@ const installShellEnvironment = (
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
 > => {
   if (config.platform === "win32") {
-    return installWindowsEnvironment(config).pipe(
-      Effect.map((prepared) => ({ prepared, fromUserShell: prepared })),
-    );
+    return installWindowsEnvironment(config);
   }
   if (config.platform === "darwin" || config.platform === "linux") {
     return installPosixEnvironment(config);
@@ -727,7 +766,8 @@ export const make = Effect.gen(function* () {
       const patch = Object.fromEntries(
         Object.keys(ShellEnvironmentPatch.fields).map((name) => [name, fresh[name] ?? null]),
       );
-      if (prepared || Option.isNone(yield* Ref.get(latest))) yield* publish(patch, prepared);
+      if (prepared || Option.isNone(yield* Ref.get(latest)))
+        yield* publish(patch, settled(discovery));
       if (prepared) {
         const cached = Object.fromEntries(
           CACHED_ENV_NAMES.flatMap((name) => (fresh[name] ? [[name, fresh[name]]] : [])),
@@ -748,7 +788,7 @@ export const make = Effect.gen(function* () {
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
   );
   // A fallback shell's PATH can miss folders the user's own shell adds, so keep asking that shell.
-  const awaitsUserShell = listUserShells(inherited).length > 0;
+  const awaitsUserShell = environment.platform === "win32" || listUserShells(inherited).length > 0;
   const settled = ({ prepared, fromUserShell }: ShellDiscovery) =>
     fromUserShell || (prepared && !awaitsUserShell);
   const refresh = probe(STARTUP_PROBE).pipe(
@@ -825,7 +865,12 @@ export const make = Effect.gen(function* () {
       Effect.andThen(Deferred.await(discovered)),
       Effect.map(({ fromUserShell }) => fromUserShell),
     ),
-    discoveryFinished: Deferred.isDone(settledDiscovery),
+    discoveryFinished: Ref.get(latest).pipe(
+      Effect.map((snapshot) => Option.isSome(snapshot) && snapshot.value.discovered === true),
+    ),
+    awaitSettledDiscovery: installIntoProcess.pipe(
+      Effect.andThen(Deferred.await(settledDiscovery)),
+    ),
     updates,
   });
 });

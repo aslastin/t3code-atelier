@@ -1,3 +1,4 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NetService from "@t3tools/shared/Net";
 import {
   OtlpHeadersFromString,
@@ -5,7 +6,7 @@ import {
   type SignalExport,
 } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
-import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
+import * as TelemetrySettingsFile from "@t3tools/shared/telemetrySettingsFile";
 import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
@@ -250,17 +251,6 @@ const resolveOptionPrecedence = <Value>(
   ...values: ReadonlyArray<Option.Option<Value>>
 ): Option.Option<Value> => Option.firstSomeOf(values);
 
-const loadPersistedObservabilitySettings = Effect.fn(function* (settingsPath: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const exists = yield* fs.exists(settingsPath).pipe(Effect.orElseSucceed(() => false));
-  if (!exists) {
-    return { otlpTracesUrl: undefined, otlpMetricsUrl: undefined, otlpLogsUrl: undefined };
-  }
-
-  const raw = yield* fs.readFileString(settingsPath).pipe(Effect.orElseSucceed(() => ""));
-  return parsePersistedServerObservabilitySettings(raw);
-});
-
 export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(function* (
   flags: CliServerFlags,
   cliLogLevel: Option.Option<LogLevel.LogLevel>,
@@ -294,9 +284,21 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     lan: flags.lan ?? Option.none(),
   } satisfies CliServerFlags;
   const bootstrapFd = Option.getOrUndefined(normalizedFlags.bootstrapFd) ?? env.bootstrapFd;
+  const hostEnv = yield* HostProcess.Environment;
+  let refreshHostTelemetry: (() => void) | undefined;
   const bootstrapEnvelope =
     bootstrapFd !== undefined
-      ? yield* readBootstrapEnvelope(DesktopBackendBootstrap, bootstrapFd)
+      ? yield* readBootstrapEnvelope(DesktopBackendBootstrap, bootstrapFd, {
+          nextLine: (envelope) => {
+            if (!envelope.pendingHostTelemetry) return undefined;
+            hostEnv.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING = "1";
+            return (line) => {
+              if (line !== "true") hostEnv.T3CODE_TELEMETRY_ENABLED = "false";
+              delete hostEnv.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING;
+              refreshHostTelemetry?.();
+            };
+          },
+        })
       : Option.none();
   const bootstrap = Option.getOrUndefined(bootstrapEnvelope);
 
@@ -368,9 +370,8 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
   }
   yield* fs.makeDirectory(cwd, { recursive: true });
   yield* ServerConfig.ensureServerDirectories(derivedPaths);
-  const persistedObservabilitySettings = yield* loadPersistedObservabilitySettings(
-    derivedPaths.settingsPath,
-  );
+  const telemetryFile = yield* TelemetrySettingsFile.reader;
+  const persistedObservabilitySettings = yield* telemetryFile.read(derivedPaths.settingsPath);
   const serverTracePath = env.traceFile ?? derivedPaths.serverTracePath;
   yield* fs.makeDirectory(path.dirname(serverTracePath), { recursive: true });
   const startupPresentation = options?.startupPresentation ?? "browser";
@@ -484,55 +485,79 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     },
   );
 
-  const config: ServerConfig.ServerConfig["Service"] = {
-    logLevel,
-    traceMinLevel: env.traceMinLevel,
-    traceTimingEnabled: env.traceTimingEnabled,
-    traceBatchWindowMs: env.traceBatchWindowMs,
-    traceMaxBytes: env.traceMaxBytes,
-    traceMaxFiles: env.traceMaxFiles,
-    otlpTracesUrl: traces?.url,
-    otlpMetricsUrl: metrics?.url,
-    otlpLogsUrl: logs?.url,
-    otlpTracesExport: traces?.export ?? signalExport,
-    otlpMetricsExport: metrics?.export ?? signalExport,
-    otlpLogsExport: logs?.export ?? signalExport,
-    ...(traces !== undefined ? { otlpTracesSource: traces.source } : {}),
-    ...(traces?.variable !== undefined ? { otlpTracesVariable: traces.variable } : {}),
-    ...(metrics !== undefined ? { otlpMetricsSource: metrics.source } : {}),
-    ...(metrics?.variable !== undefined ? { otlpMetricsVariable: metrics.variable } : {}),
-    ...(logs !== undefined ? { otlpLogsSource: logs.source } : {}),
-    ...(logs?.variable !== undefined ? { otlpLogsVariable: logs.variable } : {}),
-    otelEnvironment: otel,
-    mode,
-    port,
-    cwd,
-    baseDir,
-    ...derivedPaths,
-    serverTracePath,
-    host,
-    ...(privateNetworkOnly ? { privateNetworkOnly } : {}),
-    staticDir,
-    devUrl,
-    ...(devAuthToken === undefined ? {} : { devAuthToken }),
-    devAllowedOrigins: env.devAllowedOrigins,
-    noBrowser,
-    startupPresentation,
-    desktopBootstrapToken,
-    ...(desktopBootstrapSecret === undefined ? {} : { desktopBootstrapSecret }),
-    ...(shellEnvironmentPrepared === undefined ? {} : { shellEnvironmentPrepared }),
-    desktopTelemetryFd,
-    desktopTelemetryControlFd,
-    ...(desktopAppUpdate === undefined ? {} : { desktopAppUpdate }),
-    desktopBrowserFd,
-    desktopBrowserControlFd,
-    resourceMonitorPath,
-    autoBootstrapProjectFromCwd,
-    logWebSocketEvents,
-    tailscaleServeEnabled,
-    tailscaleServePort,
-  };
+  const config = ServerConfig.make(
+    {
+      logLevel,
+      traceMinLevel: env.traceMinLevel,
+      traceTimingEnabled: env.traceTimingEnabled,
+      traceBatchWindowMs: env.traceBatchWindowMs,
+      traceMaxBytes: env.traceMaxBytes,
+      traceMaxFiles: env.traceMaxFiles,
+      ...(bootstrap?.legacyWindowsOtlp && { legacyWindowsOtlp: bootstrap.legacyWindowsOtlp }),
+      otlpTracesUrl: traces?.url,
+      otlpMetricsUrl: metrics?.url,
+      otlpLogsUrl: logs?.url,
+      otlpTracesExport: traces?.export ?? signalExport,
+      otlpMetricsExport: metrics?.export ?? signalExport,
+      otlpLogsExport: logs?.export ?? signalExport,
+      ...(traces !== undefined ? { otlpTracesSource: traces.source } : {}),
+      ...(traces?.variable !== undefined ? { otlpTracesVariable: traces.variable } : {}),
+      ...(metrics !== undefined ? { otlpMetricsSource: metrics.source } : {}),
+      ...(metrics?.variable !== undefined ? { otlpMetricsVariable: metrics.variable } : {}),
+      ...(logs !== undefined ? { otlpLogsSource: logs.source } : {}),
+      ...(logs?.variable !== undefined ? { otlpLogsVariable: logs.variable } : {}),
+      otelEnvironment: otel.disabled
+        ? {
+            ...otel,
+            hasConfiguredEndpoint: Boolean(
+              otel.hasConfiguredEndpoint ||
+              env.otlpTracesUrl ||
+              env.otlpMetricsUrl ||
+              env.otlpLogsUrl ||
+              bootstrap?.otlpTracesUrl ||
+              bootstrap?.otlpMetricsUrl ||
+              bootstrap?.otlpLogsUrl,
+            ),
+          }
+        : otel,
+      mode,
+      port,
+      cwd,
+      baseDir,
+      ...derivedPaths,
+      serverTracePath,
+      host,
+      ...(privateNetworkOnly ? { privateNetworkOnly } : {}),
+      staticDir,
+      devUrl,
+      ...(devAuthToken === undefined ? {} : { devAuthToken }),
+      devAllowedOrigins: env.devAllowedOrigins,
+      noBrowser,
+      startupPresentation,
+      desktopBootstrapToken,
+      ...(desktopBootstrapSecret === undefined ? {} : { desktopBootstrapSecret }),
+      ...(shellEnvironmentPrepared === undefined ? {} : { shellEnvironmentPrepared }),
+      desktopTelemetryFd,
+      desktopTelemetryControlFd,
+      ...(desktopAppUpdate === undefined ? {} : { desktopAppUpdate }),
+      desktopBrowserFd,
+      desktopBrowserControlFd,
+      resourceMonitorPath,
+      autoBootstrapProjectFromCwd,
+      logWebSocketEvents,
+      tailscaleServeEnabled,
+      tailscaleServePort,
+    },
+    persistedObservabilitySettings,
+    hostEnv,
+    hostEnv.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING === "1" ||
+      (yield* Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(
+        Config.withDefault(true),
+        Effect.orElseSucceed(() => false),
+      )),
+  );
 
+  refreshHostTelemetry = () => config.telemetry.refresh();
   return config;
 });
 

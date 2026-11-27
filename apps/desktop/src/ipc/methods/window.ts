@@ -97,15 +97,26 @@ export const installRelayTelemetryEnabled = Effect.fn("desktop.ipc.window.instal
       Effect.orElseSucceed(() => false),
     );
     const shellEnvironment = yield* DesktopShellEnvironment.DesktopShellEnvironment;
+    const allowed = () => policyAllows && isRelayTracingEnabled(env);
     yield* ipc.handleSync(
       DesktopIpc.makeSyncIpcMethod({
         channel: IpcChannels.GET_RELAY_TELEMETRY_ENABLED_CHANNEL,
         result: Schema.NullOr(Schema.Boolean),
         handler: () =>
           shellEnvironment.discoveryFinished.pipe(
-            Effect.map((known) =>
-              !policyAllows || !isRelayTracingEnabled(env) ? false : known ? true : null,
-            ),
+            Effect.map((known) => (known || !policyAllows ? allowed() : null)),
+          ),
+      }),
+    );
+    yield* ipc.handle(
+      DesktopIpc.makeIpcMethod({
+        channel: IpcChannels.WAIT_FOR_RELAY_TELEMETRY_ENABLED_CHANNEL,
+        payload: Schema.Void,
+        result: Schema.Boolean,
+        handler: () =>
+          shellEnvironment.awaitSettledDiscovery.pipe(
+            Effect.andThen(shellEnvironment.discoveryFinished),
+            Effect.map((known) => known && allowed()),
           ),
       }),
     );

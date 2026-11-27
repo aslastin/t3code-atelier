@@ -62,6 +62,7 @@ export function resolveCloudPublicConfig(): CloudPublicConfig {
 }
 
 let desktopRelayTelemetry: boolean | null = null;
+let pendingDesktopRelayTelemetry: Promise<boolean> | undefined;
 
 /** Whether relay spans may be exported now; the desktop host may not know yet at startup. */
 export function relayTelemetryEnabled(): boolean | null {
@@ -70,11 +71,36 @@ export function relayTelemetryEnabled(): boolean | null {
   return desktopRelayTelemetry;
 }
 
+export function subscribeRelayTelemetryEnabled(notify: () => void) {
+  const bridge = typeof window !== "undefined" ? window.desktopBridge : undefined;
+  if (
+    !bridge?.waitForRelayTelemetryEnabled ||
+    desktopRelayTelemetry !== null ||
+    !relayTracingDestination()
+  ) {
+    return () => {};
+  }
+  let subscribed = true;
+  const finish = (enabled: boolean) => {
+    desktopRelayTelemetry ??= enabled === true;
+    if (subscribed) notify();
+  };
+  pendingDesktopRelayTelemetry ??= bridge.waitForRelayTelemetryEnabled();
+  void pendingDesktopRelayTelemetry.then(finish, () => finish(false));
+  return () => {
+    subscribed = false;
+  };
+}
+
 export function resolveRelayTracingConfig() {
   // The relay exporter is created during module initialization, so this must be synchronous.
   if (relayTelemetryEnabled() === false) {
     return null;
   }
+  return relayTracingDestination();
+}
+
+export function relayTracingDestination() {
   const { relayTracing } = resolveCloudPublicConfig();
   return relayTracing.tracesUrl && relayTracing.tracesDataset && relayTracing.tracesToken
     ? {
