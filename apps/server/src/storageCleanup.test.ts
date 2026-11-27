@@ -2415,6 +2415,25 @@ describe("VCS plugin worktrees", () => {
     }).pipe(Effect.provide(cleanupTestLayer)),
   );
 
+  it.effect("keeps a Git worktree another installed plugin marks", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, { recreates: true });
+      // Clean to Git, but another plugin's checkout lives there, out of Git's sight.
+      yield* fixture.fs.makeDirectory(`${fixture.worktree}/.other`);
+      yield* fixture.fs.writeFileString(`${fixture.worktree}/.other/HEAD`, "feature\n");
+      yield* fixture.fs.writeFileString(`${fixture.repo}/.git/info/exclude`, ".other\n");
+      const thread = shell({ branch: "feature", worktreePath: fixture.worktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry?.outcome).toBe("kept");
+      expect(yield* fixture.fs.exists(`${fixture.worktree}/.other/HEAD`)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
   it.effect("keeps a folder another plugin marks, though the project's plugin lists it", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);

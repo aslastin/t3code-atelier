@@ -424,7 +424,16 @@ const make = Effect.gen(function* () {
       if (yield* fs.exists(path.join(worktreePath, marker)).pipe(Effect.orElseSucceed(() => false)))
         marked = true;
     }
-    if (!marked) return null;
+    if (!marked) {
+      // Another installed plugin's checkout is never handed to Git either.
+      for (const marker of plugins?.installedMarkers() ?? []) {
+        if (
+          yield* fs.exists(path.join(worktreePath, marker)).pipe(Effect.orElseSucceed(() => true))
+        )
+          return UNVERIFIED_PLUGIN;
+      }
+      return null;
+    }
     // A listing that fails cannot hand the folder to Git: the plugin's own removal checks again.
     const listed = yield* gitWorkflow
       .listWorktrees(projectRoot)
