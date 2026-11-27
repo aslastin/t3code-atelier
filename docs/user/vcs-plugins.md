@@ -33,7 +33,8 @@ project's files: a large repository or a network mount could make that slow or d
 file. File mentions (`@`), the file tree's filter, and text search (`Ctrl+Shift+F` / `⌘⇧F`) say
 file search is not available, though `@` still finds threads and models by name. Opening a link by
 file name finds nothing. Browsing the file tree one folder at a time still works, and a Git
-repository inside keeps its own search.
+repository inside keeps its own search. Searching through the plugin is planned in
+[#26](https://github.com/aslastin/t3code-atelier/issues/26).
 
 ## Write a plugin
 
@@ -135,8 +136,11 @@ repository, then passes the ref it printed to `worktreeCreate` as `{baseRef}`. C
 pull are offered only when their commands exist. Without a typed message, T3 Code writes one as
 it does for Git, from the files `status` lists and, when the plugin has it, the patch `diff`
 prints. With `log`, the message follows your repository's recent subjects. **Commit on a new
-branch** needs `branchCreate`; T3 Code names the branch as it does for Git. Pull requests, the
-branch comparison, and sparse checkouts stay Git-only.
+branch** needs `branchCreate`; T3 Code names the branch as it does for Git. Pull requests come
+from a host, and host plugins are planned in
+[#17](https://github.com/aslastin/t3code-atelier/issues/17). The diff panel's working-tree, branch
+and commit views, and sparse checkouts, stay Git-only; a plugin's repository shows each turn's
+diff.
 
 Within `t3-plugin/1`, new versions of T3 Code only add optional commands, optional output fields,
 and placeholders for new commands, so a plugin keeps working as T3 Code updates.
