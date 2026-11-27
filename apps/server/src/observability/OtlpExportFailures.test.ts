@@ -61,9 +61,12 @@ describe("OtlpExportFailures", () => {
         Effect.provideService(HttpClient.HttpClient, client),
       );
     }).pipe(
-      Effect.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-log-export-failures-" })),
-      Effect.provide(ResourceAttribution.layer),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        Layer.merge(
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3-log-export-failures-" }),
+          ResourceAttribution.layer,
+        ).pipe(Layer.provideMerge(NodeServices.layer)),
+      ),
     ),
   );
 
