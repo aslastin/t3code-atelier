@@ -429,9 +429,13 @@ const make = Effect.gen(function* () {
     const listed = yield* gitWorkflow
       .listWorktrees(projectRoot)
       .pipe(Effect.orElseSucceed((): ReadonlyArray<string> | null => null));
-    return listed === null || listed.some((entry) => pathKey(entry) === pathKey(worktreePath))
-      ? kind
-      : null;
+    if (listed === null) return kind;
+    const real = (folder: string) =>
+      fs.realPath(folder).pipe(Effect.orElseSucceed(() => path.resolve(folder)));
+    const target = pathKey(yield* real(worktreePath));
+    for (const entry of listed) if (pathKey(yield* real(entry)) === target) return kind;
+    // Marked, yet not the plugin's: Git cannot see the plugin's commits or snapshots there.
+    return UNVERIFIED_PLUGIN;
   });
   // The checkout around `target` for a plugin's worktree, found by the project plugin's marker as
   // that plugin's removal resolves it; null inside the project's repository itself.
@@ -1235,7 +1239,11 @@ const make = Effect.gen(function* () {
         // A VCS plugin's checkout passes the checks its own sweep does, and the plugin removes it.
         const pluginKind = yield* pluginWorktreeKind(checkoutPath, checkout.repositoryPath);
         if (pluginKind === UNVERIFIED_PLUGIN)
-          return { keep: "its VCS plugin is off or did not answer", force: false, bytes: null };
+          return {
+            keep: "its VCS plugin is off, did not answer, or does not list it",
+            force: false,
+            bytes: null,
+          };
         if (pluginKind !== null) {
           const state = yield* pluginWorktreeState(checkoutPath, branch, rules);
           const recoverable =
@@ -1703,7 +1711,7 @@ const make = Effect.gen(function* () {
         // deletion apply; the merge and unchanged rules read Git history a plugin does not expose.
         const pluginKind = yield* pluginWorktreeKind(worktreePath, project.workspaceRoot);
         if (pluginKind === UNVERIFIED_PLUGIN)
-          return keep("its VCS plugin is off or did not answer");
+          return keep("its VCS plugin is off, did not answer, or does not list it");
         if (pluginKind !== null) {
           if (!eligible) return keep(notDueReason);
           const pluginPathReason = yield* worktreePathReason(worktreePath, false);
