@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, PluginListResult, PluginSummary } from "@t3tools/contracts";
-import { CircleCheckIcon } from "lucide-react";
+import { CircleCheckIcon, TriangleAlertIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { T, useGT, useMessages, Var } from "gt-react";
 
@@ -155,6 +155,26 @@ function PluginRow({
               )}
             </p>
           )}
+          {plugin.uncheckpointedProjects && plugin.uncheckpointedProjects.length > 0 ? (
+            <div className="flex gap-2 rounded-md border border-warning/35 bg-warning-surface px-2.5 py-2 text-xs leading-normal">
+              <TriangleAlertIcon
+                aria-hidden
+                className="mt-0.5 size-3.5 shrink-0 text-warning-foreground"
+              />
+              <span>
+                {gt(
+                  "{count, plural, one {# project is a subfolder of a {plugin} repository: {projects}.} other {# projects are subfolders of a {plugin} repository: {projects}.}} A native snapshot covers the whole repository, so their turns get no checkpoints. Add changed-files to the plugin's checkpoints.",
+                  {
+                    count: plugin.uncheckpointedProjects.length,
+                    plugin: plugin.label,
+                    projects: plugin.uncheckpointedProjects
+                      .map((project) => project.title)
+                      .join(", "),
+                  },
+                )}
+              </span>
+            </div>
+          ) : null}
           {plugin.notes && plugin.notes.length > 0 ? (
             <ul className="space-y-0.5 text-xs leading-normal text-muted-foreground/70">
               {plugin.notes.map((note) => (

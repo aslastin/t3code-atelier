@@ -3010,11 +3010,25 @@ export const layerWsRpc = (
         [WS_METHODS.subscribeProjectClones]: () => projectCloneTracker.stream,
         [WS_METHODS.threadTopicsMutate]: (mutation) => topics.mutate(mutation),
         [WS_METHODS.subscribeThreadTopics]: () => topics.stream,
-        [WS_METHODS.pluginsList]: () => plugins.list,
-        [WS_METHODS.pluginsImport]: (input) => plugins.importFolder(input.path),
-        [WS_METHODS.pluginsRemove]: (input) => plugins.remove(input.id),
-        [WS_METHODS.pluginsSetEnabled]: (input) => plugins.setEnabled(input.id, input.enabled),
-        [WS_METHODS.pluginsRecheck]: (input) => plugins.recheck(input.id),
+        // The list names the projects a plugin leaves without checkpoints.
+        [WS_METHODS.pluginsList]: () =>
+          plugins.list.pipe(Effect.provideService(ProjectStore.ProjectStoreV2, projectStore)),
+        [WS_METHODS.pluginsImport]: (input) =>
+          plugins
+            .importFolder(input.path)
+            .pipe(Effect.provideService(ProjectStore.ProjectStoreV2, projectStore)),
+        [WS_METHODS.pluginsRemove]: (input) =>
+          plugins
+            .remove(input.id)
+            .pipe(Effect.provideService(ProjectStore.ProjectStoreV2, projectStore)),
+        [WS_METHODS.pluginsSetEnabled]: (input) =>
+          plugins
+            .setEnabled(input.id, input.enabled)
+            .pipe(Effect.provideService(ProjectStore.ProjectStoreV2, projectStore)),
+        [WS_METHODS.pluginsRecheck]: (input) =>
+          plugins
+            .recheck(input.id)
+            .pipe(Effect.provideService(ProjectStore.ProjectStoreV2, projectStore)),
         [WS_METHODS.sourceControlPublishRepository]: (input) =>
           sourceControlRepositories.publishRepository(input).pipe(
             // A failed push still leaves the new remote added.

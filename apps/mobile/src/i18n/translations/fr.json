@@ -5364,6 +5364,7 @@
   "8367aa23b6d68e01": "Points de contrôle : {strategies}",
   "dc37e42339816cde": "Aucun point de contrôle : les tours dans ses dépôts ne peuvent être ni comparés ni annulés.",
   "42a02a4b27828027": "Indisponible",
+  "cf48cdabd95131a4": "Aucun point de contrôle dans {projects} : les instantanés natifs couvrent tout le dépôt, et ces projets en sont des sous-dossiers.",
   "cd776f9508d1de2e": "Plugins VCS · {environment}",
   "dc0187e50c99f34a": "Plugins VCS",
   "5c08300bcce3e73f": "Branches et worktrees",

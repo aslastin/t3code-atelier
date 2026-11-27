@@ -32,7 +32,22 @@ function pluginStatusText(plugin: PluginSummary): string {
 
 // What the server ignored in the manifest follows, so a typo in a command name shows.
 const pluginSummary = (plugin: PluginSummary) =>
-  [pluginStatusText(plugin), ...(plugin.notes ?? [])].join(" ");
+  [
+    pluginStatusText(plugin),
+    ...(plugin.uncheckpointedProjects && plugin.uncheckpointedProjects.length > 0
+      ? [
+          m(
+            msg(
+              "No checkpoints in {projects}: native snapshots cover the whole repository, and these projects are subfolders of it.",
+              {
+                projects: plugin.uncheckpointedProjects.map((project) => project.title).join(", "),
+              },
+            ),
+          ),
+        ]
+      : []),
+    ...(plugin.notes ?? []),
+  ].join(" ");
 
 function EnvironmentPlugins(props: {
   readonly environment: SettingsTarget;

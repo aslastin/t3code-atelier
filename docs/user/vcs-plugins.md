@@ -175,7 +175,8 @@ a new thread starts from the top of the list again.
   capture, T3 Code diffs the new snapshot against itself to make sure it reads back, and moves on
   to the next strategy if it does not. A native snapshot covers the whole repository, so it is
   used only for a project at the repository's root with no repository nested inside that keeps its
-  own checkpoints. **Ignore whitespace** does not change its diffs. A revision must name one
+  own checkpoints. A project in a subfolder needs `changed-files` or `full` too: when a plugin
+  lists only `native`, T3 Code warns as you add such a project and names it on the plugin's row. **Ignore whitespace** does not change its diffs. A revision must name one
   snapshot for good: never hand it out again once its snapshot is gone. Storage cleanup keeps a
   live thread's worktree that holds native snapshots, since the plugin may store them inside it.
 - `changed-files` asks `changedFiles` for the changed paths and keeps a copy of them in a Git

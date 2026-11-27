@@ -5364,6 +5364,7 @@
   "8367aa23b6d68e01": "Puntos de control: {strategies}",
   "dc37e42339816cde": "Sin puntos de control: los turnos en sus repositorios no se pueden comparar ni revertir.",
   "42a02a4b27828027": "No disponible",
+  "cf48cdabd95131a4": "Sin puntos de control en {projects}: las instantáneas nativas abarcan todo el repositorio y estos proyectos son subcarpetas suyas.",
   "cd776f9508d1de2e": "Plugins de VCS · {environment}",
   "dc0187e50c99f34a": "Plugins de VCS",
   "5c08300bcce3e73f": "Ramas y worktrees",

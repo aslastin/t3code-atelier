@@ -196,6 +196,13 @@ export const PluginSummary = Schema.Struct({
   problems: Schema.Array(Schema.String),
   /** Parts of the manifest this server ignored, such as an unknown command or a typo in one. */
   notes: Schema.optionalKey(Schema.Array(Schema.String)),
+  /**
+   * Projects in a subfolder of this plugin's repository whose turns get no checkpoint: the
+   * plugin offers only native snapshots, and those cover the whole repository.
+   */
+  uncheckpointedProjects: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ projectId: TrimmedNonEmptyString, title: Schema.String })),
+  ),
   /** The last operation that failed, such as output that broke the contract. */
   lastError: Schema.NullOr(
     Schema.Struct({ operation: Schema.String, message: Schema.String, at: IsoDateTime }),

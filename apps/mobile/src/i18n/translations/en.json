@@ -5372,6 +5372,7 @@
   "8367aa23b6d68e01": "Checkpoints: {strategies}",
   "dc37e42339816cde": "No checkpoints: turns in its repositories cannot be diffed or rolled back.",
   "42a02a4b27828027": "Unavailable",
+  "cf48cdabd95131a4": "No checkpoints in {projects}: native snapshots cover the whole repository, and these projects are subfolders of it.",
   "cd776f9508d1de2e": "VCS plugins · {environment}",
   "dc0187e50c99f34a": "VCS plugins",
   "5c08300bcce3e73f": "Branches & worktrees",

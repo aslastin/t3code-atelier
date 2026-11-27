@@ -1,4 +1,5 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { useWarnUncheckpointedProject } from "./useWarnUncheckpointedProject";
 import {
   findProjectByPath,
   inferProjectTitleFromPath,
@@ -29,6 +30,7 @@ import { useNewThreadHandler } from "./useHandleNewThread";
 export function useOpenLocalWorkspace() {
   const localEnvironment = useEnvironment(useAtomValue(localEnvironmentIdAtom));
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
+  const warnUncheckpointedProject = useWarnUncheckpointedProject();
   const updateProject = useOrchestrationCommand(projectEnvironment.update, {
     label: "project unarchive",
   });
@@ -76,6 +78,7 @@ export function useOpenLocalWorkspace() {
             ? error
             : new Error(m(msg("T3 Code could not add the project.")));
         }
+        warnUncheckpointedProject(environmentId, projectId);
         return projectId;
       },
       waitForProject: async (projectRef) => {

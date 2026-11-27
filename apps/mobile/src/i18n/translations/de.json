@@ -5370,6 +5370,7 @@
   "8367aa23b6d68e01": "Checkpoints: {strategies}",
   "dc37e42339816cde": "Keine Checkpoints: Turns in seinen Repositorys lassen sich weder vergleichen noch zurücksetzen.",
   "42a02a4b27828027": "Nicht verfügbar",
+  "cf48cdabd95131a4": "Keine Checkpoints in {projects}: Native Snapshots umfassen das ganze Repository, und diese Projekte sind Unterordner davon.",
   "cd776f9508d1de2e": "VCS-Plugins · {environment}",
   "dc0187e50c99f34a": "VCS-Plugins",
   "5c08300bcce3e73f": "Branches & Worktrees",

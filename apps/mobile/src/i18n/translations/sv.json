@@ -5370,6 +5370,7 @@
   "8367aa23b6d68e01": "Kontrollpunkter: {strategies}",
   "dc37e42339816cde": "Inga kontrollpunkter: turer i dess förråd kan inte jämföras eller återställas.",
   "42a02a4b27828027": "Inte tillgänglig",
+  "cf48cdabd95131a4": "Inga kontrollpunkter i {projects}: inbyggda ögonblicksbilder omfattar hela repot, och de här projekten är undermappar i det.",
   "cd776f9508d1de2e": "VCS-plugin · {environment}",
   "dc0187e50c99f34a": "VCS-plugin",
   "5c08300bcce3e73f": "Grenar och worktrees",

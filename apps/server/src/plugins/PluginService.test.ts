@@ -20,6 +20,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as PluginService from "./PluginService.ts";
 import { pluginCheckpointsWithPrefixes } from "./pluginCheckpoints.ts";
+import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
 import { fakeCalls, makeFakeRepository, writeFakeVcsPlugin } from "./testing/fakeVcsPlugin.ts";
 import type { FakeVcsPluginOptions } from "./testing/fakeVcsPlugin.ts";
 import { VcsPluginDrivers } from "./VcsPluginDrivers.ts";
@@ -195,6 +196,32 @@ describe("PluginService", () => {
         .importFolder(`~/${path.basename(source)}`)
         .pipe(Effect.provideService(HostProcess.HomeDirectory, path.dirname(source)));
       assert.strictEqual(fromHome.plugins[0]?.id, "kite");
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
+  it.live("names the projects in a subfolder that native snapshots leave without checkpoints", () =>
+    Effect.gen(function* () {
+      const { plugins, repository } = yield* setup({ checkpoints: ["native"] });
+      NodeFS.mkdirSync(`${repository}/sub`, { recursive: true });
+      const project = (
+        projectId: string,
+        workspaceRoot: string,
+        archivedAt: string | null = null,
+      ) => ({ projectId, title: projectId, workspaceRoot, archivedAt }) as never;
+      const listed = yield* plugins.list.pipe(
+        Effect.provideService(ProjectStoreV2, {
+          list: () =>
+            Effect.succeed([
+              project("root", repository),
+              project("sub", `${repository}/sub`),
+              project("archived", `${repository}/sub`, "2026-01-01T00:00:00.000Z"),
+              project("elsewhere", NodeOS.tmpdir()),
+            ]),
+        } as never),
+      );
+      assert.deepStrictEqual(listed.plugins[0]?.uncheckpointedProjects, [
+        { projectId: "sub", title: "sub" },
+      ]);
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 

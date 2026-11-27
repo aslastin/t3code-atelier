@@ -30,6 +30,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
+import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type * as VcsDriver from "../vcs/VcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
@@ -638,17 +639,60 @@ const make = Effect.gen(function* () {
       ),
   });
 
+  // Read when asked, from the caller's services: the project list is not this service's own.
+  const withUncheckpointedProjects = Effect.fnUntraced(function* (result: PluginListResult) {
+    const nativeOnly = [...entries.values()].filter(
+      (entry) =>
+        entry.driver !== null &&
+        entry.manifest !== null &&
+        entry.enabled &&
+        checkpointStrategies(entry.manifest).length > 0 &&
+        checkpointStrategies(entry.manifest).every((strategy) => strategy === "native"),
+    );
+    const store = yield* Effect.serviceOption(ProjectStoreV2);
+    if (nativeOnly.length === 0 || Option.isNone(store)) return result;
+    const projects = yield* store.value.list().pipe(Effect.orElseSucceed(() => []));
+    const real = (folder: string) =>
+      fs.realPath(folder).pipe(Effect.orElseSucceed(() => path.resolve(folder)));
+    const uncheckpointed = new Map<string, Array<{ projectId: string; title: string }>>();
+    for (const project of projects) {
+      if (project.archivedAt !== null) continue;
+      for (const entry of nativeOnly) {
+        const repository = yield* entry
+          .driver!.detectRepository(project.workspaceRoot)
+          .pipe(Effect.orElseSucceed(() => null));
+        if (repository === null) continue;
+        if ((yield* real(repository.rootPath)) !== (yield* real(project.workspaceRoot)))
+          uncheckpointed
+            .set(entry.manifest!.id, uncheckpointed.get(entry.manifest!.id) ?? [])
+            .get(entry.manifest!.id)!
+            .push({ projectId: project.projectId, title: project.title });
+        break;
+      }
+    }
+    return {
+      ...result,
+      plugins: result.plugins.map((plugin) => {
+        const projects = uncheckpointed.get(plugin.id);
+        return projects === undefined ? plugin : { ...plugin, uncheckpointedProjects: projects };
+      }),
+    };
+  });
+
   const announced =
     <Args extends ReadonlyArray<unknown>>(
       mutation: (...args: Args) => Effect.Effect<PluginListResult, PluginError>,
     ) =>
     (...args: Args) =>
-      mutation(...args).pipe(Effect.tap(() => announce));
+      mutation(...args).pipe(
+        Effect.tap(() => announce),
+        Effect.flatMap(withUncheckpointedProjects),
+      );
 
   return Context.make(
     PluginService,
     PluginService.of({
-      list: Effect.sync(snapshot),
+      list: Effect.suspend(() => withUncheckpointedProjects(snapshot())),
       importFolder: announced(importFolder),
       remove: announced(remove),
       setEnabled: announced(setEnabled),

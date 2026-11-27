@@ -5364,6 +5364,7 @@
   "8367aa23b6d68e01": "Checkpoints: {strategies}",
   "dc37e42339816cde": "Sem checkpoints: os turnos em seus repositórios não podem ser comparados nem revertidos.",
   "42a02a4b27828027": "Indisponível",
+  "cf48cdabd95131a4": "Sem checkpoints em {projects}: snapshots nativos abrangem o repositório inteiro, e esses projetos são subpastas dele.",
   "cd776f9508d1de2e": "Plugins de VCS · {environment}",
   "dc0187e50c99f34a": "Plugins de VCS",
   "5c08300bcce3e73f": "Branches e worktrees",
