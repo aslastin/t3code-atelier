@@ -19,7 +19,9 @@ export const holdsRepository = Effect.fn("holdsRepository")(
     options: { readonly bareRepositories?: boolean } = {},
   ) {
     const bareRepositories = options.bareRepositories !== false;
-    const device = (yield* fileSystem.stat(root)).dev;
+    // The parent's device, so `root` that is itself a mount counts too.
+    const device = (yield* fileSystem.stat(path.dirname(root))).dev;
+    if ((yield* fileSystem.stat(root)).dev !== device) return true;
     const queue = [root];
     for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
       const folder = next;
@@ -34,12 +36,12 @@ export const holdsRepository = Effect.fn("holdsRepository")(
         if (yield* fileSystem.exists(path.join(folder, marker))) return true;
       }
       for (const entry of entries) {
-        if (!bareRepositories && entry.toLowerCase() === ".git") continue;
         const child = path.join(folder, entry);
         if (Option.isSome(yield* fileSystem.readLink(child).pipe(Effect.option))) continue;
         const info = yield* fileSystem.stat(child);
         if (info.type !== "Directory") continue;
         if (info.dev !== device) return true;
+        if (!bareRepositories && entry.toLowerCase() === ".git") continue;
         queue.push(child);
       }
     }

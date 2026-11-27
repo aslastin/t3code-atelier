@@ -24,22 +24,24 @@ it.layer(NodeServices.layer)("holdsRepository", (it) => {
       yield* fs.writeFileString(path.join(root, "notes", "mono", ".kite", "HEAD"), "main\n");
       assert.isTrue(yield* holdsRepository(fs, path, root, [".kite/HEAD"], gitless));
       yield* fs.remove(path.join(root, "notes", "mono"), { recursive: true });
-      // Another file system mounted below is never walked into.
-      const mount = path.join(root, "notes");
-      const mounted = FileSystem.FileSystem.of({
-        ...fs,
-        stat: (target) =>
-          fs
-            .stat(target)
-            .pipe(
-              Effect.map((info) =>
-                target === mount || target.startsWith(`${mount}/`)
-                  ? { ...info, dev: info.dev + 1n }
-                  : info,
+      // Another file system mounted below, at `.git`, or at the root itself is never walked into.
+      const mountedAt = (mount: string) =>
+        FileSystem.FileSystem.of({
+          ...fs,
+          stat: (target) =>
+            fs
+              .stat(target)
+              .pipe(
+                Effect.map((info) =>
+                  target === mount || target.startsWith(`${mount}/`)
+                    ? { ...info, dev: info.dev + 1n }
+                    : info,
+                ),
               ),
-            ),
-      });
-      assert.isTrue(yield* holdsRepository(mounted, path, root, [], gitless));
+        });
+      for (const mount of [path.join(root, "notes"), path.join(root, "clone", ".git"), root]) {
+        assert.isTrue(yield* holdsRepository(mountedAt(mount), path, root, [], gitless));
+      }
     }).pipe(Effect.scoped),
   );
 });
