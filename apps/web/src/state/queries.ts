@@ -17,6 +17,7 @@ import {
 import {
   ProjectSearchContentsError,
   PROJECT_SEARCH_CONTENTS_QUERY_MAX_LENGTH,
+  PROJECT_SEARCH_UNAVAILABLE_DETAIL,
   THREAD_SEARCH_QUERY_MAX_LENGTH,
 } from "@t3tools/contracts";
 import { messageSearchTokens } from "@t3tools/shared/paletteSearch";
@@ -450,7 +451,7 @@ export function useProjectContentSearch(
                 }),
               )
             : isProjectSearchContentsError(result.failure) &&
-                result.failure.failure === "search_unavailable"
+                result.failure.detail === PROJECT_SEARCH_UNAVAILABLE_DETAIL
               ? resolve(msg("Text search is not available in this repository yet."))
               : result.error,
     isPending:

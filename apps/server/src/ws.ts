@@ -72,6 +72,7 @@ import {
   type OrchestrationV2ShellStreamItem,
   type OrchestrationV2ThreadStreamItem,
   type ApplicationStoredEvent,
+  PROJECT_SEARCH_UNAVAILABLE_DETAIL,
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
@@ -607,6 +608,7 @@ function projectEntriesFailureContext(error: WorkspaceEntries.WorkspaceEntriesEr
   readonly normalizedCwd?: string;
   readonly timeout?: string;
   readonly detail?: string;
+  readonly message?: string;
 } {
   switch (error._tag) {
     case "WorkspaceRootNotExistsError":
@@ -655,7 +657,12 @@ function projectEntriesFailureContext(error: WorkspaceEntries.WorkspaceEntriesEr
         detail: error.reason,
       };
     case "WorkspaceEntriesSearchUnavailableError":
-      return { failure: "search_unavailable", normalizedCwd: error.cwd };
+      return {
+        failure: "search_index_search_failed",
+        normalizedCwd: error.cwd,
+        detail: PROJECT_SEARCH_UNAVAILABLE_DETAIL,
+        message: error.message,
+      };
     default:
       return unexpectedCompatibilityError(error);
   }

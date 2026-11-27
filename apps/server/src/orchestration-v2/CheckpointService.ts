@@ -259,7 +259,7 @@ export interface CheckpointServiceV2Shape {
   /**
    * Atelier fork: saves each target folder as `restore` would, before a rewind changes anything
    * else, such as the provider's conversation. `restore` then reuses the copies; `discard` drops
-   * the ones made here when the rewind stops before `restore`.
+   * the ones made here that `restore` never reached when the rewind stops.
    */
   readonly saveBeforeRestore: (input: {
     readonly targets: ReadonlyArray<{
@@ -854,6 +854,10 @@ export const layer: Layer.Layer<
       }
     });
 
+    // Pre-rewind copies `saveBeforeRestore` made that no `restore` has reached yet.
+    const unclaimedSaves = new Set<string>();
+    const saveKey = (cwd: string, checkpointRef: CheckpointRef) => `${cwd}\0${checkpointRef}`;
+
     const saveBeforeRestore: CheckpointServiceV2Shape["saveBeforeRestore"] = Effect.fn(
       "CheckpointService.saveBeforeRestore",
     )(function* (input) {
@@ -871,12 +875,17 @@ export const layer: Layer.Layer<
             );
       const nested = yield* resolveNestedScopePaths(input.scopes);
       const created: Array<{ readonly cwd: string; readonly checkpointRef: CheckpointRef }> = [];
+      // A copy `restore` reached is its own to keep or delete.
       const discard = Effect.forEach(
         created,
         (saved) =>
-          checkpointStore
-            .deleteCheckpointRefs({ cwd: saved.cwd, checkpointRefs: [saved.checkpointRef] })
-            .pipe(Effect.ignore),
+          Effect.suspend(() =>
+            unclaimedSaves.delete(saveKey(saved.cwd, saved.checkpointRef))
+              ? checkpointStore
+                  .deleteCheckpointRefs({ cwd: saved.cwd, checkpointRefs: [saved.checkpointRef] })
+                  .pipe(Effect.ignore)
+              : Effect.void,
+          ),
         { discard: true },
       );
       yield* Effect.forEach(
@@ -898,6 +907,7 @@ export const layer: Layer.Layer<
                 checkpointRef,
               });
               created.push({ cwd: target.scope.cwd, checkpointRef });
+              unclaimedSaves.add(saveKey(target.scope.cwd, checkpointRef));
             }),
           ).pipe(Effect.catch((cause) => Effect.flip(failed(target, cause)))),
         { discard: true },
@@ -938,6 +948,7 @@ export const layer: Layer.Layer<
                 const preRewindRef = yield* scopeRef(target.scope.id, "pre-rewind").pipe(
                   Effect.provideService(Digest.Digest, crypto),
                 );
+                unclaimedSaves.delete(saveKey(target.scope.cwd, preRewindRef));
                 // One an earlier failed rewind left is still the only copy of how the folder was.
                 const kept = yield* checkpointStore.hasCheckpointRef({
                   cwd: target.scope.cwd,

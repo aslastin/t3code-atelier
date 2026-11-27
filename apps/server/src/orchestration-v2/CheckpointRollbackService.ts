@@ -460,27 +460,30 @@ export const layer: Layer.Layer<
               // Atelier fork: kept until the whole rewind is done. A checkpoint found unrestorable
               // after the checkout came back must not cost the files that were left there.
               // A repository left inside, with history no checkpoint saved, is kept even then.
-              const holdsRepository = fileSystem.readDirectory(aside, { recursive: true }).pipe(
-                Effect.map((entries) => {
-                  const markers = [".git", ...rootMarkers()].map((marker) => marker.toLowerCase());
-                  const relatives = entries.map((entry) =>
-                    entry.split(path.sep).join("/").toLowerCase(),
-                  );
-                  const present = new Set(relatives);
-                  return relatives.some(
-                    (relative) =>
-                      markers.some(
-                        (marker) =>
-                          relative.endsWith(`/${marker}`) || relative.includes(`/${marker}/`),
-                      ) ||
-                      // A bare repository: HEAD beside its objects and refs.
-                      (relative.endsWith("/head") &&
-                        present.has(`${relative.slice(0, -"head".length)}objects`) &&
-                        present.has(`${relative.slice(0, -"head".length)}refs`)),
-                  );
-                }),
-                Effect.orElseSucceed(() => true),
-              );
+              // Stops at the first repository found, so a mount left inside is not read through.
+              const holdsRepository = Effect.gen(function* () {
+                const markers = [".git", ...rootMarkers()];
+                const queue = [path.join(aside, "folder")];
+                for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+                  const folder = next;
+                  const entries = yield* fileSystem.readDirectory(folder);
+                  const names = new Set(entries.map((entry) => entry.toLowerCase()));
+                  // A bare repository: HEAD beside its objects and refs.
+                  if (names.has("head") && names.has("objects") && names.has("refs")) return true;
+                  for (const marker of markers) {
+                    if (!names.has(marker.split("/")[0]!.toLowerCase())) continue;
+                    if (!marker.includes("/")) return true;
+                    if (yield* fileSystem.exists(path.join(folder, marker))) return true;
+                  }
+                  for (const entry of entries) {
+                    const child = path.join(folder, entry);
+                    if (Option.isSome(yield* fileSystem.readLink(child).pipe(Effect.option)))
+                      continue;
+                    if ((yield* fileSystem.stat(child)).type === "Directory") queue.push(child);
+                  }
+                }
+                return false;
+              }).pipe(Effect.orElseSucceed(() => true));
               yield* Effect.addFinalizer((exit) =>
                 Effect.gen(function* () {
                   if (Exit.isSuccess(exit) && !(yield* holdsRepository)) {
@@ -623,7 +626,9 @@ export const layer: Layer.Layer<
               })
               .pipe(Effect.onError(() => saved?.discard ?? Effect.void));
       if (restoreFiles) {
-        yield* checkpoints.restore({ targets: restoreTargets, scopes: [scope, ...repositories] });
+        yield* checkpoints
+          .restore({ targets: restoreTargets, scopes: [scope, ...repositories] })
+          .pipe(Effect.onError(() => saved?.discard ?? Effect.void));
       }
       const staleScopeCheckpoints = staleCheckpoints.filter((stale) => stale.scopeId === scope.id);
       if (staleScopeCheckpoints.length > 0) {

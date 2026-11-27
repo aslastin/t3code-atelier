@@ -395,8 +395,6 @@ export const ProjectEntriesFailure = Schema.Literals([
   "search_index_scan_timed_out",
   "search_index_search_failed",
   "directory_list_failed",
-  /** Atelier fork: text search waits for search through a VCS plugin in its repositories. */
-  "search_unavailable",
 ]);
 export type ProjectEntriesFailure = typeof ProjectEntriesFailure.Type;
 
@@ -406,7 +404,15 @@ type ProjectEntriesFailureContext = {
   readonly timeout?: string;
   readonly detail?: string;
   readonly cause?: unknown;
+  /** Atelier fork: replaces the generic text, for a failure a client cannot tell apart. */
+  readonly message?: string;
 };
+
+/**
+ * Atelier fork: `detail` of a text search refused in a VCS plugin's repository. Sent under an
+ * existing failure so that clients built before it still decode the error and show its message.
+ */
+export const PROJECT_SEARCH_UNAVAILABLE_DETAIL = "search_unavailable";
 
 function decodedProjectErrorMessage(props: object): string | undefined {
   if (!("message" in props)) return undefined;
