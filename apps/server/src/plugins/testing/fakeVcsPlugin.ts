@@ -128,8 +128,10 @@ const readList = () => {
 
 switch (command) {
   case "check": {
-    // A test can hold the check until it writes "release-check" next to "hold-check".
+    // A test can hold the check until it writes "release-check" next to "hold-check"; it
+    // learns the check is running from "check-started".
     const dir = process.env.T3_PLUGIN_DIR ?? "";
+    if (fs.existsSync(path.join(dir, "hold-check"))) fs.writeFileSync(path.join(dir, "check-started"), "");
     if (fs.existsSync(path.join(dir, "hold-check")))
       while (!fs.existsSync(path.join(dir, "release-check")))
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);

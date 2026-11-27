@@ -2,6 +2,7 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -69,6 +70,17 @@ const setup = Effect.fn("test.setup")(function* (options: FakeVcsPluginOptions =
 });
 
 const layer = NodeServices.layer;
+
+/** Completes once `file` exists, woken by the folder's change events rather than a timer. */
+const fileAppears = (file: string) =>
+  Effect.callback<void>((resume) => {
+    const watcher = NodeFS.watch(NodePath.dirname(file), () => {
+      if (NodeFS.existsSync(file)) resume(Effect.void);
+    });
+    // Created before the watcher started: nothing would wake it.
+    if (NodeFS.existsSync(file)) resume(Effect.void);
+    return Effect.sync(() => watcher.close());
+  });
 
 const buildPlugins = (home: string) =>
   Layer.build(
@@ -166,6 +178,8 @@ it.live("keeps a plugin turned off while its startup check was still running", (
       ),
     );
     const plugins = Context.get(context, PluginService.PluginService);
+    // Turned off only once the check is running, so the test sees the race it is about.
+    yield* fileAppears(`${installed}/check-started`);
     yield* plugins.setEnabled("kite", false);
     NodeFS.writeFileSync(`${installed}/release-check`, "");
     yield* Context.get(context, VcsPluginDrivers).current;
