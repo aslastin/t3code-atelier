@@ -768,7 +768,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
    * directory read can descend into a linked folder. Null when a folder cannot be read.
    */
   const walk = Effect.fnUntraced(function* (absolute: string) {
-    const found: string[] = [];
+    const found: Array<{ readonly path: string; readonly kind: "link" | "folder" | "file" }> = [];
     const pending = [""];
     while (pending.length > 0) {
       const relative = pending.pop()!;
@@ -778,11 +778,15 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       if (names === null) return null;
       for (const name of names) {
         const entry = relative === "" ? name : `${relative}/${name}`;
-        found.push(entry);
         const entryPath = path.join(absolute, entry);
-        if (Option.isSome(yield* fs.readLink(entryPath).pipe(Effect.option))) continue;
+        if (Option.isSome(yield* fs.readLink(entryPath).pipe(Effect.option))) {
+          found.push({ path: entry, kind: "link" });
+          continue;
+        }
         const info = yield* fs.stat(entryPath).pipe(Effect.option);
-        if (Option.isSome(info) && info.value.type === "Directory") pending.push(entry);
+        const folder = Option.isSome(info) && info.value.type === "Directory";
+        found.push({ path: entry, kind: folder ? "folder" : "file" });
+        if (folder) pending.push(entry);
       }
     }
     return found;
@@ -793,8 +797,9 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     if (Option.isSome(yield* fs.readLink(absolute).pipe(Effect.option))) return [];
     const info = yield* fs.stat(absolute).pipe(Effect.option);
     if (Option.isNone(info) || info.value.type !== "Directory") return [];
-    const entries = yield* walk(absolute);
-    if (entries === null) return null;
+    const walked = yield* walk(absolute);
+    if (walked === null) return null;
+    const entries = walked.map((entry) => entry.path);
     // Compared without case: on a case-insensitive disk `.KITE/HEAD` is the plugin's marker too.
     const present = new Set(entries.map((entry) => entry.toLowerCase()));
     const markers = context.repositoryMarkers().map((marker) => marker.toLowerCase());
@@ -815,6 +820,19 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         const prefix = dir === "" ? "" : `${dir.toLowerCase()}/`;
         if (present.has(`${prefix}objects`) && present.has(`${prefix}refs`)) add(dir);
       }
+    }
+    // A marker reached through a link, such as a metadata folder that is one, is not walked:
+    // the folder holding such a link is probed as the driver would.
+    const heads = new Set([".git", ...markers.map((marker) => marker.split("/")[0]!)]);
+    const probed = new Set([""]);
+    for (const entry of walked) {
+      const name = entry.path.split("/").at(-1)!.toLowerCase();
+      if (entry.kind === "link" && heads.has(name))
+        probed.add(entry.path.split("/").slice(0, -1).join("/"));
+    }
+    for (const relative of probed) {
+      if (yield* isRepositoryRoot(relative === "" ? absolute : path.join(absolute, relative)))
+        add(relative);
     }
     return [...roots];
   });
@@ -970,12 +988,18 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           changed.status !== "deleted" &&
           (file === changed.path || file.startsWith(`${changed.path}/`)),
       );
-    for (const file of targetFiles) {
-      if (file.status !== "deleted") continue;
-      for (const inside of yield* listFiles(location, file.path)) {
-        if (inside !== file.path && !reported(inside) && kept(inside))
+    // Removing a deleted file's path, or writing a file there, takes the folder now there with
+    // it: only files the VCS reports may go, since no snapshot saved the others.
+    const overwritten = [
+      ...targetFiles.filter((file) => file.status === "deleted").map((file) => file.path),
+      ...baseFiles.map((file) => file.path),
+      ...overlay,
+    ];
+    for (const file of overwritten) {
+      for (const inside of yield* listFiles(location, file)) {
+        if (inside !== file && !reported(inside) && kept(inside))
           return {
-            problem: `${file.path} is now a folder holding files ${runner.label} does not report, so its deletion cannot be restored.`,
+            problem: `${file} is now a folder holding files ${runner.label} does not report, so it cannot be restored.`,
           } as const;
       }
     }
@@ -1106,15 +1130,10 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     const info = yield* fs.stat(absolute).pipe(Effect.orElseSucceed(() => null));
     if (info === null) return [];
     if (info.type !== "Directory") return [folder];
-    const files: string[] = [];
-    for (const entry of (yield* walk(absolute)) ?? []) {
-      const entryPath = path.join(absolute, entry);
-      // A link is removed itself; its target, maybe outside the checkout, is never visited.
-      const isLink = Option.isSome(yield* fs.readLink(entryPath).pipe(Effect.option));
-      const stat = isLink ? null : yield* fs.stat(entryPath).pipe(Effect.orElseSucceed(() => null));
-      if (isLink || stat?.type === "File") files.push(`${folder}/${entry}`);
-    }
-    return files;
+    // A link is removed itself; its target, maybe outside the checkout, is never visited.
+    return ((yield* walk(absolute)) ?? [])
+      .filter((entry) => entry.kind !== "folder")
+      .map((entry) => `${folder}/${entry.path}`);
   });
 
   const hasCheckpointRef: VcsCheckpointOps["hasCheckpointRef"] = Effect.fn(

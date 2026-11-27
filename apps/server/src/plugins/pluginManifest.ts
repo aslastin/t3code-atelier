@@ -208,7 +208,13 @@ export const resolvePluginFile = Effect.fn("pluginManifest.resolvePluginFile")(
     const root = yield* fs.realPath(directory);
     const target = yield* fs.realPath(path.join(root, relativePath));
     const relative = path.relative(root, target);
-    if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return null;
+    if (
+      relative === "" ||
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    )
+      return null;
     return (yield* fs.stat(target)).type === "File" ? target : null;
   },
   Effect.orElseSucceed(() => null),
@@ -248,7 +254,8 @@ const isWholeSvg = (text: string) => {
     .trim();
   if (!/^<svg[\s>/]/i.test(body) || !/<\/svg\s*>$/i.test(body)) return false;
   // Every `<` starts a whole tag, so a quote left open cannot hide one.
-  const tag = /<(\/?)([A-Za-z_][\w:.-]*)(?:\s+[^\s"'<>/=]+\s*=\s*(?:"[^"<]*"|'[^'<]*'))*\s*(\/?)>/y;
+  const tag =
+    /<(\/?)([A-Za-z_][\w:.-]*)((?:\s+[^\s"'<>/=]+\s*=\s*(?:"[^"<]*"|'[^'<]*'))*)\s*(\/?)>/y;
   const open: string[] = [];
   let closedRoot = false;
   for (let at = body.indexOf("<"); at !== -1; at = body.indexOf("<", tag.lastIndex)) {
@@ -256,9 +263,12 @@ const isWholeSvg = (text: string) => {
     const match = tag.exec(body);
     if (match === null || closedRoot) return false;
     const name = match[2]!;
+    // An attribute given twice makes the document invalid XML.
+    const attributes = [...match[3]!.matchAll(/([^\s"'<>/=]+)\s*=/g)].map((found) => found[1]);
+    if (new Set(attributes).size !== attributes.length) return false;
     if (match[1] === "/") {
-      if (open.pop() !== name || match[3] === "/") return false;
-    } else if (match[3] !== "/") open.push(name);
+      if (open.pop() !== name || match[4] === "/" || attributes.length > 0) return false;
+    } else if (match[4] !== "/") open.push(name);
     if (open.length === 0) closedRoot = true;
   }
   return closedRoot;

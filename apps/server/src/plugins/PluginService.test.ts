@@ -220,6 +220,7 @@ describe("PluginService", () => {
         '<svg><svg><circle r="3"/></svg>',
         '<svg xmlns="http://www.w3.org/2000/svg"><g></svg>',
         '<svg><g a="</svg>',
+        '<svg width="1" width="2"></svg>',
         '<svg viewBox="0 0 16 16"><path d="M1 1"></svg>',
       ]) {
         NodeFS.writeFileSync(`${cut}/icon.svg`, svg);
@@ -818,6 +819,12 @@ describe("ManifestVcsDriver", () => {
         "--bare",
         `${repository}/generated/bare`,
       ]);
+      // Its metadata folder can be a link; the driver still finds the marker through it.
+      const metadata = NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-kite-metadata-`);
+      NodeFS.writeFileSync(`${metadata}/HEAD`, "main\n");
+      NodeFS.mkdirSync(`${repository}/generated/linked`);
+      NodeFS.symlinkSync(metadata, `${repository}/generated/linked/.kite`);
+      NodeFS.writeFileSync(`${repository}/generated/linked/work.txt`, "work\n");
       yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("0") });
       for (const kept of [
         "clone/.git/HEAD",
@@ -825,6 +832,7 @@ describe("ManifestVcsDriver", () => {
         "deep/one/theirs/.OTHER/HEAD",
         "deep/one/theirs/work.txt",
         "bare/HEAD",
+        "linked/work.txt",
       ])
         assert.isTrue(NodeFS.existsSync(`${repository}/generated/${kept}`), kept);
       NodeFS.rmSync(`${repository}/generated`, { recursive: true });
@@ -907,6 +915,19 @@ describe("ManifestVcsDriver", () => {
       const overIgnored = { cwd: repository, checkpointRef: ref("5a") };
       assert.isFalse(yield* checkpoints.verifyRestorable!(overIgnored));
       yield* checkpoints.restoreCheckpoint(overIgnored).pipe(Effect.flip);
+      assert.isTrue(NodeFS.existsSync(`${repository}/bundle/private.txt`));
+      // Nor is a base file written back over them.
+      NodeFS.writeFileSync(`${repository}/.kite/ignored`, "");
+      NodeFS.rmSync(`${repository}/bundle`, { recursive: true });
+      NodeFS.writeFileSync(`${repository}/bundle`, "bundle\n");
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("5c") });
+      NodeFS.rmSync(`${repository}/bundle`);
+      NodeFS.mkdirSync(`${repository}/bundle`);
+      NodeFS.writeFileSync(`${repository}/bundle/private.txt`, "notes\n");
+      NodeFS.writeFileSync(`${repository}/.kite/ignored`, "bundle/private.txt\n");
+      const baseOverIgnored = { cwd: repository, checkpointRef: ref("5c") };
+      assert.isFalse(yield* checkpoints.verifyRestorable!(baseOverIgnored));
+      yield* checkpoints.restoreCheckpoint(baseOverIgnored).pipe(Effect.flip);
       assert.isTrue(NodeFS.existsSync(`${repository}/bundle/private.txt`));
       NodeFS.rmSync(`${repository}/.kite/ignored`);
       NodeFS.rmSync(`${repository}/bundle`, { recursive: true });

@@ -485,6 +485,7 @@ const make = Effect.gen(function* () {
         const target = path.join(directory, id);
         const previous = path.join(directory, `.previous-${id}.${NodeCrypto.randomUUID()}`);
         const hadPrevious = yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false));
+        // Uninterruptible: a cancelled import never leaves the running server without its copy.
         yield* Effect.gen(function* () {
           if (hadPrevious) yield* fs.rename(target, previous);
           // A failed swap puts the installed copy back where it was.
@@ -496,6 +497,7 @@ const make = Effect.gen(function* () {
               ),
             );
         }).pipe(
+          Effect.uninterruptible,
           Effect.mapError((cause) => failure(operation, cause.message, id)),
           Effect.tapError(() => cleanupStaging),
         );

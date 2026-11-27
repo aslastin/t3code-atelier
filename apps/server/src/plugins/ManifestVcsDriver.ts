@@ -25,7 +25,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import type * as Semaphore from "effect/Semaphore";
+import * as Semaphore from "effect/Semaphore";
 
 import * as VcsDriver from "../vcs/VcsDriver.ts";
 import { worktreeProjectFolder } from "../workspace/worktreeProjectPath.ts";
@@ -261,7 +261,8 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
       });
     const hash = NodeCrypto.createHash("sha256").update(`${root}\0${branch}`).digest("hex");
     let prefix = "";
-    for (const character of branch.replace(/\//g, "-")) {
+    // Only plain characters: `\` and `:` are separators or drives on Windows.
+    for (const character of branch.replace(/[^A-Za-z0-9._-]/g, "-")) {
       if (Buffer.byteLength(prefix + character) > 23) break;
       prefix += character;
     }
@@ -277,6 +278,8 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
   });
 
   const commands = manifest.commands;
+  // One creation at a time: the occupancy check and the plugin's command are not one step.
+  const creating = yield* Semaphore.make(1);
   const workflow: VcsDriver.VcsWorkflowOps = {
     status: (request) => status(request.cwd),
     listRefs: Effect.fn("ManifestVcsDriver.listRefs")(function* (request) {
@@ -442,7 +445,7 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
         const relative = path.relative(yield* real(root), yield* real(request.cwd));
         const projectPath = yield* worktreeProjectFolder(fs, path, relative, worktreePath);
         return { worktree: { path: worktreePath, projectPath, refName } };
-      }),
+      }, creating.withPermits(1)),
       // The plugin keeps its own worktree list; T3 Code has nothing of its own to forget.
       pruneWorktrees: () => Effect.void,
       removeWorktree: Effect.fn("ManifestVcsDriver.removeWorktree")(function* (request) {
@@ -484,7 +487,13 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
           });
         const inside = (parent: string, child: string) => {
           const relative = path.relative(parent, child);
-          return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+          // `..name` is a child; only `..` itself or `../…` leaves the folder.
+          return (
+            relative === "" ||
+            (relative !== ".." &&
+              !relative.startsWith(`..${path.sep}`) &&
+              !path.isAbsolute(relative))
+          );
         };
         // Never the repository T3 Code works from, nor a checkout that holds the caller, however
         // either is spelled.
