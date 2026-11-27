@@ -271,6 +271,8 @@ const make = Effect.gen(function* () {
       manifest,
       reportError: reportError(entry.folder),
       worktreesDirectory: worktreesDirectory.pipe(Effect.provideService(Path.Path, path)),
+      installedMarkers: () =>
+        [...entries.values()].flatMap((other) => other.manifest?.detect.markers ?? []),
     });
     return {
       ...entry,
@@ -446,6 +448,12 @@ const make = Effect.gen(function* () {
             "The plugin's manifest changed while it was checked.",
             id,
           );
+        }
+        // Nor can it remove a file the manifest names, before the installed copy is replaced.
+        const afterCheck = yield* load(id, staged.enabled, staging);
+        if (afterCheck.manifest === null) {
+          yield* cleanupStaging;
+          return yield* failure(operation, afterCheck.manifestErrors.join(" "), id);
         }
         const target = path.join(directory, id);
         const previous = path.join(directory, `.previous-${NodeCrypto.randomUUID()}`);

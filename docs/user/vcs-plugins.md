@@ -154,9 +154,9 @@ a new thread starts from the top of the list again.
   network or FUSE mount it downloads the whole folder. Only list it if that is acceptable. A Git
   repository inside the folder is kept as its commit alone.
 
-With `changed-files` and `full`, a rollback never removes a repository inside the folder. If it
-would have to write a file where a folder holding one now stands, it is refused before anything
-changes.
+With `changed-files` and `full`, a rollback never removes a repository inside the folder, whether
+Git's, a bare one, or another installed plugin's checkout, and never writes into or over one. When
+it would have to, it is refused before anything changes.
 
 If no listed strategy works, the turn has no checkpoint. Its changes cannot be shown or rolled
 back, and the conversation says why.

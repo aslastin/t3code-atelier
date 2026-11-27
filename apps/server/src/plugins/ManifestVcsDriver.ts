@@ -38,6 +38,8 @@ export interface ManifestVcsDriverInput {
   readonly reportError: (operation: string, message: string) => Effect.Effect<void>;
   /** The folder new worktrees go in, as Settings → Worktrees picks it for Git. */
   readonly worktreesDirectory: Effect.Effect<string | null>;
+  /** Marker paths of every installed plugin, so a checkpoint restore can tell their checkouts. */
+  readonly installedMarkers?: () => ReadonlyArray<string>;
 }
 
 /** Marker probes only: detection never starts a process. */
@@ -509,6 +511,7 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
     metadataFolders: [
       ...new Set(manifest.detect.markers.map((marker) => marker.split(/[/\\]/)[0]!)),
     ],
+    repositoryMarkers: () => [...manifest.detect.markers, ...(input.installedMarkers?.() ?? [])],
     repositoryRoot,
   });
 

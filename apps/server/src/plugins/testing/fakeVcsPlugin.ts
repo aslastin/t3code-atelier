@@ -143,6 +143,8 @@ switch (command) {
       else manifest.label = "Rewritten";
       fs.writeFileSync(manifestFile, JSON.stringify(manifest));
     }
+    // A check that deletes a file its manifest names.
+    if (fs.existsSync(path.join(dir, "remove-icon-on-check"))) fs.rmSync(path.join(dir, "icon.svg"));
     const problemsFile = path.join(process.env.T3_PLUGIN_DIR ?? "", "problems.txt");
     const problems = fs.existsSync(problemsFile) ? [fs.readFileSync(problemsFile, "utf8").trim()] : [];
     out({ version: "1.2.3", problems });
@@ -220,6 +222,7 @@ switch (command) {
     break;
   }
   case "snapshot-drop":
+    if (fs.existsSync(path.join(kite, "broken-drop"))) fail("the store is unavailable");
     fs.rmSync(snapshotDir(args[0]), { recursive: true, force: true });
     break;
   case "snapshot-restore": {

@@ -125,6 +125,12 @@ it.live("installs the manifest its one check approved", () =>
     NodeFS.writeFileSync(`${source}/rewrite-on-check`, "extra");
     const extra = yield* plugins.importFolder(source).pipe(Effect.flip);
     assert.include(extra.detail, "changed while it was checked");
+    // A check that deletes a file the manifest names leaves the installed copy in place.
+    NodeFS.rmSync(`${source}/rewrite-on-check`);
+    NodeFS.writeFileSync(`${source}/remove-icon-on-check`, "");
+    const iconless = yield* plugins.importFolder(source).pipe(Effect.flip);
+    assert.include(iconless.detail, "icon:");
+    assert.isTrue(NodeFS.existsSync(`${home}/plugins/kite/icon.svg`));
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
@@ -192,6 +198,14 @@ describe("PluginService", () => {
       // So is an icon it names that is not there.
       const icon = yield* setup({ extraManifest: { icon: "missing.svg" } }).pipe(Effect.flip);
       assert.include(icon.message, "icon: missing.svg");
+      // And one cut off before its end, which would draw nothing.
+      const { plugins } = yield* setup();
+      const cut = writeFakeVcsPlugin(NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-cut-icon-`), {
+        id: "cut",
+      });
+      NodeFS.writeFileSync(`${cut}/icon.svg`, "<svg><path");
+      const cutIcon = yield* plugins.importFolder(cut).pipe(Effect.flip);
+      assert.include(cutIcon.message, "icon: icon.svg");
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
@@ -419,6 +433,19 @@ describe("ManifestVcsDriver", () => {
         checkpointRefs: [ref("2-again")],
       });
       assert.isFalse(NodeFS.existsSync(`${repository}/.kite/snapshots/${shared!.revision}`));
+      // A deletion the plugin could not finish is tried again by the next cleanup.
+      const [kept] = yield* sql<{ readonly revision: string }>`
+        SELECT revision FROM atelier_vcs_plugin_checkpoint_records
+        WHERE checkpoint_ref = ${ref("1b")}
+      `;
+      NodeFS.writeFileSync(`${repository}/.kite/broken-drop`, "");
+      yield* checkpoints.deleteCheckpointRefs({ cwd: repository, checkpointRefs: [ref("1b")] });
+      assert.isTrue(
+        yield* checkpoints.hasCheckpointRef({ cwd: repository, checkpointRef: ref("1b") }),
+      );
+      NodeFS.rmSync(`${repository}/.kite/broken-drop`);
+      yield* checkpoints.deleteCheckpointRefs({ cwd: repository, checkpointRefs: [ref("1b")] });
+      assert.isFalse(NodeFS.existsSync(`${repository}/.kite/snapshots/${kept!.revision}`));
 
       assert.isTrue(
         yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("0") }),
@@ -662,7 +689,7 @@ describe("ManifestVcsDriver", () => {
 
   it.live("changed-files restores nothing through a linked folder or into a nested scope", () =>
     Effect.gen(function* () {
-      const { driver, repository } = yield* setup({ checkpoints: ["changed-files"] });
+      const { driver, repository, plugins } = yield* setup({ checkpoints: ["changed-files"] });
       const checkpoints = driver!.checkpoints;
       yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
 
@@ -692,13 +719,35 @@ describe("ManifestVcsDriver", () => {
       });
       assert.isFalse(NodeFS.existsSync(`${repository}/generated/own.txt`));
       assert.isTrue(NodeFS.existsSync(`${repository}/generated/nested/keep.txt`));
-      // A repository made in an added folder keeps its files and history.
+      // A repository made in an added folder keeps its files and history: Git's, a bare one, or
+      // another installed plugin's.
+      yield* plugins.importFolder(
+        writeFakeVcsPlugin(NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-other-plugin-`), {
+          id: "other",
+          extraManifest: { detect: { markers: [".other/HEAD"] } },
+        }),
+      );
       NodeFS.mkdirSync(`${repository}/generated/clone/.git`, { recursive: true });
       NodeFS.writeFileSync(`${repository}/generated/clone/.git/HEAD`, "ref: refs/heads/main\n");
       NodeFS.writeFileSync(`${repository}/generated/clone/work.txt`, "work\n");
+      NodeFS.mkdirSync(`${repository}/generated/deep/one/theirs/.other`, { recursive: true });
+      NodeFS.writeFileSync(`${repository}/generated/deep/one/theirs/.other/HEAD`, "main\n");
+      NodeFS.writeFileSync(`${repository}/generated/deep/one/theirs/work.txt`, "work\n");
+      NodeChildProcess.execFileSync("git", [
+        "init",
+        "-q",
+        "--bare",
+        `${repository}/generated/bare`,
+      ]);
       yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("0") });
-      assert.isTrue(NodeFS.existsSync(`${repository}/generated/clone/.git/HEAD`));
-      assert.isTrue(NodeFS.existsSync(`${repository}/generated/clone/work.txt`));
+      for (const kept of [
+        "clone/.git/HEAD",
+        "clone/work.txt",
+        "deep/one/theirs/.other/HEAD",
+        "deep/one/theirs/work.txt",
+        "bare/HEAD",
+      ])
+        assert.isTrue(NodeFS.existsSync(`${repository}/generated/${kept}`), kept);
       NodeFS.rmSync(`${repository}/generated`, { recursive: true });
 
       // Exclusions are relative to the scope's folder.
@@ -888,6 +937,35 @@ describe("ManifestVcsDriver", () => {
         assert.isTrue(NodeFS.existsSync(`${repository}/bundle/child/work.txt`));
       }
       NodeFS.rmSync(`${repository}/bundle`, { recursive: true });
+
+      // Nor are files the snapshot has written into a repository made where they were since, or
+      // over one that now stands where the snapshot has a file.
+      for (const [file, repositoryFolder] of [
+        ["one/two/tool/main.txt", "one/two/tool"],
+        ["solo", "solo"],
+      ] as const) {
+        NodeFS.mkdirSync(`${repository}/${file.split("/").slice(0, -1).join("/")}`, {
+          recursive: true,
+        });
+        NodeFS.writeFileSync(`${repository}/${file}`, "saved\n");
+        yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("4") });
+        if (file === repositoryFolder) NodeFS.rmSync(`${repository}/${file}`);
+        NodeFS.mkdirSync(`${repository}/${repositoryFolder}`, { recursive: true });
+        const work = `${repository}/${repositoryFolder}/${file === repositoryFolder ? "work.txt" : "main.txt"}`;
+        NodeFS.writeFileSync(work, "work\n");
+        for (const args of [
+          ["init", "-q", "-b", "main"],
+          ["add", "."],
+          ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x"],
+        ])
+          NodeChildProcess.execFileSync("git", args, { cwd: `${repository}/${repositoryFolder}` });
+        NodeFS.writeFileSync(work, "local\n");
+        const restore = { cwd: repository, checkpointRef: ref("4") };
+        assert.isFalse(yield* checkpoints.verifyRestorable!(restore), file);
+        yield* checkpoints.restoreCheckpoint(restore).pipe(Effect.flip);
+        assert.strictEqual(NodeFS.readFileSync(work, "utf8"), "local\n");
+        NodeFS.rmSync(`${repository}/${file.split("/")[0]}`, { recursive: true });
+      }
 
       // A folder that has its own checkpoints now keeps its files, though this snapshot has them.
       NodeFS.writeFileSync(`${repository}/sub/b.txt`, "changed\n");

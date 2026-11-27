@@ -18,6 +18,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Semaphore from "effect/Semaphore";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -112,6 +113,8 @@ export interface PluginCheckpointContext {
   readonly strategies: ReadonlyArray<VcsPluginCheckpointStrategy>;
   /** Top-level folders the VCS keeps its own data in, never staged by `full`. */
   readonly metadataFolders: ReadonlyArray<string>;
+  /** Marker paths of this and every other installed plugin, beside `.git`. */
+  readonly repositoryMarkers: () => ReadonlyArray<string>;
   readonly repositoryRoot: (cwd: string) => Effect.Effect<string, VcsError>;
 }
 
@@ -153,6 +156,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
   const { runner } = context;
   const kind = runner.kind;
   const shadowRoot = path.join(config.stateDir, "vcs-plugin-checkpoints");
+  const nativeSnapshots = yield* Semaphore.make(1);
 
   const storageError = (operation: string, cwd: string) => (cause: unknown) =>
     new VcsCheckpointStorageError({ operation, cwd, stage: "publish", cause });
@@ -546,15 +550,22 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           ].filter((strategy) => context.strategies.includes(strategy));
     const failures: string[] = [];
     for (const strategy of order) {
-      const result = yield* capture[strategy](
-        location,
-        input.cwd,
-        input.checkpointRef,
-        repositoryExcludes(location, input.excludePaths),
-      ).pipe(Effect.result);
-      if (result._tag === "Success") {
-        return yield* writeRecord(location, input.checkpointRef, result.success);
-      }
+      const attempt = Effect.gen(function* () {
+        const result = yield* capture[strategy](
+          location,
+          input.cwd,
+          input.checkpointRef,
+          repositoryExcludes(location, input.excludePaths),
+        ).pipe(Effect.result);
+        return result._tag === "Success"
+          ? { written: yield* writeRecord(location, input.checkpointRef, result.success) }
+          : { failure: result.failure };
+      });
+      // A native snapshot is recorded before a deletion can see its revision unused.
+      const result = yield* strategy === "native"
+        ? nativeSnapshots.withPermits(1)(attempt)
+        : attempt;
+      if ("written" in result) return result.written;
       yield* Effect.logWarning("VCS plugin checkpoint strategy failed", {
         plugin: runner.label,
         strategy,
@@ -716,7 +727,6 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       ),
     );
 
-  const repositoryFolders = new Set([".git", ...context.metadataFolders]);
   /**
    * Repositories inside `folder`, repository-relative, `folder` itself included; null when the
    * folder cannot be read. Their files and history were never saved, so a restore keeps them.
@@ -726,29 +736,91 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     if (Option.isSome(yield* fs.readLink(absolute).pipe(Effect.option))) return [];
     const info = yield* fs.stat(absolute).pipe(Effect.option);
     if (Option.isNone(info) || info.value.type !== "Directory") return [];
-    const entries = yield* fs
+    const listed = yield* fs
       .readDirectory(absolute, { recursive: true })
       .pipe(Effect.orElseSucceed(() => null));
-    if (entries === null) return null;
+    if (listed === null) return null;
+    const entries = listed.map((entry) => entry.split(path.sep).join("/"));
+    const present = new Set(entries);
+    const markers = context.repositoryMarkers();
     const roots = new Set<string>();
+    const add = (relative: string) => roots.add(relative === "" ? folder : `${folder}/${relative}`);
     for (const entry of entries) {
-      const parts = entry.split(path.sep);
-      const at = parts.findIndex((part) => repositoryFolders.has(part));
-      if (at !== -1) roots.add([folder, ...parts.slice(0, at)].join("/"));
+      const parts = entry.split("/");
+      const git = parts.indexOf(".git");
+      if (git !== -1) add(parts.slice(0, git).join("/"));
+      for (const marker of markers) {
+        if (entry === marker) add("");
+        else if (entry.endsWith(`/${marker}`)) add(entry.slice(0, -marker.length - 1));
+      }
+      // A bare Git repository: HEAD beside its objects and refs.
+      if (parts.at(-1) === "HEAD") {
+        const dir = parts.slice(0, -1).join("/");
+        const prefix = dir === "" ? "" : `${dir}/`;
+        if (present.has(`${prefix}objects`) && present.has(`${prefix}refs`)) add(dir);
+      }
     }
     return [...roots];
+  });
+
+  const isRepositoryRoot = Effect.fnUntraced(function* (absolute: string) {
+    for (const marker of [".git", ...context.repositoryMarkers()]) {
+      if (yield* fs.exists(path.join(absolute, marker)).pipe(Effect.orElseSucceed(() => false)))
+        return true;
+    }
+    const kind = (name: string) =>
+      fs.stat(path.join(absolute, name)).pipe(
+        Effect.map((info) => info.type),
+        Effect.orElseSucceed(() => null),
+      );
+    return (
+      (yield* kind("HEAD")) === "File" &&
+      (yield* kind("objects")) === "Directory" &&
+      (yield* kind("refs")) === "Directory"
+    );
+  });
+
+  /** The repository inside the checkout that holds `file`, if a folder on its way is one. */
+  const enclosingRepository = Effect.fnUntraced(function* (
+    location: Location,
+    file: string,
+    known: Map<string, boolean>,
+  ) {
+    const parts = file.split("/");
+    for (let index = 1; index < parts.length; index++) {
+      const folder = parts.slice(0, index).join("/");
+      let found = known.get(folder);
+      if (found === undefined) {
+        found = yield* isRepositoryRoot(path.join(location.root, folder));
+        known.set(folder, found);
+      }
+      if (found) return folder;
+    }
+    return undefined;
   });
 
   // Checked before anything changes. Writing a file where a folder now is removes the folder,
   // with all it holds.
   const restoreProblem = Effect.fnUntraced(function* (
     location: Location,
-    change: { readonly write: ReadonlyArray<string>; readonly remove: ReadonlyArray<string> },
+    change: {
+      readonly write: ReadonlyArray<string>;
+      readonly remove: ReadonlyArray<string>;
+      /** Repositories of their own now where the checkpoint has a file. */
+      readonly replaced?: ReadonlyArray<string>;
+    },
     excludes: ReadonlyArray<string>,
   ) {
+    const replaced = change.replaced?.[0];
+    if (replaced !== undefined)
+      return `${replaced} is now a repository of its own, so the checkpoint's file there cannot be restored.`;
+    const known = new Map<string, boolean>();
     for (const file of [...change.write, ...change.remove]) {
       const problem = yield* linkedParentProblem(location, file);
       if (problem !== undefined) return problem;
+      const repository = yield* enclosingRepository(location, file, known);
+      if (repository !== undefined)
+        return `${repository} is now a repository of its own, so ${file} cannot be restored inside it.`;
     }
     for (const file of change.write) {
       if (excludes.some((exclude) => exclude.startsWith(`${file}/`)))
@@ -798,6 +870,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     const parts = changes.split("\0").filter((part) => part.length > 0);
     const remove: string[] = [];
     const write: string[] = [];
+    const replaced: string[] = [];
     for (let index = 0; index + 1 < parts.length; index += 2) {
       // ":<old mode> <new mode> <old id> <new id> <status>", then the path.
       const [oldMode, newMode, , , status] = parts[index]!.slice(1).split(" ");
@@ -806,11 +879,13 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       if (!inScope(file, location.scope, excludes)) continue;
       // A repository inside is staged as its commit alone; its files and history were never
       // saved, so it is never removed or replaced.
+      if (oldMode === GITLINK_MODE && newMode !== GITLINK_MODE && status !== "D")
+        replaced.push(file);
       if (oldMode === GITLINK_MODE || newMode === GITLINK_MODE) continue;
       if (status === "D") remove.push(file);
       else write.push(file);
     }
-    return { remove, write };
+    return { remove, write, replaced };
   });
 
   /** What a `changed-files` restore changes, or why it cannot. */
@@ -1039,42 +1114,57 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     for (const checkpointRef of input.checkpointRefs) {
       const record = yield* readRecord(location, checkpointRef);
       if (record === null) continue;
-      if (record.strategy === "native") {
-        // Identical content can come back as the same snapshot for another checkpoint; the
-        // plugin cannot run in a folder that is gone.
-        const shared = yield* sql`
-          SELECT 1 FROM atelier_vcs_plugin_checkpoint_records
-          WHERE repository_root = ${location.root} AND plugin_id = ${kind}
-            AND strategy = 'native' AND revision = ${record.revision}
-            AND checkpoint_ref != ${checkpointRef}
-          LIMIT 1
-        `.pipe(
-          Effect.mapError(storageError("pluginCheckpoints.deleteCheckpointRefs", location.root)),
-        );
-        if (shared.length === 0 && !gone && runner.has("checkpointDelete"))
-          yield* runner
-            .run("checkpointDelete", {
-              cwd: input.cwd,
-              values: { repositoryRoot: location.root, revision: record.revision },
-            })
-            .pipe(Effect.ignore);
-      } else {
-        yield* git(
-          location,
-          ["update-ref", "-d", checkpointRef],
-          gone ? { cwd: shadowRoot } : {},
-        ).pipe(Effect.ignore);
-      }
-      yield* sql`
+      const forget = sql`
         DELETE FROM atelier_vcs_plugin_checkpoint_records
         WHERE repository_root = ${location.root} AND checkpoint_ref = ${checkpointRef}
           AND plugin_id = ${kind}
       `.pipe(
         Effect.mapError(storageError("pluginCheckpoints.deleteCheckpointRefs", location.root)),
       );
+      if (record.strategy !== "native") {
+        yield* git(
+          location,
+          ["update-ref", "-d", checkpointRef],
+          gone ? { cwd: shadowRoot } : {},
+        ).pipe(Effect.ignore);
+        yield* forget;
+        continue;
+      }
+      yield* nativeSnapshots.withPermits(1)(
+        Effect.gen(function* () {
+          // Identical content can come back as the same snapshot for another checkpoint; the
+          // plugin cannot run in a folder that is gone.
+          const shared = yield* sql`
+            SELECT 1 FROM atelier_vcs_plugin_checkpoint_records
+            WHERE repository_root = ${location.root} AND plugin_id = ${kind}
+              AND strategy = 'native' AND revision = ${record.revision}
+              AND checkpoint_ref != ${checkpointRef}
+            LIMIT 1
+          `.pipe(
+            Effect.mapError(storageError("pluginCheckpoints.deleteCheckpointRefs", location.root)),
+          );
+          if (shared.length === 0 && !gone && runner.has("checkpointDelete")) {
+            const deleted = yield* runner
+              .run("checkpointDelete", {
+                cwd: input.cwd,
+                values: { repositoryRoot: location.root, revision: record.revision },
+              })
+              .pipe(
+                Effect.as(true),
+                Effect.catch((error) =>
+                  Effect.logWarning("VCS plugin snapshot deletion failed", { error }).pipe(
+                    Effect.as(false),
+                  ),
+                ),
+              );
+            // The record stays, so a later cleanup tries again.
+            if (!deleted) return;
+          }
+          yield* forget;
+        }),
+      );
     }
   });
-
   return {
     captureCheckpoint,
     // A plugin folder is never read as clean, so each turn captures with its strategies.

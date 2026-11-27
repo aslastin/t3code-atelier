@@ -250,7 +250,8 @@ export const readIcon = Effect.fn("pluginManifest.readIcon")(
     const info = yield* fs.stat(file);
     if (info.size > BigInt(MAX_ICON_BYTES)) return null;
     const svg = yield* fs.readFileString(file);
-    return /<svg[\s>]/i.test(svg) ? svg : null;
+    // A whole SVG document, so a cut-off file is refused rather than drawn as nothing.
+    return /<svg[\s>][\s\S]*<\/svg>\s*$/i.test(svg) ? svg : null;
   },
   Effect.orElseSucceed(() => null),
 );
