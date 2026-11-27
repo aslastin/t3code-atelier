@@ -1,5 +1,6 @@
 {
   "defaultLocale": "en",
+  "skipVersionCheck": true,
   "locales": ["es", "zh", "pt-BR", "fr", "de", "ja", "ko", "ru", "sv"],
   "src": [
     "src/**/*.{ts,tsx}",

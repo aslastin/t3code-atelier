@@ -1,5 +1,6 @@
 {
   "defaultLocale": "en",
+  "skipVersionCheck": true,
   "locales": ["de", "es", "fr", "ja", "ko", "pt-BR", "ru", "sv", "zh"],
   "src": ["src/**/*.ts", "!**/*.test.ts"],
   "files": {
