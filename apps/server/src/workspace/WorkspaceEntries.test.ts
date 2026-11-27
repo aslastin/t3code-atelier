@@ -1243,8 +1243,9 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
         const create = vi.spyOn(FileFinder, "create");
         const wrapper = yield* makeTempDir();
         // A home folder or a wrapper of repositories, with a plugin's checkout two levels down.
-        yield* writeTextFile(wrapper, "work/mono/.kite/HEAD", "main\n");
-        yield* writeTextFile(wrapper, "work/mono/app/index.ts");
+        // Hidden folders count too.
+        yield* writeTextFile(wrapper, ".work/mono/.kite/HEAD", "main\n");
+        yield* writeTextFile(wrapper, ".work/mono/app/index.ts");
         yield* writeTextFile(wrapper, "notes.md");
         const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
         const inPlugin = Effect.provideService(VcsPluginDrivers, {
@@ -1258,7 +1259,7 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
         const top = yield* workspaceEntries
           .list({ cwd: wrapper, directoryPath: "" })
           .pipe(inPlugin);
-        expect(top.entries.map((entry) => entry.path).toSorted()).toEqual(["notes.md", "work"]);
+        expect(top.entries.map((entry) => entry.path).toSorted()).toEqual([".work", "notes.md"]);
         expect(top.treeWalkUnavailable).toBe(true);
       }),
     );

@@ -138,6 +138,7 @@ export class WorkspaceEntries extends Context.Service<
 const IGNORED_FILES_LIMIT = 200;
 // Atelier fork: how long a folder's probe for a VCS plugin's checkout below it holds.
 const PLUGIN_CHECKOUT_PROBE_TTL_MS = 60_000;
+const PLUGIN_CHECKOUT_MISS_TTL_MS = 5_000;
 
 /** Paths sent to one `git check-ignore` call when labelling a folder's children. */
 const IGNORE_CHECK_CHUNK_SIZE = 1000;
@@ -220,7 +221,12 @@ export const make = Effect.gen(function* () {
     if (markers.length === 0) return false;
     const now = yield* Clock.currentTimeMillis;
     const known = holdsPluginCheckout.get(cwd);
-    if (known !== undefined && now - known.at < PLUGIN_CHECKOUT_PROBE_TTL_MS) return known.holds;
+    // A checkout found stays found a while; none found is asked again soon, as one can appear.
+    if (
+      known !== undefined &&
+      now - known.at < (known.holds ? PLUGIN_CHECKOUT_PROBE_TTL_MS : PLUGIN_CHECKOUT_MISS_TTL_MS)
+    )
+      return known.holds;
     const holds = yield* Effect.promise(async () => {
       const marked = async (folder: string) => {
         for (const marker of markers) {
@@ -238,7 +244,7 @@ export const make = Effect.gen(function* () {
         (await NodeFSP.readdir(folder, { withFileTypes: true }).catch(() => []))
           .filter(
             (entry) =>
-              entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules",
+              entry.isDirectory() && entry.name !== ".git" && entry.name !== "node_modules",
           )
           .map((entry) => path.join(folder, entry.name));
       for (const child of await childFolders(cwd)) {
