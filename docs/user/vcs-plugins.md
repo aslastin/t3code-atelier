@@ -23,7 +23,8 @@ need permission to maintain the environment. The mobile app shows the list and s
 
 A repository is detected by a marker file, without running anything. T3 Code looks for each
 marker in the project folder and every folder above it. When a Git repository is found too, the
-one closer to the project folder wins.
+one closer to the project folder wins; in the same folder, the plugin wins. Avoid installing two
+plugins whose markers can sit in the same folder: only one of them owns it.
 
 ## Write a plugin
 

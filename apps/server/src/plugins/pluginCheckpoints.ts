@@ -115,6 +115,8 @@ export interface PluginCheckpointContext {
   readonly metadataFolders: ReadonlyArray<string>;
   /** Marker paths of this and every other installed plugin, beside `.git`. */
   readonly repositoryMarkers: () => ReadonlyArray<string>;
+  /** Serializes native capture and deletion; shared by every driver built for the plugin. */
+  readonly nativeSnapshots?: Semaphore.Semaphore;
   readonly repositoryRoot: (cwd: string) => Effect.Effect<string, VcsError>;
 }
 
@@ -156,7 +158,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
   const { runner } = context;
   const kind = runner.kind;
   const shadowRoot = path.join(config.stateDir, "vcs-plugin-checkpoints");
-  const nativeSnapshots = yield* Semaphore.make(1);
+  const nativeSnapshots = context.nativeSnapshots ?? (yield* Semaphore.make(1));
 
   const storageError = (operation: string, cwd: string) => (cause: unknown) =>
     new VcsCheckpointStorageError({ operation, cwd, stage: "publish", cause });
@@ -740,23 +742,25 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       .readDirectory(absolute, { recursive: true })
       .pipe(Effect.orElseSucceed(() => null));
     if (listed === null) return null;
+    // Compared without case: on a case-insensitive disk `.KITE/HEAD` is the plugin's marker too.
     const entries = listed.map((entry) => entry.split(path.sep).join("/"));
-    const present = new Set(entries);
-    const markers = context.repositoryMarkers();
+    const present = new Set(entries.map((entry) => entry.toLowerCase()));
+    const markers = context.repositoryMarkers().map((marker) => marker.toLowerCase());
     const roots = new Set<string>();
     const add = (relative: string) => roots.add(relative === "" ? folder : `${folder}/${relative}`);
     for (const entry of entries) {
       const parts = entry.split("/");
-      const git = parts.indexOf(".git");
+      const lower = entry.toLowerCase();
+      const git = parts.findIndex((part) => part.toLowerCase() === ".git");
       if (git !== -1) add(parts.slice(0, git).join("/"));
       for (const marker of markers) {
-        if (entry === marker) add("");
-        else if (entry.endsWith(`/${marker}`)) add(entry.slice(0, -marker.length - 1));
+        if (lower === marker) add("");
+        else if (lower.endsWith(`/${marker}`)) add(entry.slice(0, -marker.length - 1));
       }
       // A bare Git repository: HEAD beside its objects and refs.
-      if (parts.at(-1) === "HEAD") {
+      if (parts.at(-1)!.toLowerCase() === "head") {
         const dir = parts.slice(0, -1).join("/");
-        const prefix = dir === "" ? "" : `${dir}/`;
+        const prefix = dir === "" ? "" : `${dir.toLowerCase()}/`;
         if (present.has(`${prefix}objects`) && present.has(`${prefix}refs`)) add(dir);
       }
     }
@@ -1132,34 +1136,30 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       }
       yield* nativeSnapshots.withPermits(1)(
         Effect.gen(function* () {
-          // Identical content can come back as the same snapshot for another checkpoint; the
-          // plugin cannot run in a folder that is gone.
+          // Identical content can come back as the same snapshot for another checkpoint, in this
+          // checkout or another one sharing its store; the plugin cannot run in a folder that is
+          // gone.
           const shared = yield* sql`
             SELECT 1 FROM atelier_vcs_plugin_checkpoint_records
-            WHERE repository_root = ${location.root} AND plugin_id = ${kind}
-              AND strategy = 'native' AND revision = ${record.revision}
-              AND checkpoint_ref != ${checkpointRef}
+            WHERE plugin_id = ${kind} AND strategy = 'native' AND revision = ${record.revision}
+              AND NOT (repository_root = ${location.root} AND checkpoint_ref = ${checkpointRef})
             LIMIT 1
           `.pipe(
             Effect.mapError(storageError("pluginCheckpoints.deleteCheckpointRefs", location.root)),
           );
-          if (shared.length === 0 && !gone && runner.has("checkpointDelete")) {
-            const deleted = yield* runner
+          // A failed deletion leaves the snapshot to the plugin: a record kept for a retry would
+          // read as a checkpoint still there, such as an earlier rewind's.
+          if (shared.length === 0 && !gone && runner.has("checkpointDelete"))
+            yield* runner
               .run("checkpointDelete", {
                 cwd: input.cwd,
                 values: { repositoryRoot: location.root, revision: record.revision },
               })
               .pipe(
-                Effect.as(true),
                 Effect.catch((error) =>
-                  Effect.logWarning("VCS plugin snapshot deletion failed", { error }).pipe(
-                    Effect.as(false),
-                  ),
+                  Effect.logWarning("VCS plugin snapshot deletion failed", { error }),
                 ),
               );
-            // The record stays, so a later cleanup tries again.
-            if (!deleted) return;
-          }
           yield* forget;
         }),
       );

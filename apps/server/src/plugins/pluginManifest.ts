@@ -236,6 +236,20 @@ export const checkPluginFiles = Effect.fn("pluginManifest.checkPluginFiles")(fun
   return errors;
 });
 
+// A whole SVG document, so a cut-off file is refused rather than drawn as nothing: each `<svg>`
+// opened is closed, and only comments or whitespace follow the outermost one.
+const isWholeSvg = (text: string) => {
+  const body = text.replace(/<!--[\s\S]*?-->/g, "").trim();
+  if (!/<svg[\s>]/i.test(body) || !/<\/svg\s*>$/i.test(body)) return false;
+  let depth = 0;
+  for (const tag of body.matchAll(/<(\/?)svg\b[^>]*?(\/?)>/gi)) {
+    if (tag[1] === "/") depth -= 1;
+    else if (tag[2] !== "/") depth += 1;
+    if (depth < 0) return false;
+  }
+  return depth === 0;
+};
+
 /** The icon's SVG text, or null when it is missing, too large, or outside the folder. */
 export const readIcon = Effect.fn("pluginManifest.readIcon")(
   function* (
@@ -250,8 +264,7 @@ export const readIcon = Effect.fn("pluginManifest.readIcon")(
     const info = yield* fs.stat(file);
     if (info.size > BigInt(MAX_ICON_BYTES)) return null;
     const svg = yield* fs.readFileString(file);
-    // A whole SVG document, so a cut-off file is refused rather than drawn as nothing.
-    return /<svg[\s>][\s\S]*<\/svg>\s*$/i.test(svg) ? svg : null;
+    return isWholeSvg(svg) ? svg : null;
   },
   Effect.orElseSucceed(() => null),
 );

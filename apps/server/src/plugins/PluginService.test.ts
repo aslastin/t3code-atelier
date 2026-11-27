@@ -203,9 +203,17 @@ describe("PluginService", () => {
       const cut = writeFakeVcsPlugin(NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-cut-icon-`), {
         id: "cut",
       });
-      NodeFS.writeFileSync(`${cut}/icon.svg`, "<svg><path");
-      const cutIcon = yield* plugins.importFolder(cut).pipe(Effect.flip);
-      assert.include(cutIcon.message, "icon: icon.svg");
+      for (const svg of ["<svg><path", '<svg><svg><circle r="3"/></svg>']) {
+        NodeFS.writeFileSync(`${cut}/icon.svg`, svg);
+        const cutIcon = yield* plugins.importFolder(cut).pipe(Effect.flip);
+        assert.include(cutIcon.message, "icon: icon.svg", svg);
+      }
+      // A comment after the document is still a whole icon.
+      NodeFS.writeFileSync(
+        `${cut}/icon.svg`,
+        '<svg xmlns="http://www.w3.org/2000/svg"><circle r="3"/></svg>\n<!-- license -->\n',
+      );
+      yield* plugins.importFolder(cut);
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
@@ -428,24 +436,30 @@ describe("ManifestVcsDriver", () => {
       assert.isTrue(
         yield* checkpoints.verifyRestorable!({ cwd: repository, checkpointRef: ref("2-again") }),
       );
+      // Another checkout sharing the plugin's store holds it too.
+      yield* sql`
+        INSERT INTO atelier_vcs_plugin_checkpoint_records
+          (repository_root, checkpoint_ref, plugin_id, strategy, revision, created_at)
+        SELECT ${`${repository}-worktree`}, checkpoint_ref, plugin_id, strategy, revision, created_at
+        FROM atelier_vcs_plugin_checkpoint_records WHERE checkpoint_ref = ${ref("2-again")}
+      `;
       yield* checkpoints.deleteCheckpointRefs({
         cwd: repository,
         checkpointRefs: [ref("2-again")],
       });
-      assert.isFalse(NodeFS.existsSync(`${repository}/.kite/snapshots/${shared!.revision}`));
-      // A deletion the plugin could not finish is tried again by the next cleanup.
-      const [kept] = yield* sql<{ readonly revision: string }>`
-        SELECT revision FROM atelier_vcs_plugin_checkpoint_records
-        WHERE checkpoint_ref = ${ref("1b")}
+      assert.isTrue(NodeFS.existsSync(`${repository}/.kite/snapshots/${shared!.revision}`));
+      yield* sql`
+        DELETE FROM atelier_vcs_plugin_checkpoint_records
+        WHERE repository_root = ${`${repository}-worktree`}
       `;
+      // A deletion the plugin cannot finish still forgets the checkpoint: a record left behind
+      // would read as one still there, such as an earlier rewind's.
       NodeFS.writeFileSync(`${repository}/.kite/broken-drop`, "");
       yield* checkpoints.deleteCheckpointRefs({ cwd: repository, checkpointRefs: [ref("1b")] });
-      assert.isTrue(
+      assert.isFalse(
         yield* checkpoints.hasCheckpointRef({ cwd: repository, checkpointRef: ref("1b") }),
       );
       NodeFS.rmSync(`${repository}/.kite/broken-drop`);
-      yield* checkpoints.deleteCheckpointRefs({ cwd: repository, checkpointRefs: [ref("1b")] });
-      assert.isFalse(NodeFS.existsSync(`${repository}/.kite/snapshots/${kept!.revision}`));
 
       assert.isTrue(
         yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("0") }),
@@ -730,8 +744,9 @@ describe("ManifestVcsDriver", () => {
       NodeFS.mkdirSync(`${repository}/generated/clone/.git`, { recursive: true });
       NodeFS.writeFileSync(`${repository}/generated/clone/.git/HEAD`, "ref: refs/heads/main\n");
       NodeFS.writeFileSync(`${repository}/generated/clone/work.txt`, "work\n");
-      NodeFS.mkdirSync(`${repository}/generated/deep/one/theirs/.other`, { recursive: true });
-      NodeFS.writeFileSync(`${repository}/generated/deep/one/theirs/.other/HEAD`, "main\n");
+      // Written in another case, as a case-insensitive disk still finds the marker.
+      NodeFS.mkdirSync(`${repository}/generated/deep/one/theirs/.OTHER`, { recursive: true });
+      NodeFS.writeFileSync(`${repository}/generated/deep/one/theirs/.OTHER/HEAD`, "main\n");
       NodeFS.writeFileSync(`${repository}/generated/deep/one/theirs/work.txt`, "work\n");
       NodeChildProcess.execFileSync("git", [
         "init",
@@ -743,7 +758,7 @@ describe("ManifestVcsDriver", () => {
       for (const kept of [
         "clone/.git/HEAD",
         "clone/work.txt",
-        "deep/one/theirs/.other/HEAD",
+        "deep/one/theirs/.OTHER/HEAD",
         "deep/one/theirs/work.txt",
         "bare/HEAD",
       ])

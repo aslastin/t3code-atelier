@@ -260,6 +260,16 @@ const make = Effect.gen(function* () {
   }, Effect.provideContext(services));
 
   /** An entry whose check passed, with its driver. */
+  // One per plugin id, so a re-check's new driver waits on the deletion the old one started.
+  const nativeSnapshotLocks = new Map<string, Semaphore.Semaphore>();
+  const nativeSnapshotsFor = Effect.fnUntraced(function* (id: string) {
+    const existing = nativeSnapshotLocks.get(id);
+    if (existing !== undefined) return existing;
+    const created = yield* Semaphore.make(1);
+    nativeSnapshotLocks.set(id, created);
+    return created;
+  });
+
   const withDriver = Effect.fn("PluginService.withDriver")(function* (
     entry: PluginEntry,
     manifest: VcsPluginManifest,
@@ -273,6 +283,7 @@ const make = Effect.gen(function* () {
       worktreesDirectory: worktreesDirectory.pipe(Effect.provideService(Path.Path, path)),
       installedMarkers: () =>
         [...entries.values()].flatMap((other) => other.manifest?.detect.markers ?? []),
+      nativeSnapshots: yield* nativeSnapshotsFor(manifest.id),
     });
     return {
       ...entry,
@@ -583,10 +594,15 @@ const make = Effect.gen(function* () {
       ),
     installedMarkers: () =>
       [...entries.values()].flatMap((entry) => entry.manifest?.detect.markers ?? []),
-    worktreeMarkers: () =>
+    available: () =>
       [...entries.values()].flatMap((entry) =>
-        entry.driver && entry.manifest && supportsWorktrees(entry.manifest)
-          ? entry.manifest.detect.markers
+        entry.driver && entry.manifest
+          ? [
+              {
+                markers: entry.manifest.detect.markers,
+                worktrees: supportsWorktrees(entry.manifest),
+              },
+            ]
           : [],
       ),
   });

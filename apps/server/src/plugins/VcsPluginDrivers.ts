@@ -20,8 +20,14 @@ export class VcsPluginDrivers extends Context.Service<
      * mistake a plugin checkout for a stray folder.
      */
     readonly installedMarkers: () => ReadonlyArray<string>;
-    /** Marker paths of every available plugin that can create worktrees. */
-    readonly worktreeMarkers: () => ReadonlyArray<string>;
+    /**
+     * Available plugins in the order the driver registry tries them: the first whose marker a
+     * folder holds owns it.
+     */
+    readonly available: () => ReadonlyArray<{
+      readonly markers: ReadonlyArray<string>;
+      readonly worktrees: boolean;
+    }>;
     /** An available plugin's name, and whether it can bring back a worktree cleanup removed. */
     readonly describe: (kind: string) =>
       | {

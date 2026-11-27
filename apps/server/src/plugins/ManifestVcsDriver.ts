@@ -25,6 +25,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import type * as Semaphore from "effect/Semaphore";
 
 import * as VcsDriver from "../vcs/VcsDriver.ts";
 import { worktreeProjectFolder } from "../workspace/worktreeProjectPath.ts";
@@ -40,6 +41,8 @@ export interface ManifestVcsDriverInput {
   readonly worktreesDirectory: Effect.Effect<string | null>;
   /** Marker paths of every installed plugin, so a checkpoint restore can tell their checkouts. */
   readonly installedMarkers?: () => ReadonlyArray<string>;
+  /** Kept across rebuilds of the plugin's driver, so its native snapshots stay serialized. */
+  readonly nativeSnapshots?: Semaphore.Semaphore;
 }
 
 /** Marker probes only: detection never starts a process. */
@@ -512,6 +515,7 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
       ...new Set(manifest.detect.markers.map((marker) => marker.split(/[/\\]/)[0]!)),
     ],
     repositoryMarkers: () => [...manifest.detect.markers, ...(input.installedMarkers?.() ?? [])],
+    ...(input.nativeSnapshots === undefined ? {} : { nativeSnapshots: input.nativeSnapshots }),
     repositoryRoot,
   });
 
