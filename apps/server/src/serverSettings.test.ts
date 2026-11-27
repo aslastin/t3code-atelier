@@ -47,16 +47,27 @@ const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeServerSettingsJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings));
 const decodeServerSettingsPatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
 
-const layerServerSettings = (policy?: ManagedPolicyDocument) =>
+const layerServerSettings = (
+  policy?: ManagedPolicyDocument,
+  legacyWindowsOtlp?: ServerConfig.ServerConfig["Service"]["legacyWindowsOtlp"],
+) =>
   ServerSettingsModule.layer.pipe(
     Layer.provide(ServerSecretStore.layer),
     Layer.provide(ManagedPolicy.layerTest(policy)),
     Layer.provideMerge(Layer.fresh(SqlitePersistence.layerMemory)),
     Layer.provideMerge(
       Layer.fresh(
-        ServerConfig.layerTest(process.cwd(), {
-          prefix: "t3code-server-settings-test-",
-        }),
+        Layer.effect(
+          ServerConfig.ServerConfig,
+          Effect.gen(function* () {
+            const config = yield* ServerConfig.ServerConfig;
+            return { ...config, legacyWindowsOtlp };
+          }),
+        ).pipe(
+          Layer.provide(
+            ServerConfig.layerTest(process.cwd(), { prefix: "t3code-server-settings-test-" }),
+          ),
+        ),
       ),
     ),
   );
@@ -367,13 +378,78 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  it.effect.each(["empty", "existing receiver", "explicit opt-out"] as const)(
+    "imports the old Windows receiver into WSL only without a local choice: %s",
+    (kind) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const config = yield* ServerConfig.ServerConfig;
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const windowsUrl = "http://localhost:4318/v1/logs";
+        const localUrl = "http://localhost:8318/v1/logs";
+        if (kind !== "empty") {
+          const observability =
+            kind === "existing receiver"
+              ? { otlpLogsUrl: localUrl }
+              : {
+                  telemetry: { enabled: false, otlp: false, analytics: false, connect: false },
+                };
+          yield* fs.writeFileString(config.settingsPath, JSON.stringify({ observability }));
+        }
+        const { observability } = yield* service.getSettings;
+        if (kind === "empty") {
+          assert.equal(observability.otlpLogsUrl, windowsUrl);
+          assert.deepEqual(observability.telemetry, {
+            enabled: true,
+            otlp: true,
+            analytics: false,
+            connect: false,
+          });
+          assert.equal(
+            (yield* decodeServerSettingsJson(yield* fs.readFileString(config.settingsPath)))
+              .observability.otlpLogsUrl,
+            windowsUrl,
+          );
+          yield* service.updateSettings({
+            observability: { otlpLogsUrl: "", telemetry: { enabled: false } },
+          });
+          yield* service.updateSettings({ responseStreamingMode: "turn" });
+          assert.isNotOk((yield* service.getSettings).observability.otlpLogsUrl);
+        } else if (kind === "existing receiver") {
+          assert.equal(observability.otlpLogsUrl, localUrl);
+        } else {
+          assert.isFalse(observability.telemetry?.enabled);
+          assert.isNotOk(observability.otlpLogsUrl);
+        }
+      }).pipe(
+        Effect.provide(
+          layerServerSettings(undefined, { otlpLogsUrl: "http://localhost:4318/v1/logs" }),
+        ),
+      ),
+  );
+
   it.effect("retries a failed settings read instead of keeping the failure", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
 
+      yield* serverSettings.updateSettings({
+        observability: {
+          otlpTracesUrl: "http://localhost:4318/v1/traces",
+          telemetry: { enabled: true, analytics: false, connect: false, otlp: true },
+        },
+      });
+      assert.isTrue(serverConfig.telemetry.describe().otlpTracesEnabled);
+      yield* fileSystem.remove(serverConfig.settingsPath);
       yield* fileSystem.makeDirectory(serverConfig.settingsPath);
+      const failedWrite = yield* Effect.flip(
+        serverSettings.updateSettings({
+          observability: { telemetry: { enabled: false } },
+        }),
+      );
+      assert.equal(failedWrite.operation, "read-file");
+      assert.isFalse(serverConfig.telemetry.describe().otlpTracesEnabled);
 
       const error = yield* Effect.flip(serverSettings.getSettings);
       assert.deepInclude(error, { _tag: "ServerSettingsError", operation: "read-file" });

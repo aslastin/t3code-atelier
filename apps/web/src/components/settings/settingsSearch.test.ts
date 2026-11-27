@@ -252,6 +252,9 @@ describe("settings search targets", () => {
       id: "diagnostics",
       to: "/settings/maintenance",
     });
+    for (const query of ["Grafana", "OTel", "endpoints"]) {
+      expect(searchSettings(query).map((item) => item.id)).toContain("telemetry-export");
+    }
     const result = searchSettings("OpenTelemetry export").find(
       (item) => item.id === "telemetry-export",
     )!;

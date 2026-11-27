@@ -5,6 +5,7 @@ import { isValidDistroName } from "../wsl/wslPathParsing.ts";
 import * as NodeOS from "node:os";
 
 import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
+import * as TelemetrySettingsFile from "@t3tools/shared/telemetrySettingsFile";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -542,6 +543,21 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
 
   // wslhost loopback forwarding is unreliable on some Windows hosts; advertise the WSL IP instead.
   const wslBindHost = "0.0.0.0";
+  // Older desktops passed the Windows settings URLs to every WSL backend.
+  const reader = yield* TelemetrySettingsFile.reader.pipe(
+    Effect.provideService(Path.Path, environment.path),
+  );
+  const { telemetry, otlpTracesUrl, otlpMetricsUrl, otlpLogsUrl } = yield* reader.read(
+    environment.serverSettingsPath,
+  );
+  const legacyWindowsOtlp =
+    !telemetry && (otlpTracesUrl || otlpMetricsUrl || otlpLogsUrl)
+      ? {
+          ...(otlpTracesUrl && { otlpTracesUrl }),
+          ...(otlpMetricsUrl && { otlpMetricsUrl }),
+          ...(otlpLogsUrl && { otlpLogsUrl }),
+        }
+      : undefined;
 
   const bootstrap = {
     mode: "desktop" as const,
@@ -554,6 +570,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     // PortSchema rejects 0 even when Tailscale Serve is disabled.
     tailscaleServeEnabled: false,
     tailscaleServePort: 443,
+    ...(legacyWindowsOtlp && { legacyWindowsOtlp }),
     ...buildObservabilityFragment(input.observabilitySettings),
   };
 

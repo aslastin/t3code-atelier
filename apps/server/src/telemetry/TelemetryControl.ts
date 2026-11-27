@@ -73,6 +73,9 @@ export class TelemetryControl {
     const preference = this.#env.T3CODE_TELEMETRY_ENABLED?.trim().toLowerCase();
     const status = resolveTelemetry(this.#settings.telemetry, {
       endpoint: Boolean(traces.url || metrics.url || logs.url),
+      exportersDisabled: [traces, metrics, logs].every(
+        (signal) => signal.source === "environment" && !signal.url,
+      ),
       legacyEndpoint: Boolean(
         config.otelEnvironment.hasConfiguredEndpoint ||
         this.#settings.otlpTracesUrl ||

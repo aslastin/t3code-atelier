@@ -473,6 +473,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     },
   );
 
+  const hostEnv = yield* HostProcess.Environment;
   const config = ServerConfig.make(
     {
       logLevel,
@@ -481,6 +482,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
       traceBatchWindowMs: env.traceBatchWindowMs,
       traceMaxBytes: env.traceMaxBytes,
       traceMaxFiles: env.traceMaxFiles,
+      ...(bootstrap?.legacyWindowsOtlp && { legacyWindowsOtlp: bootstrap.legacyWindowsOtlp }),
       otlpTracesUrl: traces?.url,
       otlpMetricsUrl: metrics?.url,
       otlpLogsUrl: logs?.url,
@@ -536,11 +538,12 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
       tailscaleServePort,
     },
     persistedObservabilitySettings,
-    yield* HostProcess.Environment,
-    yield* Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(
-      Config.withDefault(true),
-      Effect.orElseSucceed(() => false),
-    ),
+    hostEnv,
+    hostEnv.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING === "1" ||
+      (yield* Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(
+        Config.withDefault(true),
+        Effect.orElseSucceed(() => false),
+      )),
   );
 
   return config;

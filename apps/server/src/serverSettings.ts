@@ -15,6 +15,7 @@ import {
   type ServerSettingsPatch,
   type ManagedPolicySummary,
   globalIdleCompaction,
+  legacyTelemetryPreferences,
   isSecretReference,
   type SecretReference,
   withIdleCompaction,
@@ -631,7 +632,7 @@ function foldLegacyProjectSettings(
 }
 
 const make = Effect.gen(function* () {
-  const { settingsPath, telemetry } = yield* ServerConfig.ServerConfig;
+  const { settingsPath, telemetry, legacyWindowsOtlp } = yield* ServerConfig.ServerConfig;
   const telemetryFile = yield* TelemetrySettingsFile.reader;
   const fs = yield* FileSystem.FileSystem;
   const pathService = yield* Path.Path;
@@ -656,8 +657,13 @@ const make = Effect.gen(function* () {
   const watcherScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
 
-  const emitChange = (settings: ServerSettings) => {
+  let lastSettings: ServerSettings | undefined;
+  const applyTelemetry = (settings: ServerSettings) => {
+    lastSettings = settings;
     telemetry.update(managed.applyLocks(settings).observability);
+  };
+  const emitChange = (settings: ServerSettings) => {
+    applyTelemetry(settings);
     return PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
   };
 
@@ -861,8 +867,29 @@ const make = Effect.gen(function* () {
         ? settings
         : migrateLegacyProviderSettings(settings, legacyProviders, providerHistory),
     );
+    const { observability } = loaded;
+    const migrateWindowsOtlp =
+      settingsFileTrusted &&
+      legacyWindowsOtlp &&
+      (legacyWindowsOtlp.otlpTracesUrl ||
+        legacyWindowsOtlp.otlpMetricsUrl ||
+        legacyWindowsOtlp.otlpLogsUrl) &&
+      !observability.telemetry &&
+      !observability.otlpLogsUrl &&
+      !observability.otlpMetricsUrl &&
+      !observability.otlpTracesUrl;
+    const withWindowsOtlp = migrateWindowsOtlp
+      ? {
+          ...loaded,
+          observability: {
+            ...observability,
+            ...legacyWindowsOtlp,
+            telemetry: legacyTelemetryPreferences(true),
+          },
+        }
+      : loaded;
     const folded = settingsFileTrusted
-      ? foldLegacyProjectSettings(loaded, legacyProjectRows)
+      ? foldLegacyProjectSettings(withWindowsOtlp, legacyProjectRows)
       : loaded;
     // Remove retired keys only after copying secrets and writing the new file; failures retry on next load.
     const legacySecretsCopied = yield* Effect.forEach(
@@ -903,7 +930,14 @@ const make = Effect.gen(function* () {
       }
     }
     return { settings: migrated, parseFailure };
-  });
+  }).pipe(
+    Effect.tapError((error) => {
+      if (error.operation !== "check-exists" && error.operation !== "read-file") return Effect.void;
+      if (lastSettings)
+        return emitChange({ ...lastSettings, observability: unreadableObservability });
+      return Effect.sync(() => telemetry.update(unreadableObservability));
+    }),
+  );
 
   const settingsCache = yield* Cache.makeWith((_key: typeof cacheKey) => loadSettingsFromDisk, {
     capacity: 1,
@@ -1170,6 +1204,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const { settings: current, parseFailure } = yield* reloadSettings;
         if (Option.isSome(parseFailure)) {
+          yield* emitChange(current);
           return yield* new ServerSettingsError({
             settingsPath,
             operation: "read-file",
@@ -1370,7 +1405,7 @@ const make = Effect.gen(function* () {
 
     const startup = Effect.gen(function* () {
       yield* startWatcher;
-      telemetry.update(managed.applyLocks((yield* reloadSettings).settings).observability);
+      applyTelemetry((yield* reloadSettings).settings);
     });
 
     const startupExit = yield* Effect.exit(startup);

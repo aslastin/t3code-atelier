@@ -390,6 +390,7 @@ const TelemetryChannelState = Schema.Literals([
   "pending",
   "unavailable",
   "noEndpoint",
+  "exporters",
 ]);
 export const TelemetryStatus = Schema.Struct({
   preferences: TelemetryPreferences,

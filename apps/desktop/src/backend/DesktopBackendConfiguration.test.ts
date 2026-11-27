@@ -430,7 +430,19 @@ describe("DesktopBackendConfiguration", () => {
         Effect.gen(function* () {
           const path = yield* Path.Path;
           const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+          const env = yield* DesktopEnvironment.DesktopEnvironment;
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.makeDirectory(path.dirname(env.serverSettingsPath), { recursive: true });
+          yield* fs.writeFileString(
+            env.serverSettingsPath,
+            JSON.stringify({
+              observability: { otlpLogsUrl: "http://localhost:4318/v1/logs" },
+            }),
+          );
           const config = yield* configuration.resolveWsl({ port: 5000, distro: "Ubuntu" });
+          assert.deepEqual(config.bootstrap.legacyWindowsOtlp, {
+            otlpLogsUrl: "http://localhost:4318/v1/logs",
+          });
 
           assert.deepEqual(observedArchives, [
             {
@@ -462,12 +474,25 @@ describe("DesktopBackendConfiguration", () => {
           assert.equal(config.wslRuntimeId, `sha256-${archiveHash}`);
           assert.equal(config.wslT3Home, t3Home);
           assert.equal(legacyCleanupCount, 1);
-          const env = yield* DesktopEnvironment.DesktopEnvironment;
+          yield* fs.writeFileString(
+            env.serverSettingsPath,
+            JSON.stringify({
+              observability: {
+                otlpLogsUrl: "http://localhost:4318/v1/logs",
+                telemetry: {
+                  enabled: false,
+                  otlp: true,
+                  analytics: false,
+                  connect: false,
+                },
+              },
+            }),
+          );
           const settings = yield* DesktopAppSettings.DesktopAppSettings;
           assert.isNull(SubscriptionRef.getUnsafe(env.telemetrySettingsPath));
           yield* settings.setWslBackendEnabled(true);
           yield* settings.setWslOnly(true);
-          yield* configuration.resolvePrimary;
+          assert.isUndefined((yield* configuration.resolvePrimary).bootstrap.legacyWindowsOtlp);
           assert.equal(
             SubscriptionRef.getUnsafe(env.telemetrySettingsPath),
             String.raw`\\wsl.localhost\Ubuntu\home\test\.config\t3\userdata\settings.json`,

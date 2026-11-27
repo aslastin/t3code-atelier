@@ -93,7 +93,7 @@ export class DesktopShellEnvironment extends Context.Service<
     readonly awaitDiscovery: Effect.Effect<boolean>;
     /** Whether the user's own login shell, not a fallback, gave the PATH a new terminal gets. */
     readonly awaitUserShellDiscovery: Effect.Effect<boolean>;
-    /** Whether discovery has settled (the user's shell answered or retries ran out), without waiting. */
+    /** Whether the shell that owns the user's telemetry preference has answered. */
     readonly discoveryFinished: Effect.Effect<boolean>;
     readonly awaitSettledDiscovery: Effect.Effect<void>;
     readonly updates: Stream.Stream<DesktopShellEnvironmentSnapshot>;
@@ -131,7 +131,12 @@ const LOGIN_SHELL_ENV_NAMES = [
   "JAVA_HOME",
   "PNPM_HOME",
 ] as const;
-const WINDOWS_PROFILE_ENV_NAMES = ["PATH", "FNM_DIR", "FNM_MULTISHELL_PATH"] as const;
+const WINDOWS_PROFILE_ENV_NAMES = [
+  "PATH",
+  "FNM_DIR",
+  "FNM_MULTISHELL_PATH",
+  "T3CODE_TELEMETRY_ENABLED",
+] as const;
 const LOCALE_ENV_NAMES = ["LANG", "LC_ALL", "LC_CTYPE"] as const;
 const ANDROID_SDK_ENV_NAMES = ["ANDROID_HOME", "ANDROID_SDK_ROOT"] as const;
 const FALLBACK_LC_CTYPE = "en_US.UTF-8";
@@ -454,6 +459,9 @@ const installWindowsEnvironment = Effect.fn("desktop.shellEnvironment.installWin
     if (!config.env.FNM_MULTISHELL_PATH && profile.FNM_MULTISHELL_PATH) {
       config.env.FNM_MULTISHELL_PATH = profile.FNM_MULTISHELL_PATH;
     }
+    if (!config.env.T3CODE_TELEMETRY_ENABLED && profile.T3CODE_TELEMETRY_ENABLED) {
+      config.env.T3CODE_TELEMETRY_ENABLED = profile.T3CODE_TELEMETRY_ENABLED;
+    }
     return Boolean(noProfile.PATH && profile.PATH);
   },
 );
@@ -728,7 +736,8 @@ export const make = Effect.gen(function* () {
       const patch = Object.fromEntries(
         Object.keys(ShellEnvironmentPatch.fields).map((name) => [name, fresh[name] ?? null]),
       );
-      if (prepared || Option.isNone(yield* Ref.get(latest))) yield* publish(patch, prepared);
+      if (prepared || Option.isNone(yield* Ref.get(latest)))
+        yield* publish(patch, settled(discovery));
       if (prepared) {
         const cached = Object.fromEntries(
           CACHED_ENV_NAMES.flatMap((name) => (fresh[name] ? [[name, fresh[name]]] : [])),
@@ -826,7 +835,9 @@ export const make = Effect.gen(function* () {
       Effect.andThen(Deferred.await(discovered)),
       Effect.map(({ fromUserShell }) => fromUserShell),
     ),
-    discoveryFinished: Deferred.isDone(settledDiscovery),
+    discoveryFinished: Ref.get(latest).pipe(
+      Effect.map((snapshot) => Option.isSome(snapshot) && snapshot.value.discovered === true),
+    ),
     awaitSettledDiscovery: installIntoProcess.pipe(
       Effect.andThen(Deferred.await(settledDiscovery)),
     ),

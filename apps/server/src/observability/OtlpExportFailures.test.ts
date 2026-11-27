@@ -1,3 +1,8 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as TestClock from "effect/testing/TestClock";
+import * as ServerConfig from "../config.ts";
+import * as ResourceAttribution from "../resourceTelemetry/ResourceAttribution.ts";
+import * as Observability from "./Observability.ts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -21,6 +26,47 @@ const failures = (reason: string) =>
   ).pipe(Effect.map((state) => state.count));
 
 describe("OtlpExportFailures", () => {
+  it.effect("includes log export failures in the active metrics export", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      config.telemetry.update({
+        otlpLogsUrl: "http://localhost/v1/logs",
+        otlpMetricsUrl: "http://localhost/v1/metrics",
+      });
+      const packets: string[] = [];
+      const client = HttpClient.make((request) => {
+        const metrics = request.url.endsWith("/metrics");
+        if (metrics && request.body._tag === "Uint8Array") {
+          packets.push(new TextDecoder().decode(request.body.body));
+        }
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(null, {
+              status: metrics ? 200 : 400,
+            }),
+          ),
+        );
+      });
+      yield* Effect.gen(function* () {
+        yield* Metric.update(Metric.counter("control_measurement"), 1);
+        yield* Effect.logError("exercise log export");
+        yield* TestClock.adjust("20 seconds");
+        const metrics = packets.join("\n");
+        assert.include(metrics, "control_measurement");
+        assert.include(metrics, "t3_otlp_export_attempt_failures_total");
+        assert.include(metrics, "status_400");
+      }).pipe(
+        Effect.provide(Observability.layer),
+        Effect.provideService(HttpClient.HttpClient, client),
+      );
+    }).pipe(
+      Effect.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-log-export-failures-" })),
+      Effect.provide(ResourceAttribution.layer),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
   it.effect("counts each failed attempt by reason and leaves successes alone", () => {
     const outcomes: Array<number | "transport"> = [503, "transport", 200];
     const client = HttpClient.make((request) => {

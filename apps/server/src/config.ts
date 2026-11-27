@@ -10,7 +10,7 @@ import * as Path from "effect/Path";
 import type * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
-import type { OtlpEndpointSource } from "@t3tools/contracts";
+import type { DesktopBackendBootstrap, OtlpEndpointSource } from "@t3tools/contracts";
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
 import { markNoCopyOnWrite } from "./noCopyOnWrite.ts";
 import {
@@ -67,6 +67,7 @@ export class ServerConfig extends Context.Service<
   ServerConfig,
   ServerDerivedPaths & {
     readonly telemetry: TelemetryControl;
+    readonly legacyWindowsOtlp?: DesktopBackendBootstrap["legacyWindowsOtlp"];
     readonly logLevel: LogLevel.LogLevel;
     readonly traceMinLevel: LogLevel.LogLevel;
     readonly traceTimingEnabled: boolean;

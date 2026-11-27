@@ -104,7 +104,7 @@ export const installRelayTelemetryEnabled = Effect.fn("desktop.ipc.window.instal
         result: Schema.NullOr(Schema.Boolean),
         handler: () =>
           shellEnvironment.discoveryFinished.pipe(
-            Effect.map((known) => (allowed() ? (known ? true : null) : false)),
+            Effect.map((known) => (known || !policyAllows ? allowed() : null)),
           ),
       }),
     );
@@ -113,7 +113,11 @@ export const installRelayTelemetryEnabled = Effect.fn("desktop.ipc.window.instal
         channel: IpcChannels.WAIT_FOR_RELAY_TELEMETRY_ENABLED_CHANNEL,
         payload: Schema.Void,
         result: Schema.Boolean,
-        handler: () => shellEnvironment.awaitSettledDiscovery.pipe(Effect.map(allowed)),
+        handler: () =>
+          shellEnvironment.awaitSettledDiscovery.pipe(
+            Effect.andThen(shellEnvironment.discoveryFinished),
+            Effect.map((known) => known && allowed()),
+          ),
       }),
     );
   },

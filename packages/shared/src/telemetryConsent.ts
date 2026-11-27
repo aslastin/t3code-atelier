@@ -30,6 +30,7 @@ export function resolveTelemetry(
   preferences: TelemetryPreferences | undefined,
   limits: {
     endpoint: boolean;
+    exportersDisabled?: boolean;
     legacyEndpoint?: boolean;
     connect: boolean;
     sdk: boolean;
@@ -54,7 +55,13 @@ export function resolveTelemetry(
     rendererConnect: connect,
     analytics: t3Block ?? selected(choices.analytics),
     connect: limits.connect ? connect : "unavailable",
-    otlp: limits.sdk ? "sdk" : !limits.endpoint ? "noEndpoint" : selected(choices.otlp),
+    otlp: limits.sdk
+      ? "sdk"
+      : limits.exportersDisabled
+        ? "exporters"
+        : !limits.endpoint
+          ? "noEndpoint"
+          : selected(choices.otlp),
   };
 }
 

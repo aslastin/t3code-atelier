@@ -10,7 +10,11 @@ import {
   type PersistedServerObservabilitySettings,
 } from "./serverSettings.ts";
 
-const empty = { otlpTracesUrl: undefined, otlpMetricsUrl: undefined, otlpLogsUrl: undefined };
+const empty: PersistedServerObservabilitySettings = {
+  otlpTracesUrl: undefined,
+  otlpMetricsUrl: undefined,
+  otlpLogsUrl: undefined,
+};
 const disabled = {
   ...empty,
   telemetry: { enabled: false, analytics: false, connect: false, otlp: false },

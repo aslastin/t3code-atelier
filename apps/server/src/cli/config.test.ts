@@ -581,6 +581,38 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
+  it.effect("uses the final desktop shell preference and reports disabled signal exporters", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const base = yield* fs.makeTempDirectoryScoped({ prefix: "t3-telemetry-limits-" });
+      const startupEnv = {
+        T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
+        T3CODE_TELEMETRY_ENABLED: "false",
+        OTEL_TRACES_EXPORTER: "none",
+        OTEL_METRICS_EXPORTER: "none",
+        OTEL_LOGS_EXPORTER: "none",
+      };
+      const env: NodeJS.ProcessEnv = { ...startupEnv };
+      const config = yield* resolveServerConfig(minimalDesktopFlags(base), Option.none()).pipe(
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: startupEnv }))),
+        Effect.provideService(HostProcess.Environment, env),
+        Effect.provide(NetService.layer),
+      );
+      const control = config.telemetry;
+      control.setManaged(false);
+      control.update({
+        telemetry: { enabled: true, analytics: true, connect: false, otlp: true },
+        otlpTracesUrl: "http://localhost:4318/v1/traces",
+      });
+      expect(control.describe().telemetry.analytics).toBe("pending");
+      delete env.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING;
+      env.T3CODE_TELEMETRY_ENABLED = "true";
+      control.refresh();
+      expect(control.describe().telemetry.analytics).toBe("on");
+      expect(control.describe().telemetry.otlp).toBe("exporters");
+    }),
+  );
+
   it.effect("zeroes an endpoint stored in Settings when the SDK is disabled", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

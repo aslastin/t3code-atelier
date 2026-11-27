@@ -49,6 +49,7 @@ import { ResourceTelemetryDiagnostics } from "./ResourceTelemetryDiagnostics";
 import { formatCpuTime } from "./ResourceTelemetryDiagnostics.logic";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { settingsScopeEnvironmentLabel } from "./settingsScopeAxis";
 import { useSettingsScope } from "./SettingsScopeContext";
 
 const NUMBER_FORMAT = new Intl.NumberFormat();
@@ -782,7 +783,7 @@ export function DiagnosticsSettingsPanel() {
 function DiagnosticsSettingsBody() {
   const gt = useGT();
   const m = useMessages();
-  const { environment } = useSettingsScope();
+  const { environment, environments, scope } = useSettingsScope();
   const environmentId = environment?.environmentId ?? null;
   const canMaintainEnvironment = useEnvironmentScope(environmentId, AuthEnvironmentMaintainScope);
   const observability = environment?.serverConfig?.observability;
@@ -975,9 +976,21 @@ function DiagnosticsSettingsBody() {
     ? Option.getOrElse(data.partialFailure, () => false)
     : false;
 
+  const source = environment &&
+    (scope.kind === "all" || (scope.kind === "project" && !scope.environmentId)) && (
+      <p className="px-3 text-sm text-muted-foreground sm:px-4">
+        {gt(
+          "Showing diagnostics for {environment}. The first connected environment in this selection is used, with priority given to the primary environment.",
+          {
+            environment: settingsScopeEnvironmentLabel(environment, environments),
+          },
+        )}
+      </p>
+    );
   if (!canReadDiagnostics) {
     return (
       <SettingsPageContainer>
+        {source}
         <p className="text-sm text-muted-foreground">
           {environmentId === null
             ? gt("Connect an environment to see diagnostics.")
@@ -991,6 +1004,7 @@ function DiagnosticsSettingsBody() {
 
   return (
     <SettingsPageContainer width="expanded" className="gap-10">
+      {source}
       <ResourceTelemetryDiagnostics environmentId={environmentId} />
 
       <SettingsSection

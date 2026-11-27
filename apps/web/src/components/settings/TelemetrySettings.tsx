@@ -42,6 +42,7 @@ const reasons = {
   environment: msg("Disabled by T3CODE_TELEMETRY_ENABLED"),
   pending: msg("Waiting for shell settings"),
   unavailable: msg("Unavailable in this build"),
+  exporters: msg("All OTLP signal exporters are disabled by the environment"),
   noEndpoint: msg("No OTLP endpoint configured"),
 } satisfies Record<TelemetryStatus["otlp"], unknown>;
 

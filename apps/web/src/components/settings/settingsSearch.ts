@@ -986,6 +986,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     scope: "environment-defaults",
     searchTerms: [
       msg("What to send"),
+      msg("OTel OTLP telemetry export endpoints logs traces metrics Grafana"),
       msg("OpenTelemetry export"),
       msg("OpenTelemetry OTLP PostHog Axiom T3 Connect traces metrics logs"),
     ],

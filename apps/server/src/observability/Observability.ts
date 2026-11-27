@@ -98,7 +98,6 @@ export const layer = Layer.unwrap(
       }),
     ).pipe(
       Layer.provide(OtlpExportFailures.layer("metrics")),
-      Layer.provideMerge(Layer.succeed(Metric.MetricRegistry, registry)),
       Layer.provide(SharedObservability.layerOtlpSerialization(metrics.protocol)),
       Layer.provide(OtlpExporter.layerFlusher),
     );
@@ -109,7 +108,9 @@ export const layer = Layer.unwrap(
 
     return layerOtelWarnings.pipe(
       Layer.provideMerge(
-        Layer.mergeAll(ServerLogger.layer, layerTraceReferences, layerTracer, metricsLayer),
+        Layer.mergeAll(ServerLogger.layer, layerTraceReferences, layerTracer, metricsLayer).pipe(
+          Layer.provideMerge(Layer.succeed(Metric.MetricRegistry, registry)),
+        ),
       ),
       Layer.provide(
         OtelEnvironment.layerResourceAttributes(config.otelEnvironment.resourceAttributes),

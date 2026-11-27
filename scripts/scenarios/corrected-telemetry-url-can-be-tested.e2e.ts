@@ -39,6 +39,8 @@ test(
       await expect(screen.getByText("Resource monitor", { exact: true })).toBeVisible();
       expect(await screen.getByRole("switch", "Send telemetry").count()).toBe(0);
 
+      await app.open("/settings/diagnostics");
+      await expect(screen.getByText(/Showing diagnostics for Scenario/)).toBeVisible();
       await app.open("/settings/diagnostics#telemetry-endpoints");
       await expect(browser).toHaveURL(/\/settings\/maintenance/);
 

@@ -85,6 +85,7 @@ it("keeps externally blocked choices off and preserves them during group writes"
     [locked, "enabled", true, "allBlocked"],
     [locked, "enabled", false, "confirmed"],
     [locked, "otlp", true, "sdk"],
+    [{ ...locked, status: { ...status, otlp: "exporters" } }, "otlp", true, "exporters"],
     [locked, "connect", true, "noChannel"],
     [locked, "analytics", true, "environment"],
     [available, "analytics", true, "confirmed"],
