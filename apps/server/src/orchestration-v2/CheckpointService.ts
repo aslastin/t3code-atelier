@@ -948,7 +948,6 @@ export const layer: Layer.Layer<
                 const preRewindRef = yield* scopeRef(target.scope.id, "pre-rewind").pipe(
                   Effect.provideService(Digest.Digest, crypto),
                 );
-                unclaimedSaves.delete(saveKey(target.scope.cwd, preRewindRef));
                 // One an earlier failed rewind left is still the only copy of how the folder was.
                 const kept = yield* checkpointStore.hasCheckpointRef({
                   cwd: target.scope.cwd,
@@ -961,6 +960,7 @@ export const layer: Layer.Layer<
                   });
                 }
                 snapshots.push({ ...folder, checkpointRef: preRewindRef });
+                unclaimedSaves.delete(saveKey(target.scope.cwd, preRewindRef));
                 // What this process knew of the folder no longer holds.
                 repositoryStates.delete(target.scope.id);
                 const restored = yield* checkpointStore.restoreCheckpoint({

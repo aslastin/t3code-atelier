@@ -251,6 +251,8 @@ export interface CommandPaletteView {
   readonly addonIcon: ReactNode;
   readonly groups: ReadonlyArray<CommandPaletteGroup>;
   readonly initialQuery?: string;
+  /** Atelier fork: a folder browsed in this view is imported as a VCS plugin into it. */
+  readonly importVcsPluginIn?: EnvironmentId;
 }
 
 // Child search unmounts the palette; retain search data without its view closures.

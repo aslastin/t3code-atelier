@@ -689,61 +689,71 @@ it.effect("keeps the pre-rewind snapshot of a folder a failed rewind could not p
   }).pipe(Effect.provide(layerTest));
 });
 
-it.effect("drops the pre-rewind copies a failed restore never reached, and keeps the rest", () => {
-  const targets = ["first", "second"].map((name) => ({
-    scope: { id: CheckpointScopeId.make(`checkpoint-scope:saved:${name}`), cwd: `/repo/${name}` },
-    checkpoint: {
-      ordinalWithinScope: 1,
-      ref: CheckpointRef.make(`refs/t3/test/saved/${name}`),
-      status: "ready" as const,
-    },
-  }));
-  const failure = new VcsProcessTimeoutError({
-    operation: "test.restore",
-    command: "git",
-    cwd: "/repo",
-    timeoutMs: 30000,
-  });
-  const saved = new Map<string, string>();
-  const existing = new Set<string>();
-  const layerTest = CheckpointService.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        IdAllocator.layer,
-        layerNoTrackedFolders,
-        Layer.mock(CheckpointStore.CheckpointStore)({
-          hasCheckpointRef: (input) =>
-            Effect.sync(
-              () =>
-                targets.some((target) => target.checkpoint.ref === input.checkpointRef) ||
-                existing.has(input.checkpointRef),
-            ),
-          verifyRestorable: () => Effect.succeed(true),
-          captureCheckpoint: (input) =>
-            Effect.sync(() => {
-              existing.add(input.checkpointRef);
-              saved.set(input.cwd, input.checkpointRef);
-            }),
-          // The first folder fails, and so does putting it back; the second is never reached.
-          restoreCheckpoint: () => Effect.fail(failure),
-          deleteCheckpointRefs: (input) =>
-            Effect.sync(() => {
-              for (const ref of input.checkpointRefs) existing.delete(ref);
-            }),
-        }),
+it.effect.each(["restore", "lookup"] as const)(
+  "drops the pre-rewind copies a failed restore never used, and keeps the rest: %s fails",
+  (failing) => {
+    const targets = ["first", "second"].map((name) => ({
+      scope: { id: CheckpointScopeId.make(`checkpoint-scope:saved:${name}`), cwd: `/repo/${name}` },
+      checkpoint: {
+        ordinalWithinScope: 1,
+        ref: CheckpointRef.make(`refs/t3/test/saved/${name}`),
+        status: "ready" as const,
+      },
+    }));
+    const failure = new VcsProcessTimeoutError({
+      operation: "test.restore",
+      command: "git",
+      cwd: "/repo",
+      timeoutMs: 30000,
+    });
+    const saved = new Map<string, string>();
+    const existing = new Set<string>();
+    let lookupFails = false;
+    const layerTest = CheckpointService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          layerNoTrackedFolders,
+          Layer.mock(CheckpointStore.CheckpointStore)({
+            hasCheckpointRef: (input) =>
+              lookupFails && existing.has(input.checkpointRef)
+                ? Effect.fail(failure)
+                : Effect.sync(
+                    () =>
+                      targets.some((target) => target.checkpoint.ref === input.checkpointRef) ||
+                      existing.has(input.checkpointRef),
+                  ),
+            verifyRestorable: () => Effect.succeed(true),
+            captureCheckpoint: (input) =>
+              Effect.sync(() => {
+                existing.add(input.checkpointRef);
+                saved.set(input.cwd, input.checkpointRef);
+              }),
+            // The first folder fails, and so does putting it back; the second is never reached.
+            restoreCheckpoint: () => Effect.fail(failure),
+            deleteCheckpointRefs: (input) =>
+              Effect.sync(() => {
+                for (const ref of input.checkpointRefs) existing.delete(ref);
+              }),
+          }),
+        ),
       ),
-    ),
-    Layer.provideMerge(NodeCrypto.layer),
-  );
-  return Effect.gen(function* () {
-    const checkpoints = yield* CheckpointService.CheckpointServiceV2;
-    const scopes = targets.map((target) => target.scope);
-    const copies = yield* checkpoints.saveBeforeRestore({ targets, scopes });
-    assert.strictEqual(
-      (yield* Effect.result(checkpoints.restore({ targets, scopes })))._tag,
-      "Failure",
+      Layer.provideMerge(NodeCrypto.layer),
     );
-    yield* copies.discard;
-    assert.deepEqual([...existing], [saved.get("/repo/first")]);
-  }).pipe(Effect.provide(layerTest));
-});
+    return Effect.gen(function* () {
+      const checkpoints = yield* CheckpointService.CheckpointServiceV2;
+      const scopes = targets.map((target) => target.scope);
+      const copies = yield* checkpoints.saveBeforeRestore({ targets, scopes });
+      lookupFails = failing === "lookup";
+      assert.strictEqual(
+        (yield* Effect.result(checkpoints.restore({ targets, scopes })))._tag,
+        "Failure",
+      );
+      lookupFails = false;
+      yield* copies.discard;
+      // A copy the restore could not put back is the folder's only one; a copy it never used would
+      // pass for the folder's state in the next rewind.
+      assert.deepEqual([...existing], failing === "restore" ? [saved.get("/repo/first")] : []);
+    }).pipe(Effect.provide(layerTest));
+  },
+);

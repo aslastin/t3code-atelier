@@ -457,12 +457,13 @@ export const layer: Layer.Layer<
                         ),
                       ),
               );
-              // Atelier fork: kept until the whole rewind is done. A checkpoint found unrestorable
-              // after the checkout came back must not cost the files that were left there.
-              // A repository left inside, with history no checkpoint saved, is kept even then.
-              // Stops at the first repository found, so a mount left inside is not read through.
+              // Atelier fork: kept until the whole rewind is done, so a checkpoint found
+              // unrestorable later does not cost the files left there. A repository or a mount
+              // inside, which no checkpoint saved, keeps it even then; the walk stops at the
+              // first one, so a mount is neither read through nor deleted with the folder.
               const holdsRepository = Effect.gen(function* () {
                 const markers = [".git", ...rootMarkers()];
+                const device = (yield* fileSystem.stat(path.join(aside, "folder"))).dev;
                 const queue = [path.join(aside, "folder")];
                 for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
                   const folder = next;
@@ -479,7 +480,10 @@ export const layer: Layer.Layer<
                     const child = path.join(folder, entry);
                     if (Option.isSome(yield* fileSystem.readLink(child).pipe(Effect.option)))
                       continue;
-                    if ((yield* fileSystem.stat(child)).type === "Directory") queue.push(child);
+                    const info = yield* fileSystem.stat(child);
+                    if (info.type !== "Directory") continue;
+                    if (info.dev !== device) return true;
+                    queue.push(child);
                   }
                 }
                 return false;

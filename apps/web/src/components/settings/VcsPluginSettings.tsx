@@ -71,12 +71,10 @@ function PluginRow({
   environmentId,
   plugin,
   canManage,
-  onChanged,
 }: {
   readonly environmentId: EnvironmentId;
   readonly plugin: PluginSummary;
   readonly canManage: boolean;
-  readonly onChanged: () => void;
 }) {
   const gt = useGT();
   const failureMessage = useFailureMessage();
@@ -102,8 +100,7 @@ function PluginRow({
     setFailure(null);
     const result = await call();
     setBusy(false);
-    if (result._tag === "Success") onChanged();
-    else setFailure(failureMessage(result));
+    if (result._tag === "Failure") setFailure(failureMessage(result));
   };
 
   const input = { id: plugin.id };
@@ -228,13 +225,7 @@ function PluginRow({
   );
 }
 
-function ImportForm({
-  environmentId,
-  onImported,
-}: {
-  readonly environmentId: EnvironmentId;
-  readonly onImported: () => void;
-}) {
+function ImportForm({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const gt = useGT();
   const failureMessage = useFailureMessage();
   const importFolder = useAtomCommand(pluginEnvironment.importFolder, {
@@ -278,10 +269,8 @@ function ImportForm({
     setFailure(null);
     const result = await importFolder({ environmentId, input: { path: folder } });
     setBusy(false);
-    if (result._tag === "Success") {
-      setPath("");
-      onImported();
-    } else setFailure(failureMessage(result));
+    if (result._tag === "Success") setPath("");
+    else setFailure(failureMessage(result));
   };
 
   return (
@@ -357,7 +346,6 @@ export function VcsPluginSettings({
           environmentId={environmentId}
           plugin={plugin}
           canManage={canManage}
-          onChanged={list.refresh}
         />
       ))}
       {result.plugins.length === 0 ? (
@@ -370,7 +358,7 @@ export function VcsPluginSettings({
           )}
         </p>
       ) : null}
-      {canManage ? <ImportForm environmentId={environmentId} onImported={list.refresh} /> : null}
+      {canManage ? <ImportForm environmentId={environmentId} /> : null}
     </SettingsSection>
   );
 }
