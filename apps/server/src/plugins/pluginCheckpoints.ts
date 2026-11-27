@@ -1186,6 +1186,9 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     const info = yield* fs.stat(absolute).pipe(Effect.orElseSucceed(() => null));
     if (info === null) return [];
     if (info.type !== "Directory") return [folder];
+    // A mount is never listed through; restores refuse or keep it, as a nested repository.
+    const root = yield* fs.stat(location.root).pipe(Effect.orElseSucceed(() => null));
+    if (root !== null && root.dev !== info.dev) return [];
     // A link is removed itself; its target, maybe outside the checkout, is never visited.
     return ((yield* walk(absolute)) ?? [])
       .filter((entry) => entry.kind === "file" || entry.kind === "link")

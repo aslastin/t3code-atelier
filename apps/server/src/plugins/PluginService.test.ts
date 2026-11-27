@@ -947,8 +947,14 @@ describe("ManifestVcsDriver", () => {
       const realFs = yield* FileSystem.FileSystem;
       // A folder reported on another device, as a mount point is.
       let mount: string | null = null;
+      const mountReads: string[] = [];
       const mounted = FileSystem.FileSystem.of({
         ...realFs,
+        readDirectory: (target, options) => {
+          if (mount !== null && (target === mount || target.startsWith(`${mount}/`)))
+            mountReads.push(target);
+          return realFs.readDirectory(target, options);
+        },
         stat: (target) =>
           realFs
             .stat(target)
@@ -982,6 +988,16 @@ describe("ManifestVcsDriver", () => {
         const refused = yield* checkpoints.restoreCheckpoint(restore).pipe(Effect.flip);
         assert.include(refused.message, "another file system mounted in the checkout");
         assert.strictEqual(NodeFS.readFileSync(`${repository}/sub/b.txt`, "utf8"), "changed\n");
+        // A saved file whose path is now a mount is refused without reading the mount.
+        NodeFS.writeFileSync(`${repository}/sub/b.txt`, "two\n");
+        NodeFS.rmSync(`${repository}/a.txt`);
+        NodeFS.mkdirSync(`${repository}/a.txt`);
+        NodeFS.writeFileSync(`${repository}/a.txt/data`, "data\n");
+        mount = `${repository}/a.txt`;
+        mountReads.length = 0;
+        assert.isFalse(yield* checkpoints.verifyRestorable!(restore));
+        assert.deepStrictEqual(mountReads, []);
+        assert.isTrue(NodeFS.existsSync(`${repository}/a.txt/data`));
       }).pipe(Effect.provideService(FileSystem.FileSystem, mounted));
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
