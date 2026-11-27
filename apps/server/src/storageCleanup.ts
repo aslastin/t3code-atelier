@@ -403,9 +403,10 @@ const make = Effect.gen(function* () {
     worktreePath: string,
     projectRoot: string,
   ) {
-    if (!gitWorkflowHasPlugins()) return null;
+    // Every plugin off: still never handed to Git when an installed plugin marks it.
+    if (!gitWorkflowHasPlugins() && (plugins?.installedMarkers() ?? []).length === 0) return null;
     // Even beside a `.git`: the plugin's marker decides which VCS owns the folder.
-    const project = yield* projectPlugin(projectRoot);
+    const project = gitWorkflowHasPlugins() ? yield* projectPlugin(projectRoot) : null;
     if (project === "unanswered" || project === null) {
       // The project's VCS did not answer, or its plugin is off: a folder any installed plugin
       // marks is never handed to Git, which cannot see the plugin's commits or snapshots.
@@ -1654,7 +1655,8 @@ const make = Effect.gen(function* () {
               const result = yield* taskFolders.remove({
                 root: taskFolder.root,
                 force: false,
-                forget: deleted,
+                // A live thread sharing the folder, such as a subagent, still needs its layout.
+                forget: deleted && group.length === 0,
                 inspect: (checkout) =>
                   inspectCheckout(
                     checkout,

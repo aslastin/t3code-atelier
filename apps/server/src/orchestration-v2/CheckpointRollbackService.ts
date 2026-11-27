@@ -43,6 +43,7 @@ import { CheckpointRestoreError, CheckpointServiceV2 } from "./CheckpointService
 import { EventSinkV2 } from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
+import { removeEmptyDirectory } from "../vcs/removeEmptyDirectory.ts";
 import { GIT_INDEX_LOCKED_DETAIL } from "../vcs/VcsProcess.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -314,23 +315,76 @@ export const layer: Layer.Layer<
           checkpointId: input.checkpointId,
         });
 
+      // Atelier fork: a plugin's shadow checkpoints are keyed by path, so another checkout of the
+      // same VCS put there since would pass for the thread's. Only the project's own checkout, or
+      // one its VCS lists, is restored into, whether or not the thread has a branch.
+      if (
+        taskFolder === null &&
+        worktreePath != null &&
+        restoreFiles &&
+        (yield* fileSystem.exists(worktreePath)) &&
+        (yield* hasPluginMarker(worktreePath))
+      ) {
+        const project = yield* projects.get(context.thread.projectId);
+        const real = (target: string) =>
+          fileSystem.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
+        const own = yield* real(worktreePath);
+        let owned = false;
+        if (Option.isSome(project)) {
+          const root = project.value.workspaceRoot;
+          const repositoryRoot = yield* gitWorkflow
+            .repositoryRoot(root)
+            .pipe(Effect.orElseSucceed(() => null));
+          const listed = yield* gitWorkflow
+            .listWorktrees(root)
+            .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+          for (const entry of [
+            root,
+            ...(repositoryRoot === null ? [] : [repositoryRoot]),
+            ...listed,
+          ])
+            if ((yield* real(entry)) === own) owned = true;
+        }
+        if (!owned)
+          return yield* new CheckpointRollbackExecutionError({
+            reason: "worktree-has-files",
+            threadId: input.threadId,
+            providerThreadId: input.providerThreadId,
+            checkpointId: input.checkpointId,
+          });
+      }
       if (taskFolder !== null && branch != null) {
         // Cleanup can remove any of the folder's checkouts; the linked project folder has none.
-        yield* taskFolders.restore({
-          taskFolder,
-          branch,
-          recreate: (checkout) =>
-            gitWorkflow.pruneWorktrees({ cwd: checkout.repositoryPath }).pipe(
-              Effect.andThen(
-                gitWorkflow.createWorktree({
-                  cwd: checkout.repositoryPath,
-                  refName: branch,
-                  path: checkout.worktreePath,
-                }),
+        // A conversation-only rewind needs no files, so a sibling checkout that cannot be
+        // confirmed, such as one whose plugin is off, does not stop it.
+        yield* taskFolders
+          .restore({
+            taskFolder,
+            branch,
+            recreate: (checkout) =>
+              gitWorkflow.pruneWorktrees({ cwd: checkout.repositoryPath }).pipe(
+                Effect.andThen(
+                  gitWorkflow.createWorktree({
+                    cwd: checkout.repositoryPath,
+                    refName: branch,
+                    path: checkout.worktreePath,
+                  }),
+                ),
+                Effect.mapError(recreateFailed),
               ),
-              Effect.mapError(recreateFailed),
+          })
+          .pipe(
+            Effect.catch((cause) =>
+              restoreFiles
+                ? Effect.fail(cause)
+                : Effect.logWarning(
+                    "A conversation-only rewind left a task folder checkout as is",
+                    {
+                      cause,
+                    },
+                  ),
             ),
-        });
+          );
       } else if (worktreePath != null && branch != null) {
         // Recreated only where the server would have made it, as turn start does.
         // A failed removal can leave the folder without its checkout; only a file restore replaces it.
@@ -338,29 +392,6 @@ export const layer: Layer.Layer<
           restoreFiles &&
           (yield* fileSystem.exists(worktreePath)) &&
           !(yield* hasCheckout(worktreePath));
-        // Atelier fork: a plugin's shadow checkpoints are keyed by path, so another checkout of
-        // the same VCS put there since would pass for the thread's. Only one the project's VCS
-        // lists is restored into.
-        if (restoreFiles && !leftover && (yield* hasPluginMarker(worktreePath))) {
-          const project = yield* projects.get(context.thread.projectId);
-          const listed = Option.isNone(project)
-            ? null
-            : yield* gitWorkflow
-                .listWorktrees(project.value.workspaceRoot)
-                .pipe(Effect.orElseSucceed((): ReadonlyArray<string> | null => null));
-          const real = (target: string) =>
-            fileSystem.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
-          const own = yield* real(worktreePath);
-          let isListed = false;
-          for (const entry of listed ?? []) if ((yield* real(entry)) === own) isListed = true;
-          if (!isListed)
-            return yield* new CheckpointRollbackExecutionError({
-              reason: "worktree-has-files",
-              threadId: input.threadId,
-              providerThreadId: input.providerThreadId,
-              checkpointId: input.checkpointId,
-            });
-        }
         if (
           (leftover || !(yield* fileSystem.exists(worktreePath))) &&
           (yield* isManagedWorktreePath(worktreePath))
@@ -402,7 +433,19 @@ export const layer: Layer.Layer<
                 (aside, exit) =>
                   Exit.isSuccess(exit)
                     ? Effect.void
-                    : fileSystem.remove(worktreePath, { recursive: true, force: true }).pipe(
+                    : // Only an empty folder is cleared for the old one: files that appeared there
+                      // meanwhile, which the failed checkout refused, are not deleted.
+                      fileSystem.exists(worktreePath).pipe(
+                        Effect.flatMap((present) =>
+                          present
+                            ? removeEmptyDirectory(worktreePath).pipe(
+                                Effect.filterOrFail(
+                                  (removed) => removed,
+                                  () => `${worktreePath} holds files again`,
+                                ),
+                              )
+                            : Effect.void,
+                        ),
                         Effect.andThen(fileSystem.rename(path.join(aside, "folder"), worktreePath)),
                         Effect.andThen(fileSystem.remove(aside, { recursive: true, force: true })),
                         Effect.catchCause((cause) =>
@@ -420,13 +463,21 @@ export const layer: Layer.Layer<
               const holdsRepository = fileSystem.readDirectory(aside, { recursive: true }).pipe(
                 Effect.map((entries) => {
                   const markers = [".git", ...rootMarkers()].map((marker) => marker.toLowerCase());
-                  return entries.some((entry) => {
-                    const relative = entry.split(path.sep).join("/").toLowerCase();
-                    return markers.some(
-                      (marker) =>
-                        relative.endsWith(`/${marker}`) || relative.includes(`/${marker}/`),
-                    );
-                  });
+                  const relatives = entries.map((entry) =>
+                    entry.split(path.sep).join("/").toLowerCase(),
+                  );
+                  const present = new Set(relatives);
+                  return relatives.some(
+                    (relative) =>
+                      markers.some(
+                        (marker) =>
+                          relative.endsWith(`/${marker}`) || relative.includes(`/${marker}/`),
+                      ) ||
+                      // A bare repository: HEAD beside its objects and refs.
+                      (relative.endsWith("/head") &&
+                        present.has(`${relative.slice(0, -"head".length)}objects`) &&
+                        present.has(`${relative.slice(0, -"head".length)}refs`)),
+                  );
                 }),
                 Effect.orElseSucceed(() => true),
               );

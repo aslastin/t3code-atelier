@@ -242,19 +242,20 @@ export const makeRestoreMissingWorktree = Effect.gen(function* () {
     }
     const worktreePath = yield* rootForThread(thread, folder);
     const exists = yield* fileSystem.exists(worktreePath).pipe(Effect.orElseSucceed(() => true));
-    const leftover = exists && (yield* isLeftoverFolder(worktreePath));
+    // A VCS plugin's checkout carries its marker where a Git checkout carries `.git`; a marker
+    // such as `.next/HEAD` is never build output to clear.
+    const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
+    let hasCheckout = false;
+    for (const marker of exists ? [".git", ...(plugins?.installedMarkers() ?? [])] : []) {
+      if (
+        yield* fileSystem
+          .exists(path.join(worktreePath, marker))
+          .pipe(Effect.orElseSucceed(() => false))
+      )
+        hasCheckout = true;
+    }
+    const leftover = exists && !hasCheckout && (yield* isLeftoverFolder(worktreePath));
     if (exists && !leftover) {
-      // A VCS plugin's checkout carries its marker where a Git checkout carries `.git`.
-      const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
-      let hasCheckout = false;
-      for (const marker of [".git", ...(plugins?.installedMarkers() ?? [])]) {
-        if (
-          yield* fileSystem
-            .exists(path.join(worktreePath, marker))
-            .pipe(Effect.orElseSucceed(() => false))
-        )
-          hasCheckout = true;
-      }
       if (
         folder !== worktreePath &&
         !(yield* fileSystem.exists(folder).pipe(Effect.orElseSucceed(() => true))) &&

@@ -191,6 +191,8 @@ it.effect.each([
   { order: "cleanup-first", restoreFiles: true, leavesFolder: true, createFails: true },
   // The checkout comes back, then its snapshot turns out to be gone with the old one.
   { order: "cleanup-first", restoreFiles: true, leavesFolder: true, unrestorable: true },
+  // A bare repository left there outlives even a rewind that succeeds.
+  { order: "cleanup-first", restoreFiles: true, leavesFolder: true, bareInside: true },
 ])("locks rollback with %s", (row) =>
   Effect.gen(function* () {
     const { order, restoreFiles, unmanaged, leavesFolder, shared, createFails } = row;
@@ -377,6 +379,16 @@ it.effect.each([
           if (leavesFolder) {
             yield* fileSystem.makeDirectory(worktreePath);
             yield* fileSystem.writeFileString(path.join(worktreePath, "unsaved.txt"), "keep");
+            if (row.bareInside)
+              for (const part of ["objects", "refs"])
+                yield* fileSystem.makeDirectory(path.join(worktreePath, "archive.git", part), {
+                  recursive: true,
+                });
+            if (row.bareInside)
+              yield* fileSystem.writeFileString(
+                path.join(worktreePath, "archive.git", "HEAD"),
+                "ref: refs/heads/main\n",
+              );
           }
           calls.push("cleanup");
         }),
@@ -415,6 +427,19 @@ it.effect.each([
           assert.equal(error.reason, "shared-workspace");
           assert.isTrue(yield* fileSystem.exists(path.join(worktreePath, "unsaved.txt")));
         }
+        return;
+      }
+      if (row.bareInside) {
+        yield* Fiber.join(rollback);
+        const aside = (yield* fileSystem.readDirectory(path.dirname(worktreePath))).find((name) =>
+          name.startsWith(".t3-replaced-"),
+        );
+        assert.isDefined(aside);
+        assert.isTrue(
+          yield* fileSystem.exists(
+            path.join(path.dirname(worktreePath), aside!, "folder", "archive.git", "HEAD"),
+          ),
+        );
         return;
       }
       if (row.unrestorable) {
@@ -528,6 +553,7 @@ it.effect.each([
             // The project's plugin lists its checkout, so a rewind restores into it.
             Layer.mock(GitWorkflow.GitWorkflowService)({
               listWorktrees: () => Effect.succeed([worktreePath]),
+              repositoryRoot: () => Effect.succeed(workspaceRoot),
             }),
             Layer.mock(VcsPluginDrivers)({
               hasAny: () => true,
