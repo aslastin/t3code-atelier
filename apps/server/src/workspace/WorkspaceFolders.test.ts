@@ -243,6 +243,17 @@ it.layer(NodeServices.layer)("WorkspaceFolders", (it) => {
         found.map((folder) => folder.name),
         ["api", "both", "docs", "off", "pair", "web"],
       );
+      // A project in a plugin's repository, or its subfolder, is never scanned folder by folder:
+      // such a checkout can be a monorepo on a network mount.
+      const web = path.join(workspaceRoot, "web");
+      yield* fileSystem.makeDirectory(path.join(web, "app", "lib", ".git"), { recursive: true });
+      for (const root of [web, path.join(web, "app")])
+        assert.deepEqual(
+          yield* WorkspaceFolders.discoverFolders(root).pipe(
+            Effect.provideService(VcsPluginDrivers, plugins),
+          ),
+          [],
+        );
       // Both are repositories, but only one whose plugin can create worktrees is offered one.
       yield* Effect.gen(function* () {
         const workspaceFolders = yield* WorkspaceFolders.WorkspaceFolders;

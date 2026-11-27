@@ -178,7 +178,19 @@ const folderProbes = Effect.gen(function* () {
       ),
     );
 
-  return { exists, realPath, classify, ownsHistory, childFolders };
+  // Atelier fork: a folder in a VCS plugin's repository, found by physical parents. Such a
+  // checkout can be a monorepo on a network mount, so its folders are never scanned one by one.
+  const insidePluginRepository = Effect.fnUntraced(function* (folder: string) {
+    const plugins = yield* Effect.serviceOption(VcsPluginDrivers);
+    const markers = Option.isSome(plugins) ? plugins.value.installedMarkers() : [];
+    if (markers.length === 0) return false;
+    for (let current = yield* realPath(folder); ; current = path.dirname(current)) {
+      for (const marker of markers) if (yield* exists(path.join(current, marker))) return true;
+      if (path.dirname(current) === current) return false;
+    }
+  });
+
+  return { exists, realPath, classify, ownsHistory, childFolders, insidePluginRepository };
 });
 
 const readCodeWorkspaceFolders = Effect.fn("WorkspaceFolders.readCodeWorkspaceFolders")(function* (
@@ -217,10 +229,12 @@ const scanFolders = Effect.fn("WorkspaceFolders.scan")(function* (
 > {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const { exists, realPath, classify, ownsHistory, childFolders } = yield* folderProbes;
+  const { exists, realPath, classify, ownsHistory, childFolders, insidePluginRepository } =
+    yield* folderProbes;
   const root = path.resolve(
     expandHomePath(input.workspaceRoot.trim(), yield* HostProcess.HomeDirectory),
   );
+  const pluginRepository = yield* insidePluginRepository(root);
   const names = (yield* fileSystem
     .readDirectory(root)
     .pipe(
@@ -235,7 +249,9 @@ const scanFolders = Effect.fn("WorkspaceFolders.scan")(function* (
   // history are offered. A plain child is looked into once: wrappers keep repositories under
   // folders such as `src` or `packages`.
   const children = yield* Effect.forEach(
-    names.filter((name) => !name.startsWith(".") && name !== "node_modules"),
+    pluginRepository
+      ? []
+      : names.filter((name) => !name.startsWith(".") && name !== "node_modules"),
     (name) => {
       const folderPath = path.join(root, name);
       return Effect.gen(function* () {
