@@ -104,6 +104,7 @@ it.effect.each(["initial", "waiting"])(
           ThreadCommandExecutor.layer,
           Layer.mock(CheckpointService.CheckpointServiceV2)({
             ensureRestorable: () => Effect.void,
+            saveBeforeRestore: () => Effect.succeed({ discard: Effect.void }),
             restore,
             discardRepositorySnapshots: () => Effect.void,
           }),
@@ -188,6 +189,8 @@ it.effect.each([
   { order: "cleanup-first", restoreFiles: false, leavesFolder: true },
   { order: "cleanup-first", restoreFiles: true, leavesFolder: true, shared: true },
   { order: "cleanup-first", restoreFiles: true, leavesFolder: true, createFails: true },
+  // The checkout comes back, then its snapshot turns out to be gone with the old one.
+  { order: "cleanup-first", restoreFiles: true, leavesFolder: true, unrestorable: true },
 ])("locks rollback with %s", (row) =>
   Effect.gen(function* () {
     const { order, restoreFiles, unmanaged, leavesFolder, shared, createFails } = row;
@@ -283,7 +286,17 @@ it.effect.each([
               }),
           }),
           Layer.mock(CheckpointService.CheckpointServiceV2)({
-            ensureRestorable: () => Effect.void,
+            ensureRestorable: () =>
+              row.unrestorable
+                ? Effect.fail(
+                    new CheckpointService.CheckpointRestoreError({
+                      scopeId,
+                      checkpointId,
+                      cause: "Checkpoint ref is unavailable.",
+                    }),
+                  )
+                : Effect.void,
+            saveBeforeRestore: () => Effect.succeed({ discard: Effect.void }),
             discardRepositorySnapshots: () => Effect.void,
             restore: () =>
               Effect.gen(function* () {
@@ -404,6 +417,21 @@ it.effect.each([
         }
         return;
       }
+      if (row.unrestorable) {
+        yield* Fiber.join(rollback).pipe(Effect.flip);
+        // The files the failed removal left are kept aside, not deleted with the rewind.
+        const aside = (yield* fileSystem.readDirectory(path.dirname(worktreePath))).find((name) =>
+          name.startsWith(".t3-replaced-"),
+        );
+        assert.isDefined(aside);
+        assert.equal(
+          yield* fileSystem.readFileString(
+            path.join(path.dirname(worktreePath), aside!, "folder", "unsaved.txt"),
+          ),
+          "keep",
+        );
+        return;
+      }
       if (createFails) {
         const error = yield* Fiber.join(rollback).pipe(Effect.flip);
         assert.equal(error.reason, "worktree-recreate-failed");
@@ -508,6 +536,7 @@ it.effect.each([
             }),
             Layer.mock(CheckpointService.CheckpointServiceV2)({
               ensureRestorable: () => Effect.void,
+              saveBeforeRestore: () => Effect.succeed({ discard: Effect.void }),
               discardRepositorySnapshots: () => Effect.void,
               restore: () =>
                 Deferred.succeed(restoreEntered, undefined).pipe(
@@ -844,6 +873,7 @@ const seedRollbackHistory = Effect.gen(function* () {
         IdAllocator.layer,
         Layer.mock(CheckpointService.CheckpointServiceV2)({
           ensureRestorable: () => Effect.void,
+          saveBeforeRestore: () => Effect.succeed({ discard: Effect.void }),
           restore: ({ targets }) =>
             Effect.sync(() => {
               restored.push(

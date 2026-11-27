@@ -144,6 +144,12 @@ it.effect.each([
           }),
           Layer.mock(CheckpointServiceV2)({
             ensureRestorable: () => Effect.void,
+            // Each folder is saved before the conversation changes.
+            saveBeforeRestore: () =>
+              Effect.sync(() => {
+                calls.push("save");
+                return { discard: Effect.void };
+              }),
             discardRepositorySnapshots: () => Effect.void,
             restore: () =>
               Effect.gen(function* () {
@@ -180,7 +186,7 @@ it.effect.each([
       assert.equal(yield* fs.readFileString(otherFile), "other thread's uncommitted work");
     } else {
       yield* service.execute({ threadId, providerThreadId, checkpointId, scopeId, restoreFiles });
-      assert.deepEqual(calls, restoreFiles ? ["provider", "files"] : ["provider"]);
+      assert.deepEqual(calls, restoreFiles ? ["save", "provider", "files"] : ["provider"]);
       assert.equal(yield* fs.exists(otherFile), !restoreFiles);
     }
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),

@@ -360,7 +360,7 @@ export const layer: Layer.Layer<
             }
             if (leftover && !nested) {
               // Set aside, not removed: a checkout that fails puts the folder and its files back.
-              yield* Effect.acquireUseRelease(
+              const aside = yield* Effect.acquireUseRelease(
                 Effect.gen(function* () {
                   const aside = yield* fileSystem.makeTempDirectory({
                     directory: path.dirname(worktreePath),
@@ -369,27 +369,31 @@ export const layer: Layer.Layer<
                   yield* fileSystem.rename(worktreePath, path.join(aside, "folder"));
                   return aside;
                 }),
-                () => recreate,
+                (aside) => Effect.as(recreate, aside),
                 (aside, exit) =>
-                  (Exit.isSuccess(exit)
+                  Exit.isSuccess(exit)
                     ? Effect.void
-                    : fileSystem
-                        .remove(worktreePath, { recursive: true, force: true })
-                        .pipe(
-                          Effect.andThen(
-                            fileSystem.rename(path.join(aside, "folder"), worktreePath),
-                          ),
-                        )
-                  ).pipe(
-                    Effect.andThen(fileSystem.remove(aside, { recursive: true, force: true })),
-                    Effect.catchCause((cause) =>
-                      Effect.logWarning("Edit from here left a worktree folder set aside", {
-                        worktreePath,
-                        setAside: path.join(aside, "folder"),
-                        cause,
-                      }),
-                    ),
-                  ),
+                    : fileSystem.remove(worktreePath, { recursive: true, force: true }).pipe(
+                        Effect.andThen(fileSystem.rename(path.join(aside, "folder"), worktreePath)),
+                        Effect.andThen(fileSystem.remove(aside, { recursive: true, force: true })),
+                        Effect.catchCause((cause) =>
+                          Effect.logWarning("Edit from here left a worktree folder set aside", {
+                            worktreePath,
+                            setAside: path.join(aside, "folder"),
+                            cause,
+                          }),
+                        ),
+                      ),
+              );
+              // Atelier fork: kept until the whole rewind is done. A checkpoint found unrestorable
+              // after the checkout came back must not cost the files that were left there.
+              yield* Effect.addFinalizer((exit) =>
+                Exit.isSuccess(exit)
+                  ? fileSystem.remove(aside, { recursive: true, force: true }).pipe(Effect.ignore)
+                  : Effect.logWarning("A failed edit from here kept the folder it set aside", {
+                      worktreePath,
+                      setAside: path.join(aside, "folder"),
+                    }),
               );
             } else {
               yield* recreate;
@@ -502,14 +506,24 @@ export const layer: Layer.Layer<
           (turn.runAttemptId === null || !rolledBackAttemptIds.has(turn.runAttemptId)),
       );
 
+      // Atelier fork: each folder is saved before the conversation changes; a folder that cannot
+      // be saved, such as one whose VCS plugin's strategies fail, stops the rewind here.
+      const saved = restoreFiles
+        ? yield* checkpoints.saveBeforeRestore({
+            targets: restoreTargets,
+            scopes: [scope, ...repositories],
+          })
+        : null;
       const snapshot =
         runsToRollback.length === 0
           ? { providerThread }
-          : yield* session.rollbackThread({
-              providerThread,
-              target: rollbackTarget,
-              providerThreadTurns,
-            });
+          : yield* session
+              .rollbackThread({
+                providerThread,
+                target: rollbackTarget,
+                providerThreadTurns,
+              })
+              .pipe(Effect.onError(() => saved?.discard ?? Effect.void));
       if (restoreFiles) {
         yield* checkpoints.restore({ targets: restoreTargets, scopes: [scope, ...repositories] });
       }
@@ -657,7 +671,7 @@ export const layer: Layer.Layer<
           yield* eventSink.write({ events });
         }),
       );
-    });
+    }, Effect.scoped);
 
     return CheckpointRollbackServiceV2.of({
       // The inner execute owns the rollback span; this wrapper selects the workspace lease.

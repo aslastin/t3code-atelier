@@ -256,6 +256,18 @@ export interface CheckpointServiceV2Shape {
     /** As for `restore`: a folder is checked without the nested ones that keep their own files. */
     readonly scopes?: ReadonlyArray<Pick<OrchestrationV2CheckpointScope, "id" | "cwd">>;
   }) => Effect.Effect<void, CheckpointServiceV2Error>;
+  /**
+   * Atelier fork: saves each target folder as `restore` would, before a rewind changes anything
+   * else, such as the provider's conversation. `restore` then reuses the copies; `discard` drops
+   * the ones made here when the rewind stops before `restore`.
+   */
+  readonly saveBeforeRestore: (input: {
+    readonly targets: ReadonlyArray<{
+      readonly scope: Pick<OrchestrationV2CheckpointScope, "id" | "cwd">;
+      readonly checkpoint: Pick<OrchestrationV2Checkpoint, "ordinalWithinScope">;
+    }>;
+    readonly scopes: ReadonlyArray<Pick<OrchestrationV2CheckpointScope, "id" | "cwd">>;
+  }) => Effect.Effect<{ readonly discard: Effect.Effect<void> }, CheckpointServiceV2Error>;
   readonly restore: (input: {
     readonly targets: ReadonlyArray<{
       readonly scope: Pick<OrchestrationV2CheckpointScope, "id" | "cwd">;
@@ -842,6 +854,57 @@ export const layer: Layer.Layer<
       }
     });
 
+    const saveBeforeRestore: CheckpointServiceV2Shape["saveBeforeRestore"] = Effect.fn(
+      "CheckpointService.saveBeforeRestore",
+    )(function* (input) {
+      type Target = (typeof input.targets)[number];
+      const failed = (target: Target, cause: unknown) =>
+        isCheckpointRestoreError(cause)
+          ? Effect.succeed(cause)
+          : Effect.map(
+              checkpointIdForScopeOrdinal(idAllocator, {
+                scopeId: target.scope.id,
+                ordinalWithinScope: target.checkpoint.ordinalWithinScope,
+              }),
+              (checkpointId) =>
+                new CheckpointRestoreError({ scopeId: target.scope.id, checkpointId, cause }),
+            );
+      const nested = yield* resolveNestedScopePaths(input.scopes);
+      const created: Array<{ readonly cwd: string; readonly checkpointRef: CheckpointRef }> = [];
+      const discard = Effect.forEach(
+        created,
+        (saved) =>
+          checkpointStore
+            .deleteCheckpointRefs({ cwd: saved.cwd, checkpointRefs: [saved.checkpointRef] })
+            .pipe(Effect.ignore),
+        { discard: true },
+      );
+      yield* Effect.forEach(
+        input.targets,
+        (target) =>
+          withWorkspaceLock(
+            target.scope.cwd,
+            Effect.gen(function* () {
+              const excludePaths = nested.get(target.scope.id);
+              const checkpointRef = yield* scopeRef(target.scope.id, "pre-rewind").pipe(
+                Effect.provideService(Digest.Digest, crypto),
+              );
+              // One an earlier failed rewind left is still the only copy of how the folder was.
+              if (yield* checkpointStore.hasCheckpointRef({ cwd: target.scope.cwd, checkpointRef }))
+                return;
+              yield* checkpointStore.captureCheckpoint({
+                cwd: target.scope.cwd,
+                ...(excludePaths === undefined ? {} : { excludePaths }),
+                checkpointRef,
+              });
+              created.push({ cwd: target.scope.cwd, checkpointRef });
+            }),
+          ).pipe(Effect.catch((cause) => Effect.flip(failed(target, cause)))),
+        { discard: true },
+      ).pipe(Effect.onError(() => discard));
+      return { discard };
+    });
+
     const restore: CheckpointServiceV2Shape["restore"] = Effect.fn("CheckpointService.restore")(
       function* (input) {
         type Target = (typeof input.targets)[number];
@@ -1193,6 +1256,7 @@ export const layer: Layer.Layer<
       capture,
       captureRepository,
       ensureRestorable,
+      saveBeforeRestore,
       restore,
       deleteStaleRefs,
       discardRepositorySnapshots,
