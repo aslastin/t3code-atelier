@@ -603,7 +603,7 @@ export function pinnableThreadRepositories(input: {
 
 /** The tracked Git repositories a task folder has no worktree for yet. */
 export function addableTaskFolderRepositories(input: {
-  readonly folders: ReadonlyArray<Pick<WorkspaceFolder, "path" | "name" | "state">>;
+  readonly folders: ReadonlyArray<Pick<WorkspaceFolder, "path" | "name" | "state" | "worktrees">>;
   readonly taskFolder: Pick<TaskFolder, "projectRoot" | "repositories">;
 }): ReadonlyArray<PinnedThreadRepository> {
   const present = new Set(
@@ -611,6 +611,7 @@ export function addableTaskFolderRepositories(input: {
   );
   return input.folders.flatMap((folder) =>
     folder.state !== "git" ||
+    folder.worktrees === false ||
     folder.path === input.taskFolder.projectRoot ||
     present.has(folder.path)
       ? []
@@ -629,11 +630,11 @@ export interface WorktreeRepositoryChoice {
 
 /** A project's tracked Git folders, in the project's order. */
 export function worktreeRepositoryChoices(input: {
-  readonly folders: ReadonlyArray<Pick<WorkspaceFolder, "path" | "name" | "state">>;
+  readonly folders: ReadonlyArray<Pick<WorkspaceFolder, "path" | "name" | "state" | "worktrees">>;
   readonly projectRoot: string;
 }): ReadonlyArray<WorktreeRepositoryChoice> {
   return input.folders.flatMap((folder) => {
-    if (folder.state !== "git") return [];
+    if (folder.state !== "git" || folder.worktrees === false) return [];
     const relativePath = relativeFolderPath(input.projectRoot, folder.path);
     return [
       {

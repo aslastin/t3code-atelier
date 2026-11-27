@@ -519,6 +519,7 @@ const cleanupFixture = (
         // A second plugin's marker is installed too; the project belongs to Kite.
         markers: () => [".kite/HEAD", ".other/HEAD"],
         installedMarkers: () => (plugin === undefined ? [] : [".kite/HEAD", ".other/HEAD"]),
+        worktreeMarkers: () => (plugin === undefined ? [] : [".kite/HEAD", ".other/HEAD"]),
         describe: (kind: string) =>
           plugin && kind === "kite"
             ? { label: "Kite", recreatesWorktrees: plugin.recreates, markers: [".kite/HEAD"] }

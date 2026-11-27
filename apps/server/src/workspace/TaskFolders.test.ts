@@ -326,6 +326,7 @@ it.live("gives a VCS plugin's project folder a checkout, not links to the origin
           Layer.succeed(VcsPluginDrivers, {
             hasAny: () => true,
             installedMarkers: () => [".kite/HEAD", ".other/HEAD"],
+            worktreeMarkers: () => [".kite/HEAD", ".other/HEAD"],
           } as unknown as VcsPluginDrivers["Service"]),
         ),
       ),
@@ -334,41 +335,58 @@ it.live("gives a VCS plugin's project folder a checkout, not links to the origin
   );
 });
 
-it.live("starts a VCS plugin's repository from the default branch its plugin names", () => {
-  const state: TaskFoldersTestState = {
-    workspaceRoot: "/unset",
-    trackedFolders: [],
-    thread: null,
-    pluginRefs: [{ name: "main", isDefault: true }, { name: "experiment" }],
-  };
-  return Effect.gen(function* () {
-    const { fileSystem, path, tmp } = yield* fixture;
-    const shop = path.join(tmp, "shop");
-    const web = path.join(shop, "web");
-    yield* fileSystem.makeDirectory(path.join(web, ".kite"), { recursive: true });
-    yield* fileSystem.writeFileString(path.join(web, ".kite", "HEAD"), "experiment\n");
-    state.workspaceRoot = shop;
-    state.trackedFolders = tracked(web);
-    // The base asked for is one the plugin's repository does not have.
-    yield* create("feature", undefined, "develop");
-    assert.deepEqual(
-      state.pluginCreated?.map((created) => created.refName),
-      ["main"],
-    );
-  }).pipe(
-    Effect.provide(
-      layerFor(state).pipe(
-        Layer.provide(
-          Layer.succeed(VcsPluginDrivers, {
-            hasAny: () => true,
-            installedMarkers: () => [".kite/HEAD"],
-          } as unknown as VcsPluginDrivers["Service"]),
+it.live(
+  "starts a VCS plugin's repository from its default branch, and only one that can get a worktree",
+  () => {
+    const state: TaskFoldersTestState = {
+      workspaceRoot: "/unset",
+      trackedFolders: [],
+      thread: null,
+      pluginRefs: [{ name: "main", isDefault: true }, { name: "experiment" }],
+    };
+    return Effect.gen(function* () {
+      const { fileSystem, path, tmp } = yield* fixture;
+      const shop = path.join(tmp, "shop");
+      const web = path.join(shop, "web");
+      yield* fileSystem.makeDirectory(path.join(web, ".kite"), { recursive: true });
+      yield* fileSystem.writeFileString(path.join(web, ".kite", "HEAD"), "experiment\n");
+      // Beside it, one whose plugin cannot create worktrees stays shared.
+      const docs = path.join(shop, "docs");
+      yield* fileSystem.makeDirectory(path.join(docs, ".other"), { recursive: true });
+      yield* fileSystem.writeFileString(path.join(docs, ".other", "HEAD"), "main\n");
+      state.workspaceRoot = shop;
+      state.trackedFolders = tracked(web, docs);
+      const taskFolders = yield* TaskFolders.TaskFolders;
+      assert.deepEqual(
+        (yield* taskFolders.plan({ projectId }))?.repositories.map((folder) => folder.path),
+        [web],
+      );
+      const chosen = yield* taskFolders
+        .plan({ projectId, repositories: [{ path: docs }] })
+        .pipe(Effect.flip);
+      assert.include(chosen.detail, "cannot get a worktree");
+      // The base asked for is one the plugin's repository does not have.
+      yield* create("feature", undefined, "develop");
+      assert.deepEqual(
+        state.pluginCreated?.map((created) => created.refName),
+        ["main"],
+      );
+    }).pipe(
+      Effect.provide(
+        layerFor(state).pipe(
+          Layer.provide(
+            Layer.succeed(VcsPluginDrivers, {
+              hasAny: () => true,
+              installedMarkers: () => [".kite/HEAD", ".other/HEAD"],
+              worktreeMarkers: () => [".kite/HEAD"],
+            } as unknown as VcsPluginDrivers["Service"]),
+          ),
         ),
       ),
-    ),
-    Effect.scoped,
-  );
-});
+      Effect.scoped,
+    );
+  },
+);
 
 it.live.each([{ projectIsRepository: true }, { projectIsRepository: false }])(
   "answers an existing thread's worktree request with a task folder, project is a repository=$projectIsRepository",

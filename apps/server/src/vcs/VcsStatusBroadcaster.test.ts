@@ -106,6 +106,7 @@ function layerTestFor(state: {
             hasAny: () => true,
             markers: () => [],
             installedMarkers: () => [],
+            worktreeMarkers: () => [],
             describe: () => undefined,
           })
         : Layer.empty,

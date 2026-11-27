@@ -334,6 +334,7 @@ describe("threadRepositorySections", () => {
           { path: "/work/wrapper", name: "wrapper", state: "git" },
           { path: "/work/wrapper/docs", name: "docs", state: "git" },
           { path: "/work/wrapper/notes", name: "notes", state: "plain" },
+          { path: "/work/kite", name: "kite", state: "git", worktrees: false },
           { path: "/work/shared", name: "shared", state: "git" },
         ],
       }),
@@ -426,6 +427,8 @@ describe("worktree repository selection", () => {
     { path: "/work/wrapper/web", name: "web", state: "git" },
     { path: "/work/wrapper/services/api", name: "api", state: "git" },
     { path: "/work/wrapper/notes", name: "notes", state: "plain" },
+    // A VCS plugin's repository whose plugin cannot create worktrees.
+    { path: "/work/wrapper/kite", name: "kite", state: "git", worktrees: false },
     { path: "/work/shared", name: "shared", state: "git" },
   ] as const;
   const choices = worktreeRepositoryChoices({ folders, projectRoot: "/work/wrapper" });

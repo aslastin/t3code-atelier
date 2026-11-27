@@ -205,14 +205,37 @@ it.layer(NodeServices.layer)("WorkspaceFolders", (it) => {
         recursive: true,
       });
       yield* fileSystem.writeFileString(path.join(workspaceRoot, "web", ".kite", "HEAD"), "main\n");
+      // A plugin that cannot create worktrees, or is turned off.
+      yield* fileSystem.makeDirectory(path.join(workspaceRoot, "docs", ".other"), {
+        recursive: true,
+      });
+      yield* fileSystem.writeFileString(path.join(workspaceRoot, "docs", ".other", "HEAD"), "x\n");
+      const plugins = {
+        installedMarkers: () => [".kite/HEAD", ".other/HEAD"],
+        worktreeMarkers: () => [".kite/HEAD"],
+      } as unknown as VcsPluginDrivers["Service"];
       const found = yield* WorkspaceFolders.discoverFolders(workspaceRoot).pipe(
-        Effect.provideService(VcsPluginDrivers, {
-          installedMarkers: () => [".kite/HEAD"],
-        } as unknown as VcsPluginDrivers["Service"]),
+        Effect.provideService(VcsPluginDrivers, plugins),
       );
       assert.deepEqual(
         found.map((folder) => folder.name),
-        ["api", "web"],
+        ["api", "docs", "web"],
+      );
+      // Both are repositories, but only one whose plugin can create worktrees is offered one.
+      yield* Effect.gen(function* () {
+        const workspaceFolders = yield* WorkspaceFolders.WorkspaceFolders;
+        const { folders } = yield* workspaceFolders.list({ projectId });
+        assert.deepEqual(
+          folders.map((folder) => [folder.name, folder.state, folder.worktrees]),
+          [
+            ["api", "git", undefined],
+            ["docs", "git", false],
+            ["web", "git", undefined],
+          ],
+        );
+      }).pipe(
+        Effect.provideService(VcsPluginDrivers, plugins),
+        Effect.provide(layerFor({ workspaceRoot, trackedFolders: [] })),
       );
     }),
   );

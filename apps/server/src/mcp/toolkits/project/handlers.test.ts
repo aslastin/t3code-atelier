@@ -201,6 +201,7 @@ const clientLaunchHarness = (input: {
           Layer.succeed(VcsPluginDrivers, {
             markers: () => input.pluginMarkers ?? [],
             installedMarkers: () => input.pluginMarkers ?? [],
+            worktreeMarkers: () => input.pluginMarkers ?? [],
           } as unknown as VcsPluginDrivers["Service"]),
         ]),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({

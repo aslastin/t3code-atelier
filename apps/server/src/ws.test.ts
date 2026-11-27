@@ -907,6 +907,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
     hasAny: () => false,
     markers: () => [],
     installedMarkers: () => [],
+    worktreeMarkers: () => [],
     describe: () => undefined,
     changes: Stream.empty,
   }),

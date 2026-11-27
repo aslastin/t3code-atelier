@@ -12,6 +12,8 @@ export const WorkspaceFolder = Schema.Struct({
   state: WorkspaceFolderState,
   /** Found inside the project folder by the server, not added by someone. */
   discovered: Schema.optional(Schema.Boolean),
+  /** False for a VCS plugin's repository whose plugin cannot create its worktrees now. */
+  worktrees: Schema.optional(Schema.Boolean),
 });
 export type WorkspaceFolder = typeof WorkspaceFolder.Type;
 

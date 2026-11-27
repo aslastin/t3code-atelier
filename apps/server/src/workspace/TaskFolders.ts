@@ -253,6 +253,13 @@ const make = Effect.gen(function* () {
     }
     return false;
   });
+  // A plugin that cannot create worktrees leaves its repository shared, linked like a plain folder.
+  const canGetWorktree = Effect.fnUntraced(function* (folder: string) {
+    for (const marker of [".git", ...(plugins?.worktreeMarkers() ?? [])]) {
+      if (yield* exists(path.join(folder, marker))) return true;
+    }
+    return false;
+  });
   const trackedFolders = (project: {
     readonly workspaceRoot: string;
     readonly trackedFolders: ReadonlyArray<ProjectTrackedFolder>;
@@ -427,7 +434,7 @@ const make = Effect.gen(function* () {
       yield* trackedFolders(project),
       (folder) => {
         const folderPath = path.resolve(folder.path);
-        return Effect.all([isRepository(folderPath), isSubmodule(folderPath)]).pipe(
+        return Effect.all([canGetWorktree(folderPath), isSubmodule(folderPath)]).pipe(
           Effect.map(([git, submodule]) => ({
             name: folder.name,
             path: folderPath,

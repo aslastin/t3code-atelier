@@ -575,6 +575,12 @@ const make = Effect.gen(function* () {
       ),
     installedMarkers: () =>
       [...entries.values()].flatMap((entry) => entry.manifest?.detect.markers ?? []),
+    worktreeMarkers: () =>
+      [...entries.values()].flatMap((entry) =>
+        entry.driver && entry.manifest && supportsWorktrees(entry.manifest)
+          ? entry.manifest.detect.markers
+          : [],
+      ),
   });
 
   const announced =
