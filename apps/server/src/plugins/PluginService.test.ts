@@ -573,6 +573,17 @@ describe("ManifestVcsDriver", () => {
       NodeFS.rmSync(worktree.path, { recursive: true });
       NodeFS.renameSync(`${worktree.path}-moved`, worktree.path);
 
+      // A Git repository nested in the checkout names itself, not the checkout around it.
+      NodeFS.mkdirSync(`${worktree.path}/inner/.git`, { recursive: true });
+      const nested = yield* workflow.removeWorktree!({
+        cwd: `${repository}/sub`,
+        path: `${worktree.path}/inner`,
+        force: true,
+      }).pipe(Effect.flip);
+      assert.include(nested.message, "is not a Kite checkout");
+      assert.isTrue(NodeFS.existsSync(`${worktree.path}/a.txt`));
+      NodeFS.rmSync(`${worktree.path}/inner`, { recursive: true });
+
       // Callers pass the thread's folder, the subfolder; the whole checkout goes, as with Git.
       yield* workflow.removeWorktree!({ cwd: `${repository}/sub`, path: worktree.projectPath! });
       assert.isFalse(NodeFS.existsSync(worktree.path));

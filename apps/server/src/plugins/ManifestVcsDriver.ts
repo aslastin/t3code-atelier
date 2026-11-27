@@ -27,6 +27,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as VcsDriver from "../vcs/VcsDriver.ts";
 import { worktreeProjectFolder } from "../workspace/worktreeProjectPath.ts";
 import { filterPatch, makePluginCheckpoints } from "./pluginCheckpoints.ts";
+import { pluginMarksBeforeGit } from "./VcsPluginDrivers.ts";
 import { makePluginCommandRunner, type PluginCommandRunner } from "./pluginCommandRunner.ts";
 import { checkpointStrategies, supportsWorktrees, usesPlaceholder } from "./pluginManifest.ts";
 
@@ -568,7 +569,12 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
         });
         // A listed path names that checkout itself, never one around it that a stale entry's
         // folder happens to sit in.
-        const target = (yield* isListed(requested)) ? requested : (marked?.root ?? requested);
+        // A `.git` nearer than the marker makes the path that repository's, not the checkout's.
+        const owned =
+          marked !== null &&
+          (yield* pluginMarksBeforeGit(fs, path, requested, manifest.detect.markers));
+        const target =
+          (yield* isListed(requested)) || !owned ? requested : (marked?.root ?? requested);
         const refuse = (detail: string) =>
           new GitCommandError({
             vcs: kind,
