@@ -96,7 +96,10 @@ it.effect.each([
       Layer.provide(
         Layer.mergeAll(
           NodeServices.layer,
-          Layer.mock(ServerConfig.ServerConfig)({ worktreesDir: "/synthetic-worktrees" } as never),
+          Layer.mock(ServerConfig.ServerConfig)({
+            baseDir: "/synthetic-home",
+            worktreesDir: "/synthetic-worktrees",
+          } as never),
           ServerSettings.layerTest(),
           ThreadCommandExecutor.layer,
           IdAllocator.layer,

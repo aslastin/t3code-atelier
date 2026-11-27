@@ -57,7 +57,10 @@ const layerCheckpointRollbackService = CheckpointRollbackService.layer.pipe(
     Layer.mergeAll(
       NodeServices.layer,
       layerNoTaskFolders,
-      Layer.mock(ServerConfig.ServerConfig)({ worktreesDir: "/synthetic-worktrees" } as never),
+      Layer.mock(ServerConfig.ServerConfig)({
+        baseDir: "/synthetic-home",
+        worktreesDir: "/synthetic-worktrees",
+      } as never),
       ServerSettings.layerTest(),
       Layer.mock(GitWorkflow.GitWorkflowService)({}),
       Layer.mock(ProjectStore.ProjectStoreV2)({ get: () => Effect.succeed(unrelatedProject) }),
@@ -252,7 +255,10 @@ it.effect.each([
           ThreadCommandExecutor.layer,
           NodeServices.layer,
           layerNoTaskFolders,
-          Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as never),
+          Layer.mock(ServerConfig.ServerConfig)({
+            baseDir: "/synthetic-home",
+            worktreesDir,
+          } as never),
           ServerSettings.layerTest(),
           Layer.mock(ProjectStore.ProjectStoreV2)({
             get: (id) => {
@@ -544,7 +550,10 @@ it.effect.each([
           Layer.mergeAll(
             ThreadCommandExecutor.layer,
             NodeServices.layer,
-            Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as never),
+            Layer.mock(ServerConfig.ServerConfig)({
+              baseDir: "/synthetic-home",
+              worktreesDir,
+            } as never),
             ServerSettings.layerTest(),
             Layer.mock(ProjectStore.ProjectStoreV2)({
               get: () => Effect.succeedSome({ workspaceRoot } as never),
