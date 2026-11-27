@@ -26,7 +26,7 @@ import * as Semaphore from "effect/Semaphore";
 
 import * as VcsDriver from "../vcs/VcsDriver.ts";
 import { worktreeProjectFolder } from "../workspace/worktreeProjectPath.ts";
-import { makePluginCheckpoints } from "./pluginCheckpoints.ts";
+import { filterPatch, makePluginCheckpoints } from "./pluginCheckpoints.ts";
 import { makePluginCommandRunner, type PluginCommandRunner } from "./pluginCommandRunner.ts";
 import { checkpointStrategies, supportsWorktrees, usesPlaceholder } from "./pluginManifest.ts";
 
@@ -462,10 +462,14 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
       workingDiff: Effect.fn("ManifestVcsDriver.workingDiff")(function* (request) {
         // An empty {pathsFile} asks for every change, so an empty selection never reaches it.
         if (request.filePaths?.length === 0) return "";
-        return yield* withTextFile(
+        const patch = yield* withTextFile(
           (yield* pathsFileText(request.filePaths, request.cwd)) ?? "",
           (pathsFile) => text("diff", request.cwd, { pathsFile }),
         );
+        // A diff that takes no file list prints every change; only the selected ones may go on.
+        return request.filePaths && !usesPlaceholder(commands.diff, "pathsFile")
+          ? filterPatch(patch, new Set(request.filePaths))
+          : patch;
       }),
     }),
     ...(commands.push && {

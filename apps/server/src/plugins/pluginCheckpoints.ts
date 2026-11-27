@@ -1348,7 +1348,7 @@ function excludePatch(patch: string, excludes: ReadonlyArray<string>): string {
 }
 
 /** Keeps the sections of a Git patch whose old or new path is in `paths`. */
-function filterPatch(patch: string, paths: ReadonlySet<string>): string {
+export function filterPatch(patch: string, paths: ReadonlySet<string>): string {
   const sections = patch.split(/(?=^diff --git )/m);
   return sections
     .filter((section) => {
