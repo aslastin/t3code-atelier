@@ -43,7 +43,7 @@ import {
 import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
 import { isWithinRoot } from "./KnownWorkspaces.ts";
 import * as TaskFolderStore from "./TaskFolderStore.ts";
-import { projectFolders, parseGitmodulesPaths } from "./WorkspaceFolders.ts";
+import { projectFolders, parseGitmodulesPaths, providePluginDrivers } from "./WorkspaceFolders.ts";
 import { withWorkspaceLease } from "./workspaceLease.ts";
 
 // Each worktree is a checkout: enough at once to finish four repositories together, few enough
@@ -282,6 +282,7 @@ const make = Effect.gen(function* () {
     readonly trackedFolders: ReadonlyArray<ProjectTrackedFolder>;
   }) =>
     projectFolders(project).pipe(
+      providePluginDrivers(Option.fromUndefinedOr(plugins)),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );

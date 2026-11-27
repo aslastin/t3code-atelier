@@ -705,3 +705,36 @@ const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effectContext(make);
+
+/**
+ * For commands that run without the server, such as `t3 project add`: the installed plugins'
+ * markers, read from their manifests, so folder walks skip a plugin's repository. No plugin is
+ * checked or run, so none is available.
+ */
+export const layerInstalledMarkers = Layer.effect(
+  VcsPluginDrivers,
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = path.join(config.baseDir, "plugins");
+    const names = yield* fs
+      .readDirectory(directory)
+      .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+    const markers: string[] = [];
+    // Set-aside copies and imports in progress start with a dot.
+    for (const name of names.filter((entry) => !entry.startsWith(".")).toSorted()) {
+      const { manifest } = yield* readManifest(fs, path, path.join(directory, name));
+      if (manifest !== null) markers.push(...manifest.detect.markers);
+    }
+    return VcsPluginDrivers.of({
+      current: Effect.succeed(new Map()),
+      hasAny: () => false,
+      markers: () => [],
+      installedMarkers: () => markers,
+      available: () => [],
+      describe: () => undefined,
+      changes: Stream.empty,
+    });
+  }),
+);

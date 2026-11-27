@@ -200,6 +200,16 @@ describe("PluginService", () => {
       assert.include(summary?.iconSvg ?? "", "<svg");
       assert.isTrue(NodeFS.existsSync(`${home}/plugins/kite/plugin.json`));
       assert.isDefined(driver);
+      // Commands that run without the server read the installed markers alone.
+      const offline = yield* VcsPluginDrivers.pipe(
+        Effect.provide(
+          PluginService.layerInstalledMarkers.pipe(
+            Layer.provide(ServerConfig.layerTest(home, home)),
+          ),
+        ),
+      );
+      assert.deepStrictEqual(offline.installedMarkers(), [".kite/HEAD"]);
+      assert.deepStrictEqual(offline.available(), []);
 
       // Disable and Remove are the way back out.
       const disabled = yield* plugins.setEnabled("kite", false);

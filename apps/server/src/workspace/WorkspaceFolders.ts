@@ -317,6 +317,17 @@ const scanFolders = Effect.fn("WorkspaceFolders.scan")(function* (
 });
 
 /**
+ * Atelier fork: provides the plugins a service saw when it was built, so the walks here skip a
+ * VCS plugin's repository whichever fiber calls them.
+ */
+export const providePluginDrivers =
+  (plugins: Option.Option<VcsPluginDrivers["Service"]>) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Option.isSome(plugins)
+      ? Effect.provideService(effect, VcsPluginDrivers, plugins.value)
+      : effect;
+
+/**
  * The repositories inside a project folder, read from disk: the ones a scan finds there, less
  * those the project's `t3.json` leaves out. A folder outside it is never found this way, since
  * tracking one grants agents a place they could not reach before.
@@ -410,6 +421,7 @@ const make = Effect.gen(function* () {
   const taskFolders = yield* TaskFolderStore.TaskFolderStore;
 
   const { exists, realPath, classify } = yield* folderProbes;
+  const pluginDrivers = yield* Effect.serviceOption(VcsPluginDrivers);
 
   const readProject = Effect.fn("WorkspaceFolders.readProject")(function* (projectId: ProjectId) {
     const row = yield* projects
@@ -435,6 +447,7 @@ const make = Effect.gen(function* () {
     readonly trackedFolders: ReadonlyArray<ProjectTrackedFolder>;
   }) =>
     projectFolders(project).pipe(
+      providePluginDrivers(pluginDrivers),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );
@@ -586,6 +599,7 @@ const make = Effect.gen(function* () {
 
   const scan: WorkspaceFolders["Service"]["scan"] = (input) =>
     scanFolders(input).pipe(
+      providePluginDrivers(pluginDrivers),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );

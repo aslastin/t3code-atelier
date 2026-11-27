@@ -40,6 +40,7 @@ import {
   type ProjectCommand,
 } from "../orchestration-v2/ProjectCommands.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import { planThreadDeletion } from "../orchestration-v2/ThreadDeletion.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -55,6 +56,7 @@ import {
   mergeProjectFolders,
   projectFolders,
   sameProjectFolders,
+  providePluginDrivers,
 } from "../workspace/WorkspaceFolders.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 
@@ -216,6 +218,7 @@ export const make = Effect.gen(function* () {
   const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const fileSystem = yield* FileSystem.FileSystem;
+  const pluginDrivers = yield* Effect.serviceOption(VcsPluginDrivers);
   const path = yield* Path.Path;
   const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
   const isWorktreeContainer = yield* makeIsWorktreeContainer.pipe(
@@ -257,6 +260,7 @@ export const make = Effect.gen(function* () {
     if ((folderSyncDue.get(row.projectId) ?? 0) > now) return;
     folderSyncDue.set(row.projectId, now + FOLDER_SYNC_INTERVAL_MS);
     const discovered = yield* discoverFolders(row.workspaceRoot).pipe(
+      providePluginDrivers(pluginDrivers),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );
@@ -334,6 +338,7 @@ export const make = Effect.gen(function* () {
   // A folder may be missing from disk: it shows as missing until it is restored or removed.
   const withDiscovered = (workspaceRoot: string, added: ReadonlyArray<ProjectTrackedFolder>) =>
     projectFolders({ workspaceRoot, trackedFolders: added }).pipe(
+      providePluginDrivers(pluginDrivers),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );
