@@ -395,6 +395,8 @@ export const ProjectEntriesFailure = Schema.Literals([
   "search_index_scan_timed_out",
   "search_index_search_failed",
   "directory_list_failed",
+  /** Atelier fork: text search waits for search through a VCS plugin in its repositories. */
+  "search_unavailable",
 ]);
 export type ProjectEntriesFailure = typeof ProjectEntriesFailure.Type;
 

@@ -13,6 +13,7 @@ import { vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspaceEntries from "./WorkspaceEntries.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
@@ -1163,6 +1164,58 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
           _tag: "WorkspaceEntriesReadDirectoryError",
           pathMissing: false,
         });
+      }),
+    );
+  });
+
+  describe("in a VCS plugin's repository", () => {
+    it.effect("never walks or indexes the tree, but still lists one folder at a time", () =>
+      Effect.gen(function* () {
+        const create = vi.spyOn(FileFinder, "create");
+        const cwd = yield* makeTempDir();
+        // The project sits below the plugin's checkout root, as a project in a subfolder does.
+        yield* writeTextFile(cwd, ".kite/HEAD", "main\n");
+        yield* writeTextFile(cwd, "app/src/index.ts");
+        // A Git repository inside keeps its own search.
+        const nested = `${cwd}/app/vendor`;
+        yield* writeTextFile(nested, "lib/tool.ts");
+        yield* git(nested, ["init"]);
+        const project = `${cwd}/app`;
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+
+        const inPlugin = Effect.provideService(VcsPluginDrivers, {
+          installedMarkers: () => [".kite/HEAD"],
+        } as unknown as VcsPluginDrivers["Service"]);
+        expect(
+          yield* searchWorkspaceEntries({ cwd: project, query: "index", limit: 10 }).pipe(inPlugin),
+        ).toEqual({ entries: [], truncated: false });
+        expect(yield* workspaceEntries.list({ cwd: project }).pipe(inPlugin)).toEqual({
+          entries: [],
+          truncated: false,
+        });
+        const contents = yield* workspaceEntries
+          .searchContents({
+            cwd: project,
+            query: "x",
+            limit: 10,
+            caseSensitive: false,
+            wholeWord: false,
+            useRegex: false,
+          })
+          .pipe(inPlugin, Effect.flip);
+        expect(contents._tag).toBe("WorkspaceEntriesSearchUnavailableError");
+        expect(create).not.toHaveBeenCalled();
+
+        const folder = yield* workspaceEntries
+          .list({ cwd: project, directoryPath: "src" })
+          .pipe(inPlugin);
+        expect(folder.entries.map((entry) => entry.path)).toEqual(["src/index.ts"]);
+        const inside = yield* searchWorkspaceEntries({
+          cwd: nested,
+          query: "tool",
+          limit: 10,
+        }).pipe(inPlugin);
+        expect(inside.entries.map((entry) => entry.path)).toContain("lib/tool.ts");
       }),
     );
   });

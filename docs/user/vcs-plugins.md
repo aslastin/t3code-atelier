@@ -26,6 +26,12 @@ marker in the project folder and every folder above it. When a Git repository is
 one closer to the project folder wins; in the same folder, the plugin wins. Avoid installing two
 plugins whose markers can sit in the same folder: only one of them owns it.
 
+In a plugin's repository, even while the plugin is off, T3 Code does not walk or index the
+project's files: a large repository or a network mount could make that slow or download every
+file. File mentions (`@`), the file tree's filter, and opening a link by file name find nothing,
+and text search (`Ctrl+Shift+F` / `⌘⇧F`) says it is not available. Browsing the file tree one
+folder at a time still works, and a Git repository inside keeps its own search.
+
 ## Write a plugin
 
 ```jsonc

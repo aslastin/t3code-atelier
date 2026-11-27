@@ -3076,6 +3076,7 @@
   "7280baf7517dad1c": "Échec du chargement des refs.",
   "567c0fed6ab8efc1": "Cette connexion ne peut pas rechercher dans les fichiers de l’hôte.",
   "5189720b9436f98c": "La recherche est limitée à {count} caractères.",
+  "efbb8ad32e16437b": "La recherche de texte n'est pas encore disponible dans ce dépôt.",
   "35681365bcdfbd79": "La requête à l’environnement a échoué.",
   "4ff6c201e851fac5": "Initialisation du dépôt",
   "59757c07ff5b0c2f": "Publication du dépôt",

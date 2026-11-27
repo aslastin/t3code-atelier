@@ -6,6 +6,7 @@ import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as RcMap from "effect/RcMap";
 import * as Schema from "effect/Schema";
@@ -28,6 +29,7 @@ import { isExplicitRelativePath, isWindowsAbsolutePath } from "@t3tools/shared/p
 import { normalizeSearchQuery } from "@t3tools/shared/searchRanking";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
 import * as WorkspaceSearchIndex from "./WorkspaceSearchIndex.ts";
@@ -76,6 +78,20 @@ export class WorkspaceEntriesReadDirectoryError extends Schema.TaggedError<Works
   }
 }
 
+/**
+ * Atelier fork: text search in a VCS plugin's repository. Walking or indexing its tree can be
+ * costly, such as downloading every file on a FUSE mount, so it waits for search through the
+ * plugin itself.
+ */
+export class WorkspaceEntriesSearchUnavailableError extends Schema.TaggedError<WorkspaceEntriesSearchUnavailableError>()(
+  "WorkspaceEntriesSearchUnavailableError",
+  { cwd: Schema.String },
+) {
+  override get message(): string {
+    return `Text search is not available in a VCS plugin's repository yet: ${this.cwd}.`;
+  }
+}
+
 export const WorkspaceEntriesBrowseError = Schema.Union([
   WorkspaceEntriesWindowsPathUnsupportedError,
   WorkspaceEntriesCurrentProjectRequiredError,
@@ -92,6 +108,7 @@ export const WorkspaceEntriesError = Schema.Union([
   WorkspaceSearchIndex.WorkspaceSearchIndexCreateFailed,
   WorkspaceSearchIndex.WorkspaceSearchIndexScanTimedOut,
   WorkspaceSearchIndex.WorkspaceSearchIndexSearchFailed,
+  WorkspaceEntriesSearchUnavailableError,
 ]);
 export type WorkspaceEntriesError = typeof WorkspaceEntriesError.Type;
 
@@ -160,6 +177,32 @@ export const make = Effect.gen(function* () {
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
   const workspaceSearchIndexes = yield* WorkspaceSearchIndex.WorkspaceSearchIndexMap;
   const vcsProcess = yield* VcsProcess.VcsProcess;
+
+  // Atelier fork: a folder inside a VCS plugin's repository, installed plugins off included,
+  // gets no tree walk or index. The nearest checkout root decides; in the same folder a plugin's
+  // marker wins over `.git`, as the driver registry decides.
+  const constructedPlugins = yield* Effect.serviceOption(VcsPluginDrivers);
+  const inPluginRepository = Effect.fnUntraced(function* (cwd: string) {
+    const current = Option.isSome(constructedPlugins)
+      ? constructedPlugins
+      : yield* Effect.serviceOption(VcsPluginDrivers);
+    const markers = Option.isSome(current) ? current.value.installedMarkers() : [];
+    if (markers.length === 0) return false;
+    const exists = (target: string) =>
+      Effect.promise(() =>
+        NodeFSP.access(target).then(
+          () => true,
+          () => false,
+        ),
+      );
+    for (let folder = path.resolve(cwd); ; folder = path.dirname(folder)) {
+      for (const marker of markers) {
+        if (yield* exists(path.join(folder, marker))) return true;
+      }
+      if (yield* exists(path.join(folder, ".git"))) return false;
+      if (path.dirname(folder) === folder) return false;
+    }
+  });
 
   const normalizeWorkspaceRoot = Effect.fn("WorkspaceEntries.normalizeWorkspaceRoot")(function* (
     cwd: string,
@@ -275,6 +318,7 @@ export const make = Effect.gen(function* () {
   const search: WorkspaceEntries["Service"]["search"] = Effect.fn("WorkspaceEntries.search")(
     function* (input) {
       const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
+      if (yield* inPluginRepository(normalizedCwd)) return { entries: [], truncated: false };
       const normalizedQuery = normalizeSearchQuery(input.query, {
         trimLeadingPattern: /^[@./]+/,
       });
@@ -372,6 +416,8 @@ export const make = Effect.gen(function* () {
     "WorkspaceEntries.searchContents",
   )(function* (input) {
     const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
+    if (yield* inPluginRepository(normalizedCwd))
+      return yield* new WorkspaceEntriesSearchUnavailableError({ cwd: normalizedCwd });
     const indexKey = WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, "content");
     markSearched(indexKey, yield* Clock.currentTimeMillis);
     return yield* Effect.gen(function* () {
@@ -552,6 +598,8 @@ export const make = Effect.gen(function* () {
           truncated: false,
         };
       }
+      // The whole tree at once; one folder at a time, above, reads only that folder.
+      if (yield* inPluginRepository(normalizedCwd)) return { entries: [], truncated: false };
       const indexKey = WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, "paths");
       markSearched(indexKey, yield* Clock.currentTimeMillis);
       return yield* Effect.gen(function* () {

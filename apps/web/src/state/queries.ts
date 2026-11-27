@@ -449,7 +449,10 @@ export function useProjectContentSearch(
                   count: PROJECT_SEARCH_CONTENTS_QUERY_MAX_LENGTH,
                 }),
               )
-            : result.error,
+            : isProjectSearchContentsError(result.failure) &&
+                result.failure.failure === "search_unavailable"
+              ? resolve(msg("Text search is not available in this repository yet."))
+              : result.error,
     isPending:
       isCheckingAccess ||
       (canReadFiles && hasQuery && !queryTooLong && (query !== debouncedQuery || result.isPending)),

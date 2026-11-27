@@ -654,6 +654,8 @@ function projectEntriesFailureContext(error: WorkspaceEntries.WorkspaceEntriesEr
         normalizedCwd: error.cwd,
         detail: error.reason,
       };
+    case "WorkspaceEntriesSearchUnavailableError":
+      return { failure: "search_unavailable", normalizedCwd: error.cwd };
     default:
       return unexpectedCompatibilityError(error);
   }
