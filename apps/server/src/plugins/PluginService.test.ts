@@ -1,10 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - Fixtures edit a fake repository directly.
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { CheckpointRef, VcsDriverKind } from "@t3tools/contracts";
@@ -257,7 +258,9 @@ describe("PluginService", () => {
       NodeChildProcess.execFileSync("git", ["init", "-q"], { cwd: `${repository}/nested` });
       const registry = yield* VcsDriverRegistry.make.pipe(
         Effect.provideService(VcsPluginDrivers, drivers),
-        Effect.provide(Layer.mergeAll(VcsProjectConfig.layer, VcsProcess.layer, NodeCrypto.layer)),
+        Effect.provide(
+          Layer.mergeAll(VcsProjectConfig.layer, VcsProcess.layer, PlatformNodeCrypto.layer),
+        ),
       );
       const project = (
         projectId: string,
@@ -1567,21 +1570,41 @@ describe("ManifestVcsDriver", () => {
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => NodeFS.renameSync(`${repository}-gone`, repository)),
       );
+      const shadows = NodeFS.readdirSync(`${home}`, { recursive: true })
+        .map(String)
+        .filter((entry) => /vcs-plugin-checkpoints[\\/][^\\/]+\.git$/.test(entry));
+      assert.lengthOf(shadows, 1);
+      const shadowGit = (...args: string[]) =>
+        NodeChildProcess.execFileSync("git", [`--git-dir=${home}/${shadows[0]}`, ...args], {
+          encoding: "utf8",
+        });
+      // Past Git's threshold, deleting snapshots lets Git collect them; here with no grace period
+      // for unreachable objects, so the result shows at once.
+      shadowGit("config", "gc.auto", "1");
+      shadowGit("config", "gc.autoDetach", "false");
+      shadowGit("config", "gc.pruneExpire", "now");
+      // Git estimates loose objects from the `17/` folder alone; two objects there cross 1.
+      const blobId = (text: string) =>
+        NodeCrypto.createHash("sha1")
+          .update(`blob ${Buffer.byteLength(text)}\0${text}`)
+          .digest("hex");
+      for (let seed = 0, written = 0; written < 2; seed++) {
+        if (!blobId(`seed ${seed}`).startsWith("17")) continue;
+        NodeChildProcess.execFileSync(
+          "git",
+          [`--git-dir=${home}/${shadows[0]}`, "hash-object", "-w", "--stdin"],
+          { input: `seed ${seed}` },
+        );
+        written++;
+      }
+      assert.notMatch(shadowGit("count-objects", "-v"), /^count: 0$/m);
       yield* checkpoints.deleteCheckpointRefs({
         cwd: owned[0]!.repositoryRoot,
         checkpointRefs: owned.map((record) => CheckpointRef.make(record.checkpointRef)),
       });
       assert.isEmpty(yield* recorded);
-      const shadows = NodeFS.readdirSync(`${home}`, { recursive: true })
-        .map(String)
-        .filter((entry) => /vcs-plugin-checkpoints[\\/][^\\/]+\.git$/.test(entry));
-      assert.lengthOf(shadows, 1);
-      const refs = NodeChildProcess.execFileSync(
-        "git",
-        [`--git-dir=${home}/${shadows[0]}`, "for-each-ref", "refs/t3/"],
-        { encoding: "utf8" },
-      );
-      assert.strictEqual(refs, "");
+      assert.strictEqual(shadowGit("for-each-ref", "refs/t3/"), "");
+      assert.match(shadowGit("count-objects", "-v"), /^count: 0$/m);
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 });

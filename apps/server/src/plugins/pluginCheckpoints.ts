@@ -219,6 +219,8 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       readonly truncate?: boolean;
       /** For a ref change after the checkout is gone. */
       readonly cwd?: string;
+      /** Only the shadow repository, as for `gc`: the checkout may be gone. */
+      readonly bare?: boolean;
     },
   ) {
     const result = yield* vcsProcess.run({
@@ -227,7 +229,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       cwd: options?.cwd ?? location.root,
       args: [
         `--git-dir=${location.shadow}`,
-        `--work-tree=${location.root}`,
+        ...(options?.bare ? [] : [`--work-tree=${location.root}`]),
         "-c",
         "core.autocrlf=false",
         "-c",
@@ -1328,6 +1330,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     const location: Location = gone
       ? { root: input.cwd, scope: "", shadow: shadowOf(input.cwd) }
       : yield* locate(input.cwd);
+    let shadowRefsDeleted = false;
     for (const checkpointRef of input.checkpointRefs) {
       const record = yield* readRecord(location, checkpointRef);
       if (record === null) continue;
@@ -1344,6 +1347,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           ["update-ref", "-d", checkpointRef],
           gone ? { cwd: shadowRoot } : {},
         ).pipe(Effect.ignore);
+        shadowRefsDeleted = true;
         yield* forget;
         continue;
       }
@@ -1377,6 +1381,13 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         }),
       );
     }
+    // Snapshots no ref holds stay on disk until Git packs and prunes them. `--auto` does so only
+    // past Git's thresholds, and keeps unreachable objects for two weeks, so a capture writing
+    // its objects right now is never cut short.
+    if (shadowRefsDeleted)
+      yield* git(location, ["gc", "--auto", "--quiet"], { cwd: shadowRoot, bare: true }).pipe(
+        Effect.ignore,
+      );
   });
   return {
     captureCheckpoint,
