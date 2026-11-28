@@ -1391,11 +1391,24 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         Effect.mapError(storageError("pluginCheckpoints.deleteCheckpointRefs", location.root)),
       );
       if (record.strategy !== "native") {
-        yield* git(
-          location,
-          ["update-ref", "-d", checkpointRef],
-          gone ? { cwd: shadowRoot } : {},
-        ).pipe(Effect.ignore);
+        const deleted = yield* git(location, ["update-ref", "-d", checkpointRef], {
+          cwd: shadowRoot,
+          bare: true,
+        }).pipe(Effect.result);
+        // A ref still there keeps its record, so the next cleanup tries again. With the shadow
+        // repository gone there is nothing left to delete.
+        if (
+          deleted._tag === "Failure" &&
+          (yield* fs
+            .exists(path.join(location.shadow, "HEAD"))
+            .pipe(Effect.orElseSucceed(() => true)))
+        ) {
+          yield* Effect.logWarning("VCS plugin checkpoint ref deletion failed", {
+            checkpointRef,
+            error: deleted.failure,
+          });
+          continue;
+        }
         shadowRefsDeleted = true;
         yield* forget;
         continue;
@@ -1431,12 +1444,13 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       );
     }
     // Snapshots no ref holds stay on disk until Git packs and prunes them. `--auto` does so only
-    // past Git's thresholds, and keeps unreachable objects for two weeks, so a capture writing
-    // its objects right now is never cut short.
+    // past Git's thresholds. Unreachable objects are kept two weeks whatever the user's Git
+    // config says, so a capture writing its objects right now is never cut short.
     if (shadowRefsDeleted)
-      yield* git(location, ["gc", "--auto", "--quiet"], { cwd: shadowRoot, bare: true }).pipe(
-        Effect.ignore,
-      );
+      yield* git(location, ["-c", "gc.pruneExpire=2.weeks.ago", "gc", "--auto", "--quiet"], {
+        cwd: shadowRoot,
+        bare: true,
+      }).pipe(Effect.ignore);
   });
   return {
     captureCheckpoint,

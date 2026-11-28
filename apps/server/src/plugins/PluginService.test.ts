@@ -1653,33 +1653,60 @@ describe("ManifestVcsDriver", () => {
         NodeChildProcess.execFileSync("git", [`--git-dir=${home}/${shadows[0]}`, ...args], {
           encoding: "utf8",
         });
-      // Past Git's threshold, deleting snapshots lets Git collect them; here with no grace period
-      // for unreachable objects, so the result shows at once.
+      // Past Git's threshold, deleting snapshots lets Git collect those older than two weeks.
+      // A user's `gc.pruneExpire=now` does not shorten that: a capture's fresh objects stay.
       shadowGit("config", "gc.auto", "1");
       shadowGit("config", "gc.autoDetach", "false");
       shadowGit("config", "gc.pruneExpire", "now");
+      const snapshot = shadowGit("for-each-ref", "--format=%(objectname)", "refs/t3/")
+        .split("\n")
+        .find(Boolean)!;
+      const objects = `${home}/${shadows[0]}/objects`;
+      const weeksAgo = new Date(Date.UTC(2000, 0, 1));
+      for (const entry of NodeFS.readdirSync(objects, { recursive: true }).map(String))
+        if (/^[0-9a-f]{2}[\\/][0-9a-f]{38}$/.test(entry))
+          NodeFS.utimesSync(`${objects}/${entry}`, weeksAgo, weeksAgo);
       // Git estimates loose objects from the `17/` folder alone; two objects there cross 1.
       const blobId = (text: string) =>
         NodeCrypto.createHash("sha1")
           .update(`blob ${Buffer.byteLength(text)}\0${text}`)
           .digest("hex");
-      for (let seed = 0, written = 0; written < 2; seed++) {
+      const fresh: string[] = [];
+      for (let seed = 0; fresh.length < 2; seed++) {
         if (!blobId(`seed ${seed}`).startsWith("17")) continue;
-        NodeChildProcess.execFileSync(
-          "git",
-          [`--git-dir=${home}/${shadows[0]}`, "hash-object", "-w", "--stdin"],
-          { input: `seed ${seed}` },
+        fresh.push(
+          NodeChildProcess.execFileSync(
+            "git",
+            [`--git-dir=${home}/${shadows[0]}`, "hash-object", "-w", "--stdin"],
+            { input: `seed ${seed}`, encoding: "utf8" },
+          ).trim(),
         );
-        written++;
       }
-      assert.notMatch(shadowGit("count-objects", "-v"), /^count: 0$/m);
+      // A ref Git cannot delete now keeps its record, so the next cleanup tries again.
+      const locked = `${home}/${shadows[0]}/${owned[0]!.checkpointRef}.lock`;
+      NodeFS.writeFileSync(locked, "");
+      yield* checkpoints.deleteCheckpointRefs({
+        cwd: owned[0]!.repositoryRoot,
+        checkpointRefs: [CheckpointRef.make(owned[0]!.checkpointRef)],
+      });
+      assert.lengthOf(yield* recorded, owned.length);
+      NodeFS.rmSync(locked);
       yield* checkpoints.deleteCheckpointRefs({
         cwd: owned[0]!.repositoryRoot,
         checkpointRefs: owned.map((record) => CheckpointRef.make(record.checkpointRef)),
       });
       assert.isEmpty(yield* recorded);
       assert.strictEqual(shadowGit("for-each-ref", "refs/t3/"), "");
-      assert.match(shadowGit("count-objects", "-v"), /^count: 0$/m);
+      const exists = (id: string) => {
+        try {
+          shadowGit("cat-file", "-e", id);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      assert.isFalse(exists(snapshot));
+      for (const id of fresh) assert.isTrue(exists(id));
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 });
