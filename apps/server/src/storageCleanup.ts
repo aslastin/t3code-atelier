@@ -984,28 +984,36 @@ const make = Effect.gen(function* () {
           }).pipe(Effect.orElseSucceed(() => false)),
       );
     });
-    const checkoutOrMount = Effect.fnUntraced(
-      function* (folder: string, parent: string) {
-        if ((yield* fs.stat(folder)).dev !== (yield* fs.stat(parent)).dev) return true;
+    const pluginCheckout = Effect.fnUntraced(
+      function* (folder: string) {
         for (const marker of plugins?.installedMarkers() ?? [])
           if (yield* fs.exists(path.join(folder, marker))) return true;
         return false;
       },
       Effect.orElseSucceed(() => true),
     );
+    const mounted = (folder: string, parent: string) =>
+      Effect.all([fs.stat(folder), fs.stat(parent)]).pipe(
+        Effect.map(([own, above]) => own.dev !== above.dev),
+        Effect.orElseSucceed(() => true),
+      );
     for (const root of roots) {
       // Worktrees can be <root>/<repository>/<branch> or explicitly <root>/<name>.
       for (const projectDirectory of yield* directories(root, root)) {
         yield* Effect.gen(function* () {
           if (referenced.has(pathKey(projectDirectory))) return;
+          // Atelier fork: a plugin's checkout or a mount named <root>/<name> is one folder, never
+          // a folder of worktrees to list. In the same folder, a plugin's marker wins over `.git`.
+          if (yield* pluginCheckout(projectDirectory)) {
+            yield* report(projectDirectory);
+            return;
+          }
           const gitPath = path.join(projectDirectory, ".git");
           if (yield* fs.exists(gitPath)) {
             if (yield* isLinkedWorktree(projectDirectory)) yield* report(projectDirectory);
             return;
           }
-          // Atelier fork: a plugin's checkout or a mount named <root>/<name> is one folder, never
-          // a folder of worktrees to list.
-          if (yield* checkoutOrMount(projectDirectory, root)) {
+          if (yield* mounted(projectDirectory, root)) {
             yield* report(projectDirectory);
             return;
           }

@@ -2950,6 +2950,29 @@ describe("orphan worktree reports", () => {
     ),
   );
 
+  it.live(
+    "reports a plugin's checkout in the worktrees folder even with a .git beside its marker",
+    () =>
+      runCleanupTest(
+        Effect.gen(function* () {
+          const fixture = yield* cleanupFixture(undefined, undefined, { recreates: true });
+          fixture.setThreads([]);
+          const checkout = `${fixture.config.worktreesDir}/kite-orphan`;
+          yield* fixture.fs.makeDirectory(`${checkout}/.kite`, { recursive: true });
+          yield* fixture.fs.writeFileString(`${checkout}/.kite/HEAD`, "main\n");
+          yield* fixture.fs.makeDirectory(`${checkout}/.git`);
+          yield* fixture.fs.makeDirectory(`${checkout}/src`);
+          for (const folder of [checkout, `${checkout}/src`])
+            yield* fixture.fs.utimes(folder, 1, 1);
+          expect(
+            (yield* fixture.service.runNow).entries.filter((entry) =>
+              entry.path.startsWith(checkout),
+            ),
+          ).toEqual([expect.objectContaining({ path: checkout, outcome: "kept" })]);
+        }),
+      ),
+  );
+
   it.live("continues reporting when a project root cannot be probed", () =>
     runCleanupTest(
       Effect.gen(function* () {
