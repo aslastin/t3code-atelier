@@ -45,6 +45,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import { CodexProviderCapabilitiesV2 } from "./orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { ServerActivation } from "./serverActivation.ts";
 import { withWorkspaceLease } from "./workspace/workspaceLease.ts";
+import { VcsPluginDrivers } from "./plugins/VcsPluginDrivers.ts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   CheckpointScopeId,
@@ -338,6 +339,22 @@ const cleanupFixture = (
     worktreeOnDelete: true,
   },
   sqlOverride?: SqlClient.SqlClient,
+  /** A Kite plugin worktree, read and removed through the plugin instead of Git. */
+  plugin?: {
+    readonly recreates: boolean;
+    /** Placed outside the managed worktree folder. */
+    readonly outside?: boolean;
+    /** The project's driver also lists Git's worktree, as for a Git project. */
+    readonly listsGitWorktree?: boolean;
+    /** The checkout is a file system mounted of its own, as a virtual checkout is. */
+    readonly mounted?: boolean;
+    /** The second plugin is installed but off. */
+    readonly otherOff?: boolean;
+    /** A folder inside the checkout, relative to it, is a file system mounted there. */
+    readonly innerMount?: string;
+    /** The Git worktree is a file system mounted of its own. */
+    readonly gitWorktreeMounted?: boolean;
+  },
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -356,6 +373,20 @@ const cleanupFixture = (
     yield* fs.makeDirectory(config.worktreesDir, { recursive: true });
     const worktree = `${config.worktreesDir}/feature`;
     yield* command(repo, ["worktree", "add", "-b", "feature", worktree]);
+    const pluginWorktree = plugin?.outside
+      ? `${repo}/kite-feature`
+      : `${config.worktreesDir}/kite-feature`;
+    let nativeCheckpointRoots: ReadonlyArray<string> = [];
+    let pluginStatus = {
+      refName: "feature",
+      files: [] as ReadonlyArray<{ readonly path: string; readonly untracked?: boolean }>,
+      aheadCount: 0,
+      repositoryBranches: ["feature"] as ReadonlyArray<string>,
+    };
+    if (plugin) {
+      yield* fs.makeDirectory(`${pluginWorktree}/.kite`, { recursive: true });
+      yield* fs.writeFileString(`${pluginWorktree}/.kite/HEAD`, "feature\n");
+    }
     let settings: import("@t3tools/contracts").ServerSettings = {
       ...DEFAULT_SERVER_SETTINGS,
       storageCleanup,
@@ -383,6 +414,39 @@ const cleanupFixture = (
     let events: Stream.Stream<OrchestrationV2DomainEvent> = Stream.empty;
     const activated = yield* Deferred.make<void>();
     const context = yield* Layer.build(StorageCleanup.layer).pipe(
+      Effect.provideService(
+        FileSystem.FileSystem,
+        plugin?.mounted || plugin?.innerMount !== undefined || plugin?.gitWorktreeMounted
+          ? (() => {
+              const mount = plugin.gitWorktreeMounted
+                ? worktree
+                : plugin.mounted
+                  ? pluginWorktree
+                  : `${pluginWorktree}/${plugin.innerMount}`;
+              const onMount = (target: string) =>
+                target === mount || target.startsWith(`${mount}/`);
+              return FileSystem.FileSystem.of({
+                ...fs,
+                stat: (target) =>
+                  fs
+                    .stat(target)
+                    .pipe(
+                      Effect.map((info) =>
+                        onMount(target) ? { ...info, dev: info.dev + 1n } : info,
+                      ),
+                    ),
+                lstat: (target) =>
+                  fs
+                    .lstat(target)
+                    .pipe(
+                      Effect.map((info) =>
+                        onMount(target) ? { ...info, dev: info.dev + 1n } : info,
+                      ),
+                    ),
+              });
+            })()
+          : fs,
+      ),
       Effect.provideService(GitVcsDriver.GitVcsDriver, {
         ...git,
         execute: (input) =>
@@ -474,7 +538,39 @@ const cleanupFixture = (
           command(cwd, ["branch", "--show-current"]).pipe(
             Effect.map((result) => result.stdout.trim() || null),
           ),
+        ...(plugin && {
+          listWorktrees: () =>
+            Effect.succeed(plugin.listsGitWorktree ? [pluginWorktree, worktree] : [pluginWorktree]),
+          status: () =>
+            Effect.sync(() => ({
+              refName: pluginStatus.refName,
+              capabilities: { kind: "kite" },
+              workingTree: { files: pluginStatus.files },
+              aheadCount: pluginStatus.aheadCount,
+            })),
+          listLocalBranchNames: () => Effect.sync(() => pluginStatus.repositoryBranches),
+          // The project's own repository belongs to the Kite plugin.
+          vcsKind: () => Effect.succeed("kite"),
+          removeWorktree: (input: { readonly path: string }) =>
+            fs.remove(input.path, { recursive: true }).pipe(Effect.orDie),
+        }),
       } as unknown as GitWorkflowService.GitWorkflowService["Service"]),
+      // A plugin marker no Git fixture has; without `plugin`, listings still come from Git.
+      Effect.provideService(VcsPluginDrivers, {
+        hasAny: () => plugin !== undefined,
+        // A second plugin's marker is installed too; the project belongs to Kite.
+        markers: () => (plugin?.otherOff ? [".kite/HEAD"] : [".kite/HEAD", ".other/HEAD"]),
+        installedMarkers: () => (plugin === undefined ? [] : [".kite/HEAD", ".other/HEAD"]),
+        available: () =>
+          (plugin === undefined ? [] : [".kite/HEAD", ".other/HEAD"]).map((marker) => ({
+            markers: [marker],
+            worktrees: true,
+          })),
+        describe: (kind: string) =>
+          plugin && kind === "kite"
+            ? { label: "Kite", recreatesWorktrees: plugin.recreates, markers: [".kite/HEAD"] }
+            : undefined,
+      } as unknown as VcsPluginDrivers["Service"]),
       Effect.provideService(ProviderSessionManager.ProviderSessionManagerV2, {
         isLive: () =>
           Effect.sync(() => {
@@ -488,44 +584,48 @@ const cleanupFixture = (
       Effect.provideService(
         SqlClient.SqlClient,
         sqlOverride ??
-          (((strings: TemplateStringsArray) =>
+          (((strings: TemplateStringsArray, ...values: ReadonlyArray<unknown>) =>
             Effect.sync(() =>
               strings.join("").includes("retained_checkpoint_threads")
                 ? []
-                : openSessionCwd !== null &&
-                    strings.join("").includes("projection_provider_sessions")
-                  ? [
-                      {
-                        payload_json: JSON.stringify({
-                          id: "session-1",
-                          driver: "codex",
-                          providerInstanceId: "codex",
-                          status: "ready",
-                          cwd: openSessionCwd,
-                          model: null,
-                          capabilities: CodexProviderCapabilitiesV2,
-                          createdAt: "2026-06-01T12:00:00.000Z",
-                          updatedAt: "2026-06-01T12:00:00.000Z",
-                          lastError: null,
-                        }),
-                      },
-                    ]
-                  : outboxStatus !== null &&
-                      strings.join("").includes("orchestration_v2_effect_outbox")
-                    ? [{ status: outboxStatus }]
-                    : strings.join("").includes("deleted_at IS NOT NULL")
-                      ? deletedThreads.map((thread) => ({
-                          payload_json: JSON.stringify(thread),
-                          workspaceRoot: repo,
-                        }))
-                      : strings.join("").includes('AS "worktreePath"')
-                        ? [
-                            ...threads.flatMap((thread) => thread.worktreePath ?? []),
-                            ...storedWorktreePaths,
-                          ].map((worktreePath) => ({ worktreePath }))
-                        : strings.join("").includes("scheduled_tasks")
-                          ? scheduledThreadIds.map((threadId) => ({ threadId }))
-                          : [],
+                : strings.join("").includes("strategy = 'native' LIMIT 1")
+                  ? nativeCheckpointRoots.includes(String(values[0]))
+                    ? [{}]
+                    : []
+                  : openSessionCwd !== null &&
+                      strings.join("").includes("projection_provider_sessions")
+                    ? [
+                        {
+                          payload_json: JSON.stringify({
+                            id: "session-1",
+                            driver: "codex",
+                            providerInstanceId: "codex",
+                            status: "ready",
+                            cwd: openSessionCwd,
+                            model: null,
+                            capabilities: CodexProviderCapabilitiesV2,
+                            createdAt: "2026-06-01T12:00:00.000Z",
+                            updatedAt: "2026-06-01T12:00:00.000Z",
+                            lastError: null,
+                          }),
+                        },
+                      ]
+                    : outboxStatus !== null &&
+                        strings.join("").includes("orchestration_v2_effect_outbox")
+                      ? [{ status: outboxStatus }]
+                      : strings.join("").includes("deleted_at IS NOT NULL")
+                        ? deletedThreads.map((thread) => ({
+                            payload_json: JSON.stringify(thread),
+                            workspaceRoot: repo,
+                          }))
+                        : strings.join("").includes('AS "worktreePath"')
+                          ? [
+                              ...threads.flatMap((thread) => thread.worktreePath ?? []),
+                              ...storedWorktreePaths,
+                            ].map((worktreePath) => ({ worktreePath }))
+                          : strings.join("").includes("scheduled_tasks")
+                            ? scheduledThreadIds.map((threadId) => ({ threadId }))
+                            : [],
             )) as unknown as SqlClient.SqlClient),
       ),
       Effect.provideService(GitManager.GitManager, {
@@ -560,6 +660,13 @@ const cleanupFixture = (
       },
       fs,
       worktree,
+      pluginWorktree,
+      setNativeCheckpointRoots: (next: ReadonlyArray<string>) => {
+        nativeCheckpointRoots = next;
+      },
+      setPluginStatus: (next: typeof pluginStatus) => {
+        pluginStatus = next;
+      },
       config,
       command,
       enableFiles: () => {
@@ -2149,7 +2256,521 @@ describe("deleted thread worktrees", () => {
   );
 });
 
+describe("VCS plugin worktrees", () => {
+  const untracked = [{ path: "new.txt", untracked: true }];
+  it.effect.each([
+    { name: "a deleted thread's clean worktree", deleted: true, removed: true },
+    { name: "an old thread's clean worktree", recreates: true, removed: true },
+    {
+      // The plugin may keep them inside the checkout; recreating it would not bring them back.
+      name: "an old thread's worktree holding its native snapshots",
+      recreates: true,
+      native: true,
+      reason: "Its VCS plugin's snapshots of the thread's checkpoints are in it",
+    },
+    {
+      name: "a deleted thread's worktree holding its native snapshots",
+      deleted: true,
+      native: true,
+      removed: true,
+    },
+    {
+      name: "a worktree with changes",
+      deleted: true,
+      files: [{ path: "a.txt" }],
+      reason: "Has uncommitted changes (1 file)",
+    },
+    {
+      name: "an old thread's worktree it cannot bring back",
+      reason: "Kite could not recreate it for the thread's next turn",
+    },
+    {
+      // Some VCSs keep a worktree's branch in the worktree; recovery would find nothing.
+      name: "an old thread's worktree whose branch the repository does not list",
+      recreates: true,
+      repositoryBranches: [],
+      reason: "Kite could not recreate it for the thread's next turn",
+    },
+    {
+      name: "a worktree with commits that are not pushed",
+      deleted: true,
+      aheadCount: 2,
+      reason: "Has commits that are not pushed",
+    },
+    {
+      // The plugin's marker decides, as the driver registry does, even beside a gitfile.
+      name: "a worktree with commits that are not pushed beside a gitfile",
+      deleted: true,
+      aheadCount: 2,
+      gitFile: true,
+      reason: "Has commits that are not pushed",
+    },
+    {
+      name: "an untracked file",
+      deleted: true,
+      files: untracked,
+      reason: "Has uncommitted changes (1 file)",
+    },
+    {
+      name: "an untracked file under the tracked-changes rule",
+      deleted: true,
+      files: untracked,
+      keepWhen: "tracked-changes" as const,
+      removed: true,
+    },
+  ])("removes or keeps $name through the plugin", (row) =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(
+        row.keepWhen
+          ? {
+              ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+              worktreeAfterDays: 8,
+              worktreeOnDelete: true,
+              worktreeKeepWhen: row.keepWhen,
+            }
+          : undefined,
+        undefined,
+        { recreates: row.recreates === true },
+      );
+      const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      if (row.native)
+        fixture.setNativeCheckpointRoots([yield* fixture.fs.realPath(fixture.pluginWorktree)]);
+      if (row.gitFile)
+        yield* fixture.fs.writeFileString(`${fixture.pluginWorktree}/.git`, "gitdir: elsewhere\n");
+      fixture.setThreads(row.deleted ? [] : [thread]);
+      fixture.setDeletedThreads(row.deleted ? [thread] : []);
+      fixture.setPluginStatus({
+        refName: "feature",
+        files: row.files ?? [],
+        aheadCount: row.aheadCount ?? 0,
+        repositoryBranches: row.repositoryBranches ?? ["feature"],
+      });
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry).toMatchObject({
+        path: fixture.pluginWorktree,
+        outcome: row.removed ? "removed" : "kept",
+        reason: row.removed
+          ? row.deleted
+            ? "Thread was deleted"
+            : "Inactive for 30 days"
+          : row.reason,
+      });
+      expect(yield* fixture.fs.exists(fixture.pluginWorktree)).toBe(row.removed !== true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("keeps a VCS plugin worktree outside the managed worktree folder", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, {
+        recreates: true,
+        outside: true,
+      });
+      const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry).toMatchObject({
+        outcome: "kept",
+        reason: "Outside the managed worktree folder",
+      });
+      expect(yield* fixture.fs.exists(fixture.pluginWorktree)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("cleans a Git worktree through Git while a VCS plugin is on", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, {
+        recreates: true,
+        listsGitWorktree: true,
+      });
+      const thread = shell({ branch: "feature", worktreePath: fixture.worktree });
+      fixture.setThreads([thread]);
+      // Git sees this edit; a plugin's status, read by mistake, would not.
+      yield* fixture.fs.writeFileString(`${fixture.worktree}/tracked.txt`, "edited\n");
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry).toMatchObject({ outcome: "kept", reason: "Has uncommitted changes (1 file)" });
+      expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("keeps a Git worktree the project's plugin marks but does not list", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, { recreates: true });
+      // Clean to Git, but the plugin's commits or snapshots there are out of Git's sight.
+      yield* fixture.fs.makeDirectory(`${fixture.worktree}/.kite`);
+      yield* fixture.fs.writeFileString(`${fixture.worktree}/.kite/HEAD`, "feature\n");
+      yield* fixture.fs.writeFileString(`${fixture.repo}/.git/info/exclude`, ".kite\n");
+      const thread = shell({ branch: "feature", worktreePath: fixture.worktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry?.outcome).toBe("kept");
+      expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("keeps a Git worktree another installed plugin marks", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, { recreates: true });
+      // Clean to Git, but another plugin's checkout lives there, out of Git's sight.
+      yield* fixture.fs.makeDirectory(`${fixture.worktree}/.other`);
+      yield* fixture.fs.writeFileString(`${fixture.worktree}/.other/HEAD`, "feature\n");
+      yield* fixture.fs.writeFileString(`${fixture.repo}/.git/info/exclude`, ".other\n");
+      const thread = shell({ branch: "feature", worktreePath: fixture.worktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry?.outcome).toBe("kept");
+      expect(yield* fixture.fs.exists(`${fixture.worktree}/.other/HEAD`)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("keeps a folder another plugin marks, though the project's plugin lists it", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, { recreates: true });
+      yield* fixture.fs.remove(`${fixture.pluginWorktree}/.kite`, { recursive: true });
+      yield* fixture.fs.makeDirectory(`${fixture.pluginWorktree}/.other`);
+      yield* fixture.fs.writeFileString(`${fixture.pluginWorktree}/.other/HEAD`, "feature\n");
+      const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry?.outcome).toBe("kept");
+      expect(yield* fixture.fs.exists(fixture.pluginWorktree)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect.each([
+    // Clean, it is removed without force, so the plugin keeps work saved after this check.
+    { name: "a clean checkout", files: [], verdict: { keep: null, force: false } },
+    {
+      name: "a clean checkout under a rule that keeps ignored files",
+      files: [],
+      keepWhen: "any-local-files" as const,
+      verdict: { keep: "may hold ignored files its VCS plugin does not list", force: false },
+    },
+    {
+      name: "a checkout with changes",
+      files: [{ path: "a.txt" }],
+      verdict: { keep: "has uncommitted changes (1 file)", force: false },
+    },
+    {
+      name: "a checkout changed while it was measured",
+      // Clean when first read, changed when read again after the walk.
+      files: "changes-later" as const,
+      verdict: { keep: "has uncommitted changes (1 file)", force: false },
+    },
+  ])("checks $name in a task folder through the plugin", (row) =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(
+        "keepWhen" in row
+          ? {
+              ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+              worktreeAfterDays: 8,
+              worktreeOnDelete: true,
+              worktreeKeepWhen: row.keepWhen,
+            }
+          : undefined,
+        undefined,
+        { recreates: true },
+      );
+      const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      let reads = 0;
+      fixture.setPluginStatus({
+        refName: "feature",
+        get files() {
+          reads += 1;
+          return row.files !== "changes-later" ? row.files : reads > 1 ? [{ path: "a.txt" }] : [];
+        },
+        aheadCount: 0,
+        repositoryBranches: ["feature"],
+      });
+      let verdict: unknown;
+      fixture.setTaskFolders({
+        find: () =>
+          Effect.succeed({
+            root: fixture.pluginWorktree,
+            projectId: ProjectId.make("project-1"),
+            projectRoot: fixture.repo,
+            anchor: fixture.repo,
+            projectPath: fixture.pluginWorktree,
+            projectIsWorktree: true,
+            repositories: [],
+          }),
+        remove: (input) =>
+          input.inspect!({
+            worktreePath: fixture.pluginWorktree,
+            repositoryPath: fixture.repo,
+          }).pipe(
+            Effect.map((decided) => {
+              verdict = { keep: decided.keep, force: decided.force };
+              return { removed: [], kept: [] };
+            }),
+          ),
+      });
+      yield* fixture.service.runNow;
+      expect(verdict).toEqual(row.verdict);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("keeps a VCS plugin worktree holding another plugin's checkout", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, { recreates: true });
+      // Another installed plugin's checkout, with work of its own the Kite status never lists.
+      yield* fixture.fs.makeDirectory(`${fixture.pluginWorktree}/vendor/.other`, {
+        recursive: true,
+      });
+      yield* fixture.fs.writeFileString(`${fixture.pluginWorktree}/vendor/.other/HEAD`, "main\n");
+      yield* fixture.fs.writeFileString(`${fixture.pluginWorktree}/vendor/work.txt`, "local\n");
+      const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry).toMatchObject({ outcome: "kept", reason: "Contains a nested repository" });
+      expect(yield* fixture.fs.exists(`${fixture.pluginWorktree}/vendor/work.txt`)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("keeps a VCS plugin worktree holding a Git repository of its own", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(
+        {
+          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+          worktreeAfterDays: 8,
+          worktreeOnDelete: true,
+          worktreeKeepWhen: "tracked-changes",
+        },
+        undefined,
+        { recreates: true },
+      );
+      const inner = `${fixture.pluginWorktree}/inner`;
+      yield* fixture.fs.makeDirectory(inner);
+      yield* fixture.command(inner, ["init", "-b", "main"]);
+      yield* fixture.fs.writeFileString(`${inner}/work.txt`, "local\n");
+      yield* fixture.command(inner, ["add", "."]);
+      yield* fixture.command(inner, [
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-m",
+        "local work",
+      ]);
+      // The plugin calls it untracked, which the tracked-changes rule would let go.
+      fixture.setPluginStatus({
+        refName: "feature",
+        files: [{ path: "inner", untracked: true }],
+        aheadCount: 0,
+        repositoryBranches: ["feature"],
+      });
+      const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry?.outcome).toBe("kept");
+      expect(yield* fixture.fs.exists(`${inner}/work.txt`)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("removes a VCS plugin checkout mounted of its own without walking it", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, {
+        recreates: true,
+        mounted: true,
+      });
+      // A virtual checkout holds the whole repository: walking it would read all of it, so its
+      // plugin's status alone decides. A repository nested inside goes unseen.
+      yield* fixture.fs.makeDirectory(`${fixture.pluginWorktree}/inner/.git`, { recursive: true });
+      const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry?.outcome).toBe("removed");
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("keeps a Git worktree that is a file system mounted of its own", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, {
+        recreates: true,
+        gitWorktreeMounted: true,
+      });
+      const thread = shell({ branch: "feature", worktreePath: fixture.worktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry?.outcome).toBe("kept");
+      expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("keeps a VCS plugin checkout with a file system mounted inside", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, {
+        recreates: true,
+        innerMount: "mnt",
+      });
+      // Not walked into, so what it holds is unknown and the checkout stays.
+      yield* fixture.fs.makeDirectory(`${fixture.pluginWorktree}/mnt/data`, { recursive: true });
+      const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      fixture.setThreads([]);
+      fixture.setDeletedThreads([thread]);
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry?.outcome).toBe("kept");
+      expect(yield* fixture.fs.exists(`${fixture.pluginWorktree}/mnt/data`)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("checks the whole VCS plugin checkout before removing it from a subfolder", () =>
+    Effect.gen(function* () {
+      const fixture = yield* cleanupFixture(undefined, undefined, { recreates: true });
+      yield* fixture.fs.makeDirectory(`${fixture.pluginWorktree}/sub`, { recursive: true });
+      // Another thread works at the checkout's root.
+      fixture.setThreads([
+        shell({
+          id: ThreadId.make("root-thread"),
+          branch: "feature",
+          worktreePath: fixture.pluginWorktree,
+        }),
+      ]);
+      const refused = yield* fixture.service
+        .removeWorktree({
+          cwd: fixture.repo,
+          path: `${fixture.pluginWorktree}/sub`,
+          force: true,
+          onlyIfUnused: true,
+        })
+        .pipe(Effect.flip);
+      expect(refused.detail).toContain("Another thread");
+      expect(yield* fixture.fs.exists(fixture.pluginWorktree)).toBe(true);
+
+      // Named through a link from elsewhere, the subfolder still stands for the whole checkout.
+      const elsewhere = yield* fixture.fs.makeTempDirectoryScoped({ prefix: "t3-plugin-alias-" });
+      yield* fixture.fs.symlink(`${fixture.pluginWorktree}/sub`, `${elsewhere}/sub`);
+      const throughLink = yield* fixture.service
+        .removeWorktree({
+          cwd: fixture.repo,
+          path: `${elsewhere}/sub`,
+          force: true,
+          onlyIfUnused: true,
+        })
+        .pipe(Effect.flip);
+      expect(throughLink.detail).toContain("Another thread");
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+
+  it.effect("rechecks that a live thread's branch is still there right before removal", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW_MS);
+      const fixture = yield* cleanupFixture(undefined, undefined, { recreates: true });
+      const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
+      fixture.setThreads([thread]);
+      fixture.setPluginStatus({
+        refName: "feature",
+        files: [],
+        aheadCount: 0,
+        repositoryBranches: ["feature"],
+      });
+      // The branch goes away between the first check and the lease.
+      fixture.setOpenSessionCwd(fixture.pluginWorktree);
+      fixture.setSessionLive(false);
+      fixture.setOnLiveCheck(
+        Effect.sync(() =>
+          fixture.setPluginStatus({
+            refName: "feature",
+            files: [],
+            aheadCount: 0,
+            repositoryBranches: [],
+          }),
+        ),
+      );
+      const entry = (yield* fixture.service.runNow).entries.find(
+        (candidate) => candidate.threadId === thread.id,
+      );
+      expect(entry).toMatchObject({
+        outcome: "kept",
+        reason: "Kite could not recreate it for the thread's next turn",
+      });
+      expect(yield* fixture.fs.exists(fixture.pluginWorktree)).toBe(true);
+    }).pipe(Effect.provide(cleanupTestLayer)),
+  );
+});
+
 describe("orphan worktree reports", () => {
+  it.live.each([false, true])(
+    "never takes a plugin checkout around another repository as the thread's worktree (other plugin off: %s)",
+    (otherOff) =>
+      runCleanupTest(
+        Effect.gen(function* () {
+          const fixture = yield* cleanupFixture(undefined, undefined, {
+            recreates: true,
+            otherOff,
+          });
+          const pluginRepo = `${fixture.repo}/kite-repo`;
+          const worktree = `${fixture.config.worktreesDir}/kite-around`;
+          for (const root of [pluginRepo, worktree]) {
+            yield* fixture.fs.makeDirectory(`${root}/.kite`, { recursive: true });
+            yield* fixture.fs.writeFileString(`${root}/.kite/HEAD`, "main\n");
+            yield* fixture.fs.makeDirectory(`${root}/sub`);
+          }
+          const around = (yield* fixture.service.worktreeThreadIds(
+            `${worktree}/sub`,
+            `${pluginRepo}/sub`,
+          )).worktreeRoot;
+          expect(around).toBe(worktree);
+          // sub/ is now another installed plugin's checkout, or Git's: its own repository.
+          for (const marker of [".other/HEAD", ".git/HEAD"]) {
+            yield* fixture.fs.makeDirectory(`${worktree}/sub/${marker.split("/")[0]}`);
+            yield* fixture.fs.writeFileString(`${worktree}/sub/${marker}`, "main\n");
+            expect(
+              (yield* fixture.service.worktreeThreadIds(`${worktree}/sub`, `${pluginRepo}/sub`))
+                .worktreeRoot,
+            ).not.toBe(worktree);
+            yield* fixture.fs.remove(`${worktree}/sub/${marker.split("/")[0]}`, {
+              recursive: true,
+            });
+          }
+        }),
+      ),
+  );
+
   it.live("keeps a checkout shared by a root thread and a subfolder thread", () =>
     runCleanupTest(
       Effect.gen(function* () {
@@ -2199,6 +2820,21 @@ describe("orphan worktree reports", () => {
           worktreeRoot: fixture.worktree,
           threadIds: [ThreadId.make("root-thread"), ThreadId.make("folder-thread")],
         });
+        // A VCS plugin's checkout is found by its marker, as a Git one is by `.git`.
+        const pluginRepo = `${fixture.repo}/kite-repo`;
+        const pluginWorktree = `${fixture.config.worktreesDir}/kite-feature`;
+        for (const root of [pluginRepo, pluginWorktree]) {
+          yield* fixture.fs.makeDirectory(`${root}/.kite`, { recursive: true });
+          yield* fixture.fs.writeFileString(`${root}/.kite/HEAD`, "main\n");
+          yield* fixture.fs.makeDirectory(`${root}/my-project`);
+        }
+        expect(
+          (yield* fixture.service.worktreeThreadIds(
+            `${pluginWorktree}/my-project`,
+            `${pluginRepo}/my-project`,
+          )).worktreeRoot,
+        ).toBe(pluginWorktree);
+        yield* fixture.fs.remove(pluginWorktree, { recursive: true });
         fixture.setStoredWorktreePaths([threadFolder]);
         yield* fixture.fs.utimes(fixture.worktree, 1, 1);
         const report = yield* fixture.service.runNow;
@@ -2334,6 +2970,60 @@ describe("orphan worktree reports", () => {
           yield* fixture.fs.utimes(ancestor, 1, 1);
           expect((yield* fixture.service.runNow).entries).toEqual([]);
           expect(yield* fixture.fs.exists(worktree)).toBe(true);
+        }),
+      ),
+  );
+
+  it.live("reports a mount directly in the worktrees folder as one folder", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        let mount = "";
+        const onMount = (target: string) =>
+          mount !== "" && (target === mount || target.startsWith(`${mount}/`));
+        const fixture = yield* cleanupFixture().pipe(
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            stat: (target) =>
+              fs
+                .stat(target)
+                .pipe(
+                  Effect.map((info) => (onMount(target) ? { ...info, dev: info.dev + 1n } : info)),
+                ),
+          }),
+        );
+        fixture.setThreads([]);
+        mount = `${fixture.config.worktreesDir}/mounted`;
+        for (const child of ["one", "two"])
+          yield* fs.makeDirectory(`${mount}/${child}`, { recursive: true });
+        for (const folder of [mount, `${mount}/one`, `${mount}/two`])
+          yield* fs.utimes(folder, 1, 1);
+        expect((yield* fixture.service.runNow).entries).toEqual([
+          expect.objectContaining({ path: mount, outcome: "kept" }),
+        ]);
+      }),
+    ),
+  );
+
+  it.live(
+    "reports a plugin's checkout in the worktrees folder even with a .git beside its marker",
+    () =>
+      runCleanupTest(
+        Effect.gen(function* () {
+          const fixture = yield* cleanupFixture(undefined, undefined, { recreates: true });
+          fixture.setThreads([]);
+          const checkout = `${fixture.config.worktreesDir}/kite-orphan`;
+          yield* fixture.fs.makeDirectory(`${checkout}/.kite`, { recursive: true });
+          yield* fixture.fs.writeFileString(`${checkout}/.kite/HEAD`, "main\n");
+          yield* fixture.fs.makeDirectory(`${checkout}/.git`);
+          yield* fixture.fs.makeDirectory(`${checkout}/src`);
+          for (const folder of [checkout, `${checkout}/src`])
+            yield* fixture.fs.utimes(folder, 1, 1);
+          expect(
+            (yield* fixture.service.runNow).entries.filter((entry) =>
+              entry.path?.startsWith(checkout),
+            ),
+          ).toEqual([expect.objectContaining({ path: checkout, outcome: "kept" })]);
         }),
       ),
   );

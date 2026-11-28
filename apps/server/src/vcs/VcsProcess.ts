@@ -35,7 +35,12 @@ export interface VcsProcessInput {
   readonly onStdoutChunk?: (chunk: Uint8Array) => void;
   readonly onSpawn?: () => void;
   readonly env?: NodeJS.ProcessEnv;
+  /** Runs with `env` alone: no inherited server environment and no Git defaults. */
+  readonly cleanEnv?: boolean;
+  /** Refuse a command that would run through a shell, such as a Windows batch file. */
+  readonly forbidShell?: boolean;
   readonly allowNonZeroExit?: boolean;
+  /** `Infinity` waits as long as the command runs. */
   readonly timeoutMs?: number;
   readonly maxOutputBytes?: number;
   readonly outputMode?: ProcessRunner.ProcessRunInput["outputMode"];
@@ -240,16 +245,20 @@ export const make = Effect.gen(function* () {
         ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
         ...(input.onStdoutChunk !== undefined ? { onStdoutChunk: input.onStdoutChunk } : {}),
         ...(input.onSpawn !== undefined ? { onSpawn: input.onSpawn } : {}),
-        env: {
-          ...(input.command === "git"
-            ? unsetInheritedRepositoryEnv(process.env, hostPlatform)
-            : {}),
-          // Failures are read by English patterns; without LANG, macOS Git follows the system language.
-          // LANGUAGE leaves LC_CTYPE, which hooks inherit, alone.
-          ...(input.command === "git" ? { LANGUAGE: "C" } : {}),
-          ...input.env,
-          ...explicitBareRepositoryEnv({ ...process.env, ...input.env }, hostPlatform),
-        },
+        env: input.cleanEnv
+          ? (input.env ?? {})
+          : {
+              ...(input.command === "git"
+                ? unsetInheritedRepositoryEnv(process.env, hostPlatform)
+                : {}),
+              // Failures are read by English patterns; without LANG, macOS Git follows the system language.
+              // LANGUAGE leaves LC_CTYPE, which hooks inherit, alone.
+              ...(input.command === "git" ? { LANGUAGE: "C" } : {}),
+              ...input.env,
+              ...explicitBareRepositoryEnv({ ...process.env, ...input.env }, hostPlatform),
+            },
+        ...(input.cleanEnv ? { extendEnv: false } : {}),
+        ...(input.forbidShell ? { forbidShell: true } : {}),
         timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxOutputBytes: input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
         outputMode: input.outputMode ?? "truncate",

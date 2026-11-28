@@ -140,6 +140,7 @@ import * as WorkspaceFolders from "./workspace/WorkspaceFolders.ts";
 import * as TaskFolders from "./workspace/TaskFolders.ts";
 import * as TaskFolderStore from "./workspace/TaskFolderStore.ts";
 import * as TopicService from "./topics/TopicService.ts";
+import * as PluginService from "./plugins/PluginService.ts";
 import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
@@ -416,7 +417,13 @@ const layerPlatformServices = DocumentText.layer.pipe(
 
 const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
 
-const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer));
+// One instance: Settings and the driver registry must see the same plugins.
+const layerPlugins = PluginService.layer.pipe(Layer.provide(VcsProcess.layer));
+
+const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(
+  Layer.provide(VcsProjectConfig.layer),
+  Layer.provide(layerPlugins),
+);
 
 const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.pipe(
   Layer.provideMerge(SourceControlBuiltInDrivers.layer),
@@ -495,6 +502,8 @@ const layerProjectCloneTracker = ProjectCloneTracker.layer.pipe(
 const layerKnownWorkspaces = KnownWorkspaces.layer.pipe(
   Layer.provide(ProjectStore.layer),
   Layer.provide(GitVcsDriver.layer),
+  Layer.provide(layerVcsDriverRegistry),
+  Layer.provide(layerPlugins),
 );
 
 const layerReview = ReviewService.layer.pipe(
@@ -517,6 +526,7 @@ const layerVcs = Layer.empty.pipe(
   Layer.provideMerge(
     VcsStatusBroadcaster.layer.pipe(
       Layer.provide(layerGitWorkflow),
+      Layer.provide(layerPlugins),
       // The orchestration runtime also consumes the broadcaster (run
       // finalization), so the policy cannot read the store from the runtime's
       // output.
@@ -763,7 +773,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerTaskFolders),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
-  Layer.provideMerge(TopicService.layer),
+  Layer.provideMerge(Layer.merge(TopicService.layer, layerPlugins)),
   Layer.provideMerge(SecretCheck.layer),
   Layer.provideMerge(SecretResolver.layer),
   // Above the settings it writes when a theme is applied.

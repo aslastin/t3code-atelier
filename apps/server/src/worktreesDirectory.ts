@@ -35,8 +35,11 @@ export function managedWorktreesDirectories(
   defaultDir: string,
   path: Path.Path,
   home: string,
+  // Atelier fork: the T3 home's own worktrees folder, still managed when T3CODE_WORKTREES_DIR
+  // moved new worktrees elsewhere, so the ones made before stay in reach.
+  homeWorktreesDir?: string,
 ): ReadonlyArray<string> {
-  const directories = new Set([defaultDir]);
+  const directories = new Set([defaultDir, ...(homeWorktreesDir ? [homeWorktreesDir] : [])]);
   for (const setting of [settings.worktreesDirectory, ...settings.previousWorktreesDirectories]) {
     const directory = resolveWorktreesDirectory(setting, defaultDir, path, home);
     if (directory !== null) directories.add(directory);
@@ -79,6 +82,7 @@ export const makeIsManagedWorktreePath = Effect.gen(function* () {
         serverConfig.worktreesDir,
         path,
         yield* HostProcess.HomeDirectory,
+        path.join(serverConfig.baseDir, "worktrees"),
       ),
       realLocation,
     );

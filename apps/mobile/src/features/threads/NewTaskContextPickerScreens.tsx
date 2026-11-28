@@ -315,7 +315,14 @@ export function NewTaskBranchPickerRouteScreen() {
     <BranchPickerScreen
       title={flow.workspaceMode === "worktree" ? gt("Base branch") : gt("Branch")}
       project={flow.selectedProject}
-      branches={filterNewTaskBranches(branchState.refs, branchQuery)}
+      branches={filterNewTaskBranches(branchState.refs, branchQuery).filter(
+        // In place, a VCS plugin cannot switch branches: only the current one and worktrees.
+        (branch) =>
+          flow.canSwitchRefs ||
+          flow.workspaceMode === "worktree" ||
+          branch.current ||
+          branch.worktreePath !== null,
+      )}
       selectedBranchName={
         flow.selectedBranchName ??
         flow.availableBranches.find((branch) => branch.current)?.name ??
@@ -333,7 +340,7 @@ export function NewTaskBranchPickerRouteScreen() {
       selectionDisabled={switchingBranchName !== null}
       onSelect={selectBranch}
       worktree={
-        flow.workspaceMode === "worktree"
+        flow.workspaceMode === "worktree" && flow.offersStartFromRemote
           ? {
               startFromOrigin: flow.startFromOrigin,
               onChangeStartFromOrigin: flow.setStartFromOrigin,

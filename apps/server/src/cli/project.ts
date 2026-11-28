@@ -23,6 +23,7 @@ import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 
 import * as ServerConfig from "../config.ts";
+import * as PluginService from "../plugins/PluginService.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import type * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
@@ -355,7 +356,12 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
   }).pipe(
     Effect.scoped,
     Effect.provide(
-      Layer.mergeAll(EnvironmentAuth.layerRuntime, WorkspacePaths.layer).pipe(
+      // Atelier fork: folder walks here skip a VCS plugin's repository, as the server's do.
+      Layer.mergeAll(
+        EnvironmentAuth.layerRuntime,
+        WorkspacePaths.layer,
+        PluginService.layerInstalledMarkers,
+      ).pipe(
         Layer.provideMerge(FetchHttpClient.layer),
         Layer.provideMerge(ServerConfig.layer(config)),
         Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),

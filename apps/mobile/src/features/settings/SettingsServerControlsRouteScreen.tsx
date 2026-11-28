@@ -1,3 +1,4 @@
+import { VcsPluginsSection } from "./components/VcsPluginsSection";
 import { msg, T, useGT, useMessages, Var } from "gt-react-native";
 import { useNavigation } from "@react-navigation/native";
 import { SettingsRow } from "./components/SettingsRow";
@@ -419,6 +420,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     canWrite={(environmentId) => writableEnvironments.has(environmentId)}
                   />
                 )}
+                {projectSelected ? null : <VcsPluginsSection environments={selectedTargets} />}
                 {projectSelected ? null : <IssueTrackerSection environments={selectedTargets} />}
                 <SettingsSection title={gt("Pull requests")}>
                   <SettingsSwitchRow

@@ -13,6 +13,7 @@ import { vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspaceEntries from "./WorkspaceEntries.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
@@ -1163,6 +1164,278 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
           _tag: "WorkspaceEntriesReadDirectoryError",
           pathMissing: false,
         });
+      }),
+    );
+  });
+
+  describe("in a VCS plugin's repository", () => {
+    it.effect("never walks or indexes the tree, but still lists one folder at a time", () =>
+      Effect.gen(function* () {
+        const create = vi.spyOn(FileFinder, "create");
+        const cwd = yield* makeTempDir();
+        // The project sits below the plugin's checkout root, as a project in a subfolder does.
+        yield* writeTextFile(cwd, ".kite/HEAD", "main\n");
+        yield* writeTextFile(cwd, "app/src/index.ts");
+        // A Git repository around the checkout, which ignores it, does not grey its files out.
+        yield* git(cwd, ["init"]);
+        yield* writeTextFile(cwd, ".gitignore", "app/\n");
+        // A Git repository inside keeps its own search.
+        const nested = `${cwd}/app/vendor`;
+        yield* writeTextFile(nested, "lib/tool.ts");
+        yield* git(nested, ["init"]);
+        const project = `${cwd}/app`;
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+
+        const inPlugin = Effect.provideService(VcsPluginDrivers, {
+          installedMarkers: () => [".kite/HEAD"],
+        } as unknown as VcsPluginDrivers["Service"]);
+        expect(
+          yield* searchWorkspaceEntries({ cwd: project, query: "index", limit: 10 }).pipe(inPlugin),
+        ).toEqual({ entries: [], truncated: false, unavailable: true });
+        expect(yield* workspaceEntries.list({ cwd: project }).pipe(inPlugin)).toEqual({
+          entries: [],
+          truncated: false,
+        });
+        const contents = yield* workspaceEntries
+          .searchContents({
+            cwd: project,
+            query: "x",
+            limit: 10,
+            caseSensitive: false,
+            wholeWord: false,
+            useRegex: false,
+          })
+          .pipe(inPlugin, Effect.flip);
+        expect(contents._tag).toBe("WorkspaceEntriesSearchUnavailableError");
+        // Opened through a link to the subfolder, it is still the plugin's repository.
+        const linked = `${yield* makeTempDir()}/linked`;
+        yield* Effect.promise(() => NodeFSP.symlink(project, linked));
+        expect(
+          yield* searchWorkspaceEntries({ cwd: linked, query: "index", limit: 10 }).pipe(inPlugin),
+        ).toEqual({ entries: [], truncated: false, unavailable: true });
+        expect(create).not.toHaveBeenCalled();
+
+        const folder = yield* workspaceEntries
+          .list({ cwd: project, directoryPath: "src" })
+          .pipe(inPlugin);
+        expect(folder.entries).toEqual([{ path: "src/index.ts", kind: "file" }]);
+        // Clients open its folders one at a time, never all at once.
+        expect(folder.treeWalkUnavailable).toBe(true);
+        // The Git repository around it lists none of its ignored files.
+        yield* writeTextFile(project, "app.log");
+        yield* writeTextFile(cwd, ".gitignore", "*.log\n");
+        yield* git(cwd, ["add", "app/src/index.ts"]);
+        expect(yield* workspaceEntries.listIgnoredFiles({ cwd: project }).pipe(inPlugin)).toEqual({
+          files: [],
+          truncated: false,
+        });
+        const inside = yield* searchWorkspaceEntries({
+          cwd: nested,
+          query: "tool",
+          limit: 10,
+        }).pipe(inPlugin);
+        expect(inside.entries.map((entry) => entry.path)).toContain("lib/tool.ts");
+      }),
+    );
+
+    it.effect("never walks a folder that holds a plugin's checkout below it", () =>
+      Effect.gen(function* () {
+        const create = vi.spyOn(FileFinder, "create");
+        const wrapper = yield* makeTempDir();
+        // A home folder or a wrapper of repositories, with a plugin's checkout two levels down.
+        // Hidden folders count too.
+        yield* writeTextFile(wrapper, ".work/mono/.kite/HEAD", "main\n");
+        yield* writeTextFile(wrapper, ".work/mono/app/index.ts");
+        yield* writeTextFile(wrapper, "notes.md");
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const inPlugin = Effect.provideService(VcsPluginDrivers, {
+          installedMarkers: () => [".kite/HEAD"],
+        } as unknown as VcsPluginDrivers["Service"]);
+        expect(
+          yield* searchWorkspaceEntries({ cwd: wrapper, query: "index", limit: 10 }).pipe(inPlugin),
+        ).toEqual({ entries: [], truncated: false, unavailable: true });
+        expect(create).not.toHaveBeenCalled();
+        // Its folders still open one at a time, never all at once.
+        const top = yield* workspaceEntries
+          .list({ cwd: wrapper, directoryPath: "" })
+          .pipe(inPlugin);
+        expect(top.entries.map((entry) => entry.path).toSorted()).toEqual([".work", "notes.md"]);
+        expect(top.treeWalkUnavailable).toBe(true);
+      }),
+    );
+
+    it.effect(
+      "says a tree holding a deeper checkout is never walked, from the folder above it",
+      () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTempDir();
+          yield* writeTextFile(cwd, "one/two/mono/.kite/HEAD", "main\n");
+          const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+          const inPlugin = Effect.provideService(VcsPluginDrivers, {
+            installedMarkers: () => [".kite/HEAD"],
+          } as unknown as VcsPluginDrivers["Service"]);
+          const list = (directoryPath: string) =>
+            workspaceEntries.list({ cwd, directoryPath }).pipe(inPlugin);
+          expect((yield* list("one")).treeWalkUnavailable).toBeUndefined();
+          expect((yield* list("one/two")).treeWalkUnavailable).toBe(true);
+          // Found once, it stops search from indexing the project as well.
+          const create = vi.spyOn(FileFinder, "create");
+          expect(
+            yield* searchWorkspaceEntries({ cwd, query: "HEAD", limit: 10 }).pipe(inPlugin),
+          ).toEqual({ entries: [], truncated: false, unavailable: true });
+          expect(create).not.toHaveBeenCalled();
+        }),
+    );
+
+    it.effect("remembers a listed checkout while a shallower one already says so", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir();
+        yield* writeTextFile(cwd, "first/.kite/HEAD", "main\n");
+        yield* writeTextFile(cwd, "a/b/second/.kite/HEAD", "main\n");
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const inPlugin = Effect.provideService(VcsPluginDrivers, {
+          installedMarkers: () => [".kite/HEAD"],
+        } as unknown as VcsPluginDrivers["Service"]);
+        yield* workspaceEntries.list({ cwd, directoryPath: "a/b" }).pipe(inPlugin);
+        // The shallow checkout goes; the deep one, listed before, still stops the walk.
+        yield* Effect.promise(() => NodeFSP.rm(`${cwd}/first`, { recursive: true }));
+        yield* TestClock.adjust("2 minutes");
+        expect(
+          (yield* workspaceEntries.list({ cwd, directoryPath: "" }).pipe(inPlugin))
+            .treeWalkUnavailable,
+        ).toBe(true);
+      }).pipe(Effect.provide(TestClock.layer())),
+    );
+
+    it.effect(
+      "remembers a listed checkout inside a plugin's repository after that plugin goes",
+      () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTempDir({ git: true });
+          yield* writeTextFile(cwd, ".kite/HEAD", "main\n");
+          yield* writeTextFile(cwd, "a/b/child/.other/HEAD", "main\n");
+          const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+          const withMarkers = (markers: ReadonlyArray<string>) =>
+            Effect.provideService(VcsPluginDrivers, {
+              installedMarkers: () => markers,
+            } as unknown as VcsPluginDrivers["Service"]);
+          yield* workspaceEntries
+            .list({ cwd, directoryPath: "a/b" })
+            .pipe(withMarkers([".kite/HEAD", ".other/HEAD"]));
+          // Kite is removed; the other plugin's checkout found in `a/b` still stops the walk.
+          expect(
+            (yield* workspaceEntries
+              .list({ cwd, directoryPath: "" })
+              .pipe(withMarkers([".other/HEAD"]))).treeWalkUnavailable,
+          ).toBe(true);
+        }),
+    );
+
+    it.effect("reads mount points from mount and /proc/self/mounts output", () =>
+      Effect.gen(function* () {
+        expect(
+          WorkspaceEntries.parseMountPoints(
+            [
+              "/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)",
+              "map auto_home on /System/Volumes/Data/home (autofs, automounted, nobrowse)",
+              "kite on /Users/me/my mono (macfuse_kite, nodev, nosuid, mounted by me)",
+            ].join("\n"),
+            "darwin",
+          ),
+        ).toEqual(["/", "/System/Volumes/Data/home", "/Users/me/my mono"]);
+        expect(
+          WorkspaceEntries.parseMountPoints(
+            "/dev/sda1 / ext4 rw 0 0\nkite /home/me/my\\040mono fuse.kite rw 0 0\n",
+            "linux",
+          ),
+        ).toEqual(["/", "/home/me/my mono"]);
+        // A Linux host as it is: kernel and snap mounts, and FUSE checkouts, escaped as the kernel
+        // writes them.
+        const linux = WorkspaceEntries.parseMountPoints(
+          [
+            "sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0",
+            "proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0",
+            "/dev/nvme0n1p2 / ext4 rw,relatime,errors=remount-ro 0 0",
+            "tmpfs /run/user/1000 tmpfs rw,nosuid,nodev,relatime,size=3270364k,mode=700 0 0",
+            "/dev/loop3 /snap/core22/1612 squashfs ro,nodev,relatime 0 0",
+            "kite /home/me/mono fuse.kite rw,nosuid,nodev,relatime,user_id=1000,group_id=1000 0 0",
+            "kite /home/me/work/wt\\011tab\\134x fuse.kite rw,nosuid,nodev,relatime 0 0",
+          ].join("\n"),
+          "linux",
+        );
+        expect(linux).toContain("/home/me/work/wt\ttab\\x");
+        const path = yield* Path.Path;
+        // A mount at any depth below the project counts; the project's own and those above do not.
+        expect(WorkspaceEntries.hasMountBelow("/home/me", linux, path, "linux")).toBe(true);
+        expect(WorkspaceEntries.hasMountBelow("/home/me/work", linux, path, "linux")).toBe(true);
+        expect(WorkspaceEntries.hasMountBelow("/home/me/mono", linux, path, "linux")).toBe(false);
+        expect(WorkspaceEntries.hasMountBelow("/home/me/mono/src", linux, path, "linux")).toBe(
+          false,
+        );
+        expect(WorkspaceEntries.hasMountBelow("/home/me/monorepo", linux, path, "linux")).toBe(
+          false,
+        );
+        expect(WorkspaceEntries.hasMountBelow("/srv/project", linux, path, "linux")).toBe(false);
+        // On macOS a firmlinked folder has two spellings; either finds a mount under the other.
+        const darwin = ["/", "/System/Volumes/Data", "/Users/me/mono"];
+        for (const root of ["/Users/me", "/System/Volumes/Data/Users/me"])
+          expect(WorkspaceEntries.hasMountBelow(root, darwin, path, "darwin")).toBe(true);
+        expect(
+          WorkspaceEntries.hasMountBelow(
+            "/System/Volumes/Data",
+            ["/System/Volumes/Data/Users/a/mount"],
+            path,
+            "darwin",
+          ),
+        ).toBe(true);
+        expect(
+          WorkspaceEntries.hasMountBelow(
+            "/System/Volumes",
+            ["/System/Volumes/Data"],
+            path,
+            "darwin",
+          ),
+        ).toBe(true);
+        expect(WorkspaceEntries.hasMountBelow("/Users/me/mono", darwin, path, "darwin")).toBe(
+          false,
+        );
+      }),
+    );
+
+    it.effect("probes no folders for a checkout in a Git repository, only the mount table", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir({ git: true });
+        yield* writeTextFile(cwd, "vendor/mono/.kite/HEAD", "main\n");
+        yield* writeTextFile(cwd, "src/index.ts");
+        const inPlugin = Effect.provideService(VcsPluginDrivers, {
+          installedMarkers: () => [".kite/HEAD"],
+        } as unknown as VcsPluginDrivers["Service"]);
+        const result = yield* searchWorkspaceEntries({ cwd, query: "index", limit: 10 }).pipe(
+          inPlugin,
+        );
+        expect(result.unavailable).toBeUndefined();
+        expect(result.entries.map((entry) => entry.path)).toContain("src/index.ts");
+      }),
+    );
+
+    it.effect("drops an index made before a plugin claimed the folder", () =>
+      Effect.gen(function* () {
+        const create = vi.spyOn(FileFinder, "create");
+        const cwd = yield* makeTempDir();
+        yield* writeTextFile(cwd, "src/index.ts");
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        yield* searchWorkspaceEntries({ cwd, query: "index", limit: 10 });
+        const made = create.mock.calls.length;
+        expect(made).toBeGreaterThan(0);
+        // A plugin's checkout now: refreshing drops the index instead of walking the tree.
+        yield* writeTextFile(cwd, ".kite/HEAD", "main\n");
+        yield* workspaceEntries.refresh(cwd).pipe(
+          Effect.provideService(VcsPluginDrivers, {
+            installedMarkers: () => [".kite/HEAD"],
+          } as unknown as VcsPluginDrivers["Service"]),
+        );
+        yield* searchWorkspaceEntries({ cwd, query: "index", limit: 10 });
+        expect(create.mock.calls.length).toBeGreaterThan(made);
       }),
     );
   });

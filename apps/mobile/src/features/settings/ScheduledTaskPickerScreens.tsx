@@ -3,6 +3,7 @@ import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { LegendList } from "@legendapp/list/react-native";
 import { useNavigation } from "@react-navigation/native";
 import { scheduledTaskWorktreeBaseRef } from "@t3tools/client-runtime/scheduled-task-worktree";
+import { vcsAllows } from "@t3tools/client-runtime/state/vcs-capabilities";
 import { isListedThreadLineage } from "@t3tools/contracts";
 import * as Haptics from "expo-haptics";
 import { useMemo, useState } from "react";
@@ -20,6 +21,8 @@ import {
   useVisibleThreadShells,
 } from "../../state/entities";
 import { useDebouncedValue, usePaginatedBranches, useThreadSearch } from "../../state/queries";
+import { useEnvironmentQuery } from "../../state/query";
+import { vcsEnvironment } from "../../state/vcs";
 import { BranchPickerScreen } from "../threads/NewTaskContextPickerScreens";
 import { ThreadSettingsPickerScreen } from "../threads/ThreadSettingsSheet";
 import { SettingsScreen } from "./components/SettingsScreen";
@@ -146,6 +149,14 @@ export function ScheduledTaskBranchPickerRouteScreen() {
   const visibleBranches = branches.refs.filter(
     (branch) => !branch.isRemote && branch.name.toLowerCase().includes(query.trim().toLowerCase()),
   );
+  const status = useEnvironmentQuery(
+    editor && project?.workspaceRoot
+      ? vcsEnvironment.status({
+          environmentId: editor.environmentId,
+          input: { cwd: project.workspaceRoot },
+        })
+      : null,
+  );
 
   if (!editor) return <MissingTaskDraft />;
 
@@ -176,18 +187,22 @@ export function ScheduledTaskBranchPickerRouteScreen() {
         );
         navigation.goBack();
       }}
-      worktree={{
-        startFromOrigin: editor.draft.startFromOrigin,
-        onChangeStartFromOrigin: (startFromOrigin) =>
-          setEditor((current) =>
-            current
-              ? {
-                  ...current,
-                  draft: { ...current.draft, startFromOrigin },
-                }
-              : current,
-          ),
-      }}
+      worktree={
+        vcsAllows(status.data, "startFromRemote")
+          ? {
+              startFromOrigin: editor.draft.startFromOrigin,
+              onChangeStartFromOrigin: (startFromOrigin) =>
+                setEditor((current) =>
+                  current
+                    ? {
+                        ...current,
+                        draft: { ...current.draft, startFromOrigin },
+                      }
+                    : current,
+                ),
+            }
+          : undefined
+      }
     />
   );
 }

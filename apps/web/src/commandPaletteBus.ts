@@ -9,6 +9,8 @@ export interface CommandPaletteLinkedThreads {
 
 export interface CommandPaletteOpenDetail {
   readonly open?: "add-project" | "new-thread-in";
+  /** Atelier fork: opens to the environment's folders, to import a VCS plugin from one. */
+  readonly importVcsPluginIn?: EnvironmentId;
   readonly query?: string;
   readonly linkedThreads?: CommandPaletteLinkedThreads;
 }
@@ -17,7 +19,12 @@ export function openCommandPalette(detail: CommandPaletteOpenDetail = {}): void 
   // With no palette on screen (e.g. /pair) the request is dropped; kept in the
   // store, it would pop a stale palette once the app shell mounts.
   if (!isCommandPaletteMounted()) return;
-  if (detail.open === "new-thread-in") {
+  if (detail.importVcsPluginIn !== undefined) {
+    dispatchCommandPalette({
+      _tag: "OpenImportVcsPlugin",
+      environmentId: detail.importVcsPluginIn,
+    });
+  } else if (detail.open === "new-thread-in") {
     dispatchCommandPalette({ _tag: "OpenNewThreadIn" });
   } else if (detail.open === "add-project") {
     dispatchCommandPalette({ _tag: "OpenAddProject" });

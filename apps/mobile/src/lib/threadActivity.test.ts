@@ -640,6 +640,16 @@ describe("buildThreadFeed", () => {
       expect(buildThreadFeed(rows, { checkpointSummaries: [inRepository] })[1]).toMatchObject({
         message: { checkpointSummary: inRepository },
       });
+      // A VCS plugin's turn without a snapshot keeps its summary to say why.
+      const unavailable = {
+        ...summary,
+        status: "missing" as const,
+        files: [],
+        unavailableReason: "No Kite checkpoint strategy worked.",
+      };
+      expect(buildThreadFeed(rows, { checkpointSummaries: [unavailable] })[1]).toMatchObject({
+        message: { checkpointSummary: unavailable },
+      });
       const fallback = deriveThreadFeedPresentation(
         [after.at(-1)!],
         null,

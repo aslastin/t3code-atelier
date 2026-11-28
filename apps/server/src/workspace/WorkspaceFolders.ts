@@ -24,6 +24,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import { isWithinRoot } from "./KnownWorkspaces.ts";
 import * as TaskFolderStore from "./TaskFolderStore.ts";
 
@@ -116,12 +117,41 @@ const folderProbes = Effect.gen(function* () {
   const realPath = (target: string) =>
     fileSystem.realPath(target).pipe(Effect.orElseSucceed(() => target));
 
+  // Atelier fork: a VCS plugin's repository is one too, found by an installed plugin's marker,
+  // so a task folder checks it out instead of linking back to it. Read per call: the plugins
+  // are the caller's, and they change while the server runs.
+  const hasPluginMarker = Effect.fnUntraced(function* (
+    folder: string,
+    markers: (plugins: VcsPluginDrivers["Service"]) => ReadonlyArray<string>,
+  ) {
+    const plugins = yield* Effect.serviceOption(VcsPluginDrivers);
+    if (Option.isNone(plugins)) return false;
+    for (const marker of markers(plugins.value)) {
+      if (yield* exists(path.join(folder, marker))) return true;
+    }
+    return false;
+  });
+
   // A repository is a folder with its own `.git`; a folder deeper inside one is plain files.
   // Untraced: it runs once per folder inside the calling operation's span.
   const classify = Effect.fnUntraced(function* (
     folder: ProjectTrackedFolder,
   ): Effect.fn.Return<WorkspaceFolder> {
+    // As the driver registry decides on its own: the first available plugin whose marker the
+    // folder holds owns it, even beside a `.git`.
+    const plugins = yield* Effect.serviceOption(VcsPluginDrivers);
+    for (const plugin of Option.isSome(plugins) ? plugins.value.available() : []) {
+      for (const marker of plugin.markers) {
+        if (yield* exists(path.join(folder.path, marker)))
+          return plugin.worktrees
+            ? { ...folder, state: "git" }
+            : { ...folder, state: "git", worktrees: false };
+      }
+    }
     if (yield* exists(path.join(folder.path, ".git"))) return { ...folder, state: "git" };
+    // A plugin turned off or unavailable: still a repository, but it cannot get a worktree.
+    if (yield* hasPluginMarker(folder.path, (plugins) => plugins.installedMarkers()))
+      return { ...folder, state: "git", worktrees: false };
     return { ...folder, state: (yield* exists(folder.path)) ? "plain" : "missing" };
   });
 
@@ -130,6 +160,11 @@ const folderProbes = Effect.gen(function* () {
     fileSystem.stat(path.join(folder, ".git")).pipe(
       Effect.map((info) => info.type === "Directory"),
       Effect.orElseSucceed(() => false),
+      Effect.flatMap((owns) =>
+        owns
+          ? Effect.succeed(true)
+          : hasPluginMarker(folder, (plugins) => plugins.installedMarkers()),
+      ),
     );
 
   const childFolders = (folder: string) =>
@@ -143,7 +178,21 @@ const folderProbes = Effect.gen(function* () {
       ),
     );
 
-  return { exists, realPath, classify, ownsHistory, childFolders };
+  // Atelier fork: a folder in a VCS plugin's repository, found by physical parents. Such a
+  // checkout can be a monorepo on a network mount, so its folders are never scanned one by one.
+  const insidePluginRepository = Effect.fnUntraced(function* (folder: string) {
+    const plugins = yield* Effect.serviceOption(VcsPluginDrivers);
+    const markers = Option.isSome(plugins) ? plugins.value.installedMarkers() : [];
+    if (markers.length === 0) return false;
+    // The nearest checkout root decides: a Git repository inside the plugin's keeps its scan.
+    for (let current = yield* realPath(folder); ; current = path.dirname(current)) {
+      for (const marker of markers) if (yield* exists(path.join(current, marker))) return true;
+      if (yield* exists(path.join(current, ".git"))) return false;
+      if (path.dirname(current) === current) return false;
+    }
+  });
+
+  return { exists, realPath, classify, ownsHistory, childFolders, insidePluginRepository };
 });
 
 const readCodeWorkspaceFolders = Effect.fn("WorkspaceFolders.readCodeWorkspaceFolders")(function* (
@@ -182,10 +231,12 @@ const scanFolders = Effect.fn("WorkspaceFolders.scan")(function* (
 > {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const { exists, realPath, classify, ownsHistory, childFolders } = yield* folderProbes;
+  const { exists, realPath, classify, ownsHistory, childFolders, insidePluginRepository } =
+    yield* folderProbes;
   const root = path.resolve(
     expandHomePath(input.workspaceRoot.trim(), yield* HostProcess.HomeDirectory),
   );
+  const pluginRepository = yield* insidePluginRepository(root);
   const names = (yield* fileSystem
     .readDirectory(root)
     .pipe(
@@ -200,7 +251,9 @@ const scanFolders = Effect.fn("WorkspaceFolders.scan")(function* (
   // history are offered. A plain child is looked into once: wrappers keep repositories under
   // folders such as `src` or `packages`.
   const children = yield* Effect.forEach(
-    names.filter((name) => !name.startsWith(".") && name !== "node_modules"),
+    pluginRepository
+      ? []
+      : names.filter((name) => !name.startsWith(".") && name !== "node_modules"),
     (name) => {
       const folderPath = path.join(root, name);
       return Effect.gen(function* () {
@@ -264,6 +317,17 @@ const scanFolders = Effect.fn("WorkspaceFolders.scan")(function* (
     folders: folders.flat().slice(0, limit),
   };
 });
+
+/**
+ * Atelier fork: provides the plugins a service saw when it was built, so the walks here skip a
+ * VCS plugin's repository whichever fiber calls them.
+ */
+export const providePluginDrivers =
+  (plugins: Option.Option<VcsPluginDrivers["Service"]>) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Option.isSome(plugins)
+      ? Effect.provideService(effect, VcsPluginDrivers, plugins.value)
+      : effect;
 
 /**
  * The repositories inside a project folder, read from disk: the ones a scan finds there, less
@@ -359,6 +423,7 @@ const make = Effect.gen(function* () {
   const taskFolders = yield* TaskFolderStore.TaskFolderStore;
 
   const { exists, realPath, classify } = yield* folderProbes;
+  const pluginDrivers = yield* Effect.serviceOption(VcsPluginDrivers);
 
   const readProject = Effect.fn("WorkspaceFolders.readProject")(function* (projectId: ProjectId) {
     const row = yield* projects
@@ -384,6 +449,7 @@ const make = Effect.gen(function* () {
     readonly trackedFolders: ReadonlyArray<ProjectTrackedFolder>;
   }) =>
     projectFolders(project).pipe(
+      providePluginDrivers(pluginDrivers),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );
@@ -535,6 +601,7 @@ const make = Effect.gen(function* () {
 
   const scan: WorkspaceFolders["Service"]["scan"] = (input) =>
     scanFolders(input).pipe(
+      providePluginDrivers(pluginDrivers),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );

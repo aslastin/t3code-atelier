@@ -1,4 +1,5 @@
 import {
+  GIT_VCS_KIND,
   type ProjectId,
   type ProjectTrackedFolder,
   TASK_FOLDER_DEFAULT_REPOSITORIES_MAX,
@@ -34,6 +35,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import { VcsPluginDrivers, withoutFirmlink } from "../plugins/VcsPluginDrivers.ts";
 import {
   removeEmptyDirectory,
   type RemoveEmptyDirectoryError,
@@ -41,7 +43,8 @@ import {
 import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
 import { isWithinRoot } from "./KnownWorkspaces.ts";
 import * as TaskFolderStore from "./TaskFolderStore.ts";
-import { projectFolders, parseGitmodulesPaths } from "./WorkspaceFolders.ts";
+import { projectFolders, parseGitmodulesPaths, providePluginDrivers } from "./WorkspaceFolders.ts";
+import { holdsRepository } from "./holdsRepository.ts";
 import { withWorkspaceLease } from "./workspaceLease.ts";
 
 // Each worktree is a checkout: enough at once to finish four repositories together, few enough
@@ -242,12 +245,54 @@ const make = Effect.gen(function* () {
 
   const exists = (target: string) =>
     fileSystem.exists(target).pipe(Effect.orElseSucceed(() => false));
-  const isRepository = (folder: string) => exists(path.join(folder, ".git"));
+  // A VCS plugin's repository is one too: its files must get a checkout, never links back to
+  // the original folder.
+  const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
+  const isRepository = Effect.fnUntraced(function* (folder: string) {
+    for (const marker of [".git", ...(plugins?.installedMarkers() ?? [])]) {
+      if (yield* exists(path.join(folder, marker))) return true;
+    }
+    return false;
+  });
+  // Atelier fork: a forced removal never deletes through a VCS plugin's checkout a removal left
+  // behind, or a file system mounted inside: such a checkout can be a whole monorepo. Git
+  // checkouts left there are this service's own to delete, as before.
+  const holdsCheckout = (folder: string) =>
+    holdsRepository(fileSystem, path, folder, plugins?.installedMarkers() ?? [], {
+      bareRepositories: false,
+    });
+  // Physical ancestors, as a plugin's driver finds its repository root.
+  const insidePluginRepository = Effect.fnUntraced(function* (folder: string) {
+    const markers = plugins?.installedMarkers() ?? [];
+    if (markers.length === 0) return false;
+    let current = yield* fileSystem
+      .realPath(folder)
+      .pipe(Effect.orElseSucceed(() => path.resolve(folder)));
+    while (true) {
+      const parent = path.dirname(current);
+      if (parent === current) return false;
+      current = parent;
+      for (const marker of markers) if (yield* exists(path.join(current, marker))) return true;
+      // The nearest checkout root decides: inside a Git repository it is Git's subfolder.
+      if (yield* exists(path.join(current, ".git"))) return false;
+    }
+  });
+  // As the driver registry decides on its own: the first available plugin whose marker the
+  // folder holds owns it, even beside a `.git`.
+  const canGetWorktree = Effect.fnUntraced(function* (folder: string) {
+    for (const plugin of plugins?.available() ?? []) {
+      for (const marker of plugin.markers) {
+        if (yield* exists(path.join(folder, marker))) return plugin.worktrees;
+      }
+    }
+    return yield* exists(path.join(folder, ".git"));
+  });
   const trackedFolders = (project: {
     readonly workspaceRoot: string;
     readonly trackedFolders: ReadonlyArray<ProjectTrackedFolder>;
   }) =>
     projectFolders(project).pipe(
+      providePluginDrivers(Option.fromUndefinedOr(plugins)),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );
@@ -357,6 +402,44 @@ const make = Effect.gen(function* () {
       ? resolved
       : null;
   });
+  // A VCS plugin's checkout, even one holding a `.git`: its plugin listing the folder stands in
+  // for a gitfile. It must answer to that plugin too: another VCS's checkout can sit at a path
+  // still listed.
+  // Null when the repository's VCS did not answer.
+  const pluginOwnsRepository = Effect.fnUntraced(function* (checkout: TaskFolderCheckout) {
+    if (plugins?.hasAny() !== true) return false;
+    const kind = yield* git
+      .vcsKind(checkout.repositoryPath)
+      .pipe(Effect.orElseSucceed(() => undefined));
+    if (kind === undefined) return null;
+    return kind !== null && kind !== GIT_VCS_KIND;
+  });
+  const listedPluginCheckout = Effect.fnUntraced(function* (checkout: TaskFolderCheckout) {
+    if (plugins?.hasAny() !== true) return false;
+    const kind = yield* git.vcsKind(checkout.repositoryPath).pipe(
+      Effect.map((found) => found ?? undefined),
+      Effect.orElseSucceed(() => undefined),
+    );
+    if (kind === undefined || kind === GIT_VCS_KIND) return false;
+    // The checkout itself must answer: a marker left behind with its store gone is no checkout.
+    const checkoutKind = yield* git.localStatus({ cwd: checkout.worktreePath }).pipe(
+      Effect.map((status) => status.capabilities?.kind),
+      Effect.orElseSucceed(() => undefined),
+    );
+    if (checkoutKind !== kind) return false;
+    // One folder however spelled, macOS firmlinks included.
+    const real = (target: string) =>
+      fileSystem.realPath(target).pipe(
+        Effect.orElseSucceed(() => path.resolve(target)),
+        Effect.flatMap((resolved) => withoutFirmlink(fileSystem, resolved)),
+      );
+    const target = yield* real(checkout.worktreePath);
+    const listed = yield* git
+      .listWorktrees(checkout.repositoryPath)
+      .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+    for (const entry of listed) if ((yield* real(entry)) === target) return true;
+    return false;
+  });
   const unadoptable = Effect.fnUntraced(function* (checkout: TaskFolderCheckout, branch: string) {
     const resolved = yield* linkedGitDir(checkout);
     if (resolved === null)
@@ -369,6 +452,19 @@ const make = Effect.gen(function* () {
       : `${checkout.worktreePath} is not on the branch ${branch}`;
   });
 
+  // A task folder keeps one branch in every repository; a VCS plugin may name its own.
+  const onBranch = Effect.fnUntraced(function* (
+    operation: TaskFolderError["operation"],
+    name: string,
+    branch: string,
+    created: { readonly worktree: { readonly refName: string } },
+  ) {
+    if (created.worktree.refName === branch) return;
+    return yield* new TaskFolderError({
+      operation,
+      detail: `The ${name} worktree is on ${created.worktree.refName}, not ${branch}, and a task folder keeps one branch in every repository.`,
+    });
+  });
   const mapped = (taskFolder: Pick<TaskFolder, "root" | "anchor">, source: string) =>
     path.join(taskFolder.root, path.relative(taskFolder.anchor, source));
   const depth = (target: string) => path.resolve(target).split(path.sep).length;
@@ -396,11 +492,16 @@ const make = Effect.gen(function* () {
       yield* trackedFolders(project),
       (folder) => {
         const folderPath = path.resolve(folder.path);
-        return Effect.all([isRepository(folderPath), isSubmodule(folderPath)]).pipe(
-          Effect.map(([git, submodule]) => ({
+        return Effect.all([
+          isRepository(folderPath),
+          canGetWorktree(folderPath),
+          isSubmodule(folderPath),
+        ]).pipe(
+          Effect.map(([git, worktree, submodule]) => ({
             name: folder.name,
             path: folderPath,
             git,
+            worktree,
             submodule,
           })),
         );
@@ -418,6 +519,16 @@ const make = Effect.gen(function* () {
       (yield* worktreeLayout(projectRoot)) === null
     )
       return null;
+    // A plain project folder is linked into the task folder, and here a link is the plugin's
+    // checkout itself: the plugin's own worktree, mapped to the subfolder, is used instead.
+    if (!(yield* isRepository(projectRoot)) && (yield* insidePluginRepository(projectRoot))) {
+      if ((input.repositories ?? []).length === 0) return null;
+      return yield* new TaskFolderError({
+        operation: "plan",
+        detail:
+          "The project is a subfolder of a VCS plugin's repository, so other repositories cannot be checked out beside it. Open the repository root as the project to add them.",
+      });
+    }
     // A repository on another Windows drive has no place in the folder; only choosing it fails.
     const { anchor, unreachable } = layoutAnchor(
       path,
@@ -425,9 +536,11 @@ const make = Effect.gen(function* () {
       tracked.map((folder) => folder.path),
     );
     const reachable = tracked.filter((folder) => !unreachable.includes(folder.path));
+    // A repository whose plugin cannot create worktrees is left out of the folder, not linked.
+    const offered = reachable.filter((folder) => folder.worktree);
     let repositories: ReadonlyArray<ProjectTrackedFolder>;
     if (input.repositories === undefined) {
-      repositories = reachable.length <= TASK_FOLDER_DEFAULT_REPOSITORIES_MAX ? reachable : [];
+      repositories = offered.length <= TASK_FOLDER_DEFAULT_REPOSITORIES_MAX ? offered : [];
     } else {
       const selected = new Map<string, ProjectTrackedFolder>();
       for (const requested of input.repositories) {
@@ -442,6 +555,12 @@ const make = Effect.gen(function* () {
               folder === undefined
                 ? `"${requested.path}" is not a tracked folder of project "${project.title}".`
                 : `"${requested.path}" is not a Git repository, so it cannot get a worktree.`,
+          });
+        }
+        if (!folder.worktree) {
+          return yield* new TaskFolderError({
+            operation: "plan",
+            detail: `"${requested.path}" belongs to a VCS plugin that cannot create worktrees now.`,
           });
         }
         if (unreachable.includes(folder.path)) {
@@ -503,6 +622,22 @@ const make = Effect.gen(function* () {
    * Where a repository's branch starts: `baseBranch` when the repository has it, else its
    * default branch. The remote commit of either when starting from origin.
    */
+  // A VCS plugin's repository names its default branch in its refs; Git's comes from origin.
+  const defaultBranchOf = Effect.fnUntraced(function* (cwd: string) {
+    const kind =
+      plugins?.hasAny() === true
+        ? yield* git.vcsKind(cwd).pipe(
+            Effect.map((kind) => kind ?? undefined),
+            Effect.orElseSucceed(() => undefined),
+          )
+        : undefined;
+    if (kind === undefined || kind === GIT_VCS_KIND)
+      return yield* gitDriver.resolveDefaultBranchName(cwd, "origin");
+    return yield* git.listRefs({ cwd, refKind: "local" }).pipe(
+      Effect.map((result) => result.refs.find((ref) => ref.isDefault)?.name ?? null),
+      Effect.orElseSucceed(() => null),
+    );
+  });
   const repositoryStart = Effect.fn("TaskFolders.repositoryStart")(function* (
     cwd: string,
     startFromOrigin: boolean,
@@ -517,8 +652,7 @@ const make = Effect.gen(function* () {
       ((yield* git.hasCommit({ cwd, refName: `refs/heads/${wanted}` })) ||
         (yield* git.hasCommit({ cwd, refName: `refs/remotes/origin/${wanted}` })))
         ? wanted
-        : ((yield* gitDriver.resolveDefaultBranchName(cwd, "origin")) ??
-          (yield* git.currentBranch(cwd)));
+        : ((yield* defaultBranchOf(cwd)) ?? (yield* git.currentBranch(cwd)));
     let baseRef = "HEAD";
     if (defaultBranch !== null) {
       if (yield* git.hasCommit({ cwd, refName: `refs/heads/${defaultBranch}` }))
@@ -532,7 +666,10 @@ const make = Effect.gen(function* () {
         : null;
     return remoteBase === null
       ? { refName: baseRef, baseRefName: baseRef }
-      : { refName: remoteBase.commitSha, baseRefName: `refs/remotes/${remoteBase.remoteRefName}` };
+      : {
+          refName: remoteBase.commitSha,
+          baseRefName: remoteBase.baseRefName ?? `refs/remotes/${remoteBase.remoteRefName}`,
+        };
   });
 
   /**
@@ -588,6 +725,12 @@ const make = Effect.gen(function* () {
     return true;
   });
 
+  // Atelier fork: a file system mounted here is neither walked nor emptied, as a checkout is not.
+  const isMount = (target: string) =>
+    Effect.all([fileSystem.stat(target), fileSystem.stat(path.dirname(target))]).pipe(
+      Effect.map(([own, parent]) => own.dev !== parent.dev),
+    );
+
   /** Unlinks links and removes the folders that leaves empty; files and checkouts stay. */
   const removeLinks: (
     target: string,
@@ -600,6 +743,7 @@ const make = Effect.gen(function* () {
       if (!(yield* exists(target))) return true;
       if ((yield* fileSystem.stat(target)).type !== "Directory") return false;
       if (yield* isRepository(target)) return false;
+      if (yield* isMount(target)) return false;
       let empty = true;
       for (const name of yield* fileSystem.readDirectory(target)) {
         if (!(yield* removeLinks(path.join(target, name)))) empty = false;
@@ -614,6 +758,7 @@ const make = Effect.gen(function* () {
       if (!(yield* exists(target))) return true;
       if ((yield* fileSystem.stat(target)).type !== "Directory") return false;
       if (yield* isRepository(target)) return false;
+      if (yield* isMount(target)) return false;
       for (const name of yield* fileSystem.readDirectory(target)) {
         if (!(yield* holdsOnlyLinks(path.join(target, name)))) return false;
       }
@@ -805,7 +950,12 @@ const make = Effect.gen(function* () {
         ),
         Effect.orElseSucceed(() => false),
       );
-      if (!projectGone && input.force && input.inspect === undefined) {
+      if (
+        !projectGone &&
+        input.force &&
+        input.inspect === undefined &&
+        !(yield* holdsCheckout(projectPath))
+      ) {
         // Forced: what is left are files the thread wrote beside the links.
         projectGone = yield* fileSystem.remove(projectPath, { recursive: true, force: true }).pipe(
           Effect.as(true),
@@ -817,7 +967,12 @@ const make = Effect.gen(function* () {
     }
     if (kept.length === 0) {
       let rootGone = yield* removeLinks(taskFolder.root).pipe(Effect.orElseSucceed(() => false));
-      if (!rootGone && input.force && input.inspect === undefined) {
+      if (
+        !rootGone &&
+        input.force &&
+        input.inspect === undefined &&
+        !(yield* holdsCheckout(taskFolder.root))
+      ) {
         rootGone = yield* fileSystem.remove(taskFolder.root, { recursive: true, force: true }).pipe(
           Effect.as(true),
           Effect.orElseSucceed(() => false),
@@ -857,7 +1012,7 @@ const make = Effect.gen(function* () {
     const worktreePath = mapped(taskFolder, repository.path);
     yield* fileSystem.makeDirectory(path.dirname(worktreePath), { recursive: true });
     const start = yield* repositoryStart(repository.path, startFromOrigin, baseBranch);
-    yield* git.createWorktree({
+    const made = yield* git.createWorktree({
       cwd: repository.path,
       refName: start.refName,
       newRefName: branch,
@@ -865,6 +1020,7 @@ const make = Effect.gen(function* () {
       path: worktreePath,
     });
     return {
+      refName: made.worktree.refName,
       repository: {
         repositoryPath: repository.path,
         worktreePath,
@@ -993,7 +1149,7 @@ const make = Effect.gen(function* () {
         }
         if (taskPlan.projectIsRepository) {
           yield* fileSystem.makeDirectory(path.dirname(empty.projectPath), { recursive: true });
-          yield* git.createWorktree(
+          const made = yield* git.createWorktree(
             {
               cwd: taskPlan.projectRoot,
               refName: input.projectStart.refName,
@@ -1003,6 +1159,7 @@ const make = Effect.gen(function* () {
             },
             input.projectProgress === undefined ? {} : { progress: input.projectProgress },
           );
+          yield* onBranch("create", "project", branch, made);
         } else {
           yield* linkFolder(taskPlan.projectRoot, empty.projectPath, taskPlan.trackedRepositories);
         }
@@ -1030,14 +1187,19 @@ const make = Effect.gen(function* () {
               ).pipe(
                 Effect.tap((worktree) =>
                   Effect.suspend(() => {
+                    // Recorded first, so the rollback removes a checkout on another branch too.
                     created.push(worktree.repository);
                     repositoriesStartedFromOrigin ||= worktree.fromOrigin;
-                    return (
-                      input.onRepository?.({
-                        name: repository.name,
-                        done: created.length,
-                        total: taskPlan.repositories.length,
-                      }) ?? Effect.void
+                    return onBranch("create", repository.name, branch, {
+                      worktree: { refName: worktree.refName },
+                    }).pipe(
+                      Effect.andThen(
+                        input.onRepository?.({
+                          name: repository.name,
+                          done: created.length,
+                          total: taskPlan.repositories.length,
+                        }) ?? Effect.void,
+                      ),
                     );
                   }),
                 ),
@@ -1224,13 +1386,20 @@ const make = Effect.gen(function* () {
             });
           } else {
             const start = yield* repositoryStart(repositoryPath, startFromOrigin);
-            yield* git.createWorktree({
+            const made = yield* git.createWorktree({
               cwd: repositoryPath,
               refName: start.refName,
               newRefName: branch,
               baseRefName: start.baseRefName,
               path: worktreePath,
             });
+            yield* onBranch("add-repository", folder.name, branch, made).pipe(
+              Effect.tapError(() =>
+                removeCheckout({ repositoryPath, worktreePath }, true, undefined).pipe(
+                  Effect.ignoreCause({ log: true }),
+                ),
+              ),
+            );
           }
         }).pipe(
           Effect.onError(() => relink),
@@ -1292,6 +1461,9 @@ const make = Effect.gen(function* () {
     ];
     if (cwds.length === 0 || input.oldBranch === input.newBranch)
       return { branch: input.oldBranch };
+    // Atelier fork: one name everywhere, so a checkout whose VCS cannot rename keeps them all.
+    for (const cwd of cwds)
+      if (!(yield* git.canRenameBranch(cwd))) return { branch: input.oldBranch };
     const renameFailed = fail("create", "Could not rename the branch");
     const branch =
       input.exactName === true
@@ -1357,7 +1529,17 @@ const make = Effect.gen(function* () {
     const recreateMissing = Effect.fnUntraced(function* (checkout: TaskFolderCheckout) {
       if (yield* isRepository(checkout.worktreePath)) {
         // Another checkout in its place is not the thread's: resuming there would work on it.
-        if ((yield* linkedGitDir(checkout)) !== null) return;
+        // The plugin that owns the repository decides first, as the driver registry does.
+        const owned = yield* pluginOwnsRepository(checkout);
+        if (owned === null)
+          return yield* new TaskFolderError({
+            operation: "create",
+            detail: `The VCS of ${checkout.repositoryPath} did not answer, so the checkout at ${checkout.worktreePath} cannot be confirmed. Try again.`,
+          });
+        if (
+          owned ? yield* listedPluginCheckout(checkout) : (yield* linkedGitDir(checkout)) !== null
+        )
+          return;
         return yield* new TaskFolderError({
           operation: "create",
           detail: `${checkout.worktreePath} holds a checkout that is not a worktree of ${checkout.repositoryPath}. Move it away to restore the thread's worktree.`,

@@ -1,5 +1,7 @@
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import { ComposerContextLabel } from "./ComposerContextLabel";
+import { useVcsPlugin, VcsKindIcon } from "./VcsKindIcon";
+import { vcsAllows } from "@t3tools/client-runtime/state/vcs-capabilities";
 import { useRightPanelStore } from "../rightPanelStore";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
@@ -11,11 +13,11 @@ import {
   AuthSourceControlWriteScope,
   type ContextMenuItem,
   type EnvironmentId,
+  GIT_VCS_KIND,
   type VcsRef,
   type ThreadId,
 } from "@t3tools/contracts";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
-import { GitBranchIcon } from "lucide-react";
 import {
   useEffect,
   useEffectEvent,
@@ -265,6 +267,9 @@ export function BranchToolbarBranchSelector({
       ? null
       : vcsEnvironment.status({ environmentId, input: { cwd: activeProjectCwd } }),
   );
+  const vcsKind = branchStatusQuery.data?.capabilities?.kind;
+  const vcsPlugin = useVcsPlugin(environmentId, vcsKind);
+  const vcsLabel = vcsPlugin?.label ?? (vcsKind === GIT_VCS_KIND ? "Git" : null);
   const activeCheckoutRoot = branchStatusQuery.data?.workingTree.rootPath;
   const activeProjectCheckoutRoot = projectStatusQuery.data?.workingTree.rootPath;
   const trimmedBranchQuery = branchQuery.trim();
@@ -300,11 +305,20 @@ export function BranchToolbarBranchSelector({
           }).nextWorktreePath,
     });
   const checkoutPullRequestItemValue =
-    canChangeThreadBranch && prReference && onCheckoutPullRequestRequest
+    canChangeThreadBranch &&
+    prReference &&
+    onCheckoutPullRequestRequest &&
+    vcsAllows(branchStatusQuery.data, "pullRequest")
       ? `__checkout_pull_request__:${prReference}`
       : null;
+  // A VCS plugin starts no branch in place and cannot switch one: only its worktrees are offered.
+  const canSwitchRefs = vcsAllows(branchStatusQuery.data, "switchRef");
+  const canStartFromRemote = vcsAllows(branchStatusQuery.data, "startFromRemote");
   const canCreateBranch =
-    canChangeThreadBranch && !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
+    canChangeThreadBranch &&
+    canSwitchRefs &&
+    !isSelectingWorktreeBase &&
+    trimmedBranchQuery.length > 0;
   const newRefName = sanitizeNewRefName(trimmedBranchQuery);
   const hasExactBranchMatch = branchByName.has(newRefName);
   const createBranchItemValue = canCreateBranch
@@ -313,7 +327,9 @@ export function BranchToolbarBranchSelector({
   const pickerCreateBranchItemValue = hasExactBranchMatch ? null : createBranchItemValue;
   const branchPickerItems = [
     ...(checkoutPullRequestItemValue ? [checkoutPullRequestItemValue] : []),
-    ...refs.map((refName) => refName.name),
+    ...refs
+      .filter((ref) => canSwitchRefs || isSelectingWorktreeBase || ref.current || ref.worktreePath)
+      .map((refName) => refName.name),
     ...(pickerCreateBranchItemValue ? [pickerCreateBranchItemValue] : []),
   ];
   const filteredBranchPickerItems =
@@ -697,7 +713,7 @@ export function BranchToolbarBranchSelector({
       effectiveEnvMode,
       resolvedActiveBranch,
       resolvedActiveBranchIsRemote,
-      startFromOrigin,
+      startFromOrigin: startFromOrigin && canStartFromRemote,
     },
     messages,
   );
@@ -838,7 +854,7 @@ export function BranchToolbarBranchSelector({
             : "branch"
       }
       originControl={
-        isSelectingWorktreeBase
+        isSelectingWorktreeBase && canStartFromRemote
           ? { checked: startFromOrigin, onCheckedChange: onStartFromOriginChange }
           : undefined
       }
@@ -890,13 +906,15 @@ export function BranchToolbarBranchSelector({
             className="min-w-0 max-w-full active:scale-100"
             disabled={isInitialBranchesLoadPending || isBranchActionPending}
             // NVDA browse mode re-reads a combobox when its attributes change, not when its text does.
-            aria-label={gt("Branch: {branch}", { branch: triggerLabel })}
+            aria-label={
+              vcsLabel
+                ? gt("{vcs} branch: {branch}", { vcs: vcsLabel, branch: triggerLabel })
+                : gt("Branch: {branch}", { branch: triggerLabel })
+            }
           >
-            <GitBranchIcon
-              className={cn(
-                "size-3 shrink-0",
-                displayMode === "panel" && THREAD_DETAILS_PANEL_ICON_CLASS,
-              )}
+            <VcsKindIcon
+              plugin={vcsPlugin}
+              {...(displayMode === "panel" ? { className: THREAD_DETAILS_PANEL_ICON_CLASS } : {})}
             />
             <ComposerContextLabel displayMode={displayMode}>
               <MiddleTruncate

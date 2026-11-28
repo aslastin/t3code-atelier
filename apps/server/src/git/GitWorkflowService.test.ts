@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import {
+  ProjectId,
   VcsDriverKind,
   type VcsStatusResult,
   type VcsDriverCapabilities,
@@ -85,13 +86,26 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
         refName: "trunk",
         hasPrimaryRemote: false,
         hasWorkingTreeChanges: true,
-        workingTree: { files: [], insertions: 0, deletions: 0 },
+        workingTree: {
+          files: [{ path: "a.txt", insertions: 1, deletions: 0 }],
+          insertions: 1,
+          deletions: 0,
+        },
         hasUpstream: true,
         aheadCount: 1,
         behindCount: 2,
         pr: null,
       };
       const commits: string[] = [];
+      const written: Array<{
+        summary: string;
+        patch: string;
+        subjects: ReadonlyArray<string> | undefined;
+        includeBranch: boolean | undefined;
+      }> = [];
+      const branches: string[] = [];
+      const diffPaths: Array<ReadonlyArray<string> | undefined> = [];
+      const projects: Array<string | undefined> = [];
       const driver = testVcsDriver({
         capabilities,
         workflow: {
@@ -101,6 +115,23 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
             Effect.sync(() => {
               commits.push(input.commitMessage ?? "");
               return { status: "created" as const, commitSha: "abc" };
+            }),
+          workingDiff: (input) =>
+            Effect.sync(() => {
+              diffPaths.push(input.filePaths);
+              return "diff --git a/a.txt b/a.txt";
+            }),
+          recentCommitSubjects: () => Effect.succeed(["Fix the parser"]),
+          listRefs: (input) =>
+            Effect.succeed({
+              refs:
+                input.refKind === "remote"
+                  ? [{ name: "origin/trunk", isRemote: true, remoteName: "origin" }]
+                  : [{ name: "trunk" }, { name: "feature/change-a-txt" }],
+            } as never),
+          createBranch: (input) =>
+            Effect.sync(() => {
+              branches.push(input.refName);
             }),
         },
       });
@@ -127,7 +158,22 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
               resolve: () => Effect.succeed(handle),
             }),
             Layer.mock(GitVcsDriver.GitVcsDriver)({}),
-            Layer.mock(GitManager.GitManager)({}),
+            Layer.mock(GitManager.GitManager)({
+              writeCommitMessage: (input) =>
+                Effect.sync(() => {
+                  projects.push(input.projectId);
+                  written.push({
+                    summary: input.summary,
+                    patch: input.patch,
+                    subjects: input.subjects,
+                    includeBranch: input.includeBranch,
+                  });
+                  return {
+                    commitMessage: "Change a.txt",
+                    ...(input.includeBranch ? { branch: "change-a-txt" } : {}),
+                  };
+                }),
+            }),
           ),
         ),
       );
@@ -168,6 +214,152 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("GitWorkflowServi
       assert.deepEqual(commits, ["save"]);
       assert.equal(result.commit.commitSha, "abc");
       assert.deepEqual(events, ["action_started", "phase_started", "action_finished"]);
+      // A typed message with nothing changed among the selection is skipped, as for Git.
+      const unchanged = yield* workflow.runStackedAction({
+        ...action,
+        action: "commit",
+        filePaths: ["gone.txt"],
+      });
+      assert.equal(unchanged.commit.status, "skipped_no_changes");
+      assert.deepEqual(commits, ["save"]);
+
+      // Without a typed message, it is written from the driver's status, patch and log, as for Git.
+      yield* workflow.runStackedAction({
+        cwd,
+        actionId: "generated",
+        action: "commit",
+        projectId: ProjectId.make("project-1"),
+      });
+      // Committing everything still names the files, for a diff that takes a file list.
+      assert.deepEqual(diffPaths, [["a.txt"]]);
+      assert.deepEqual(projects, ["project-1"]);
+      const writtenFor = (includeBranch: boolean) => ({
+        summary: "a.txt (+1 -0)",
+        patch: "diff --git a/a.txt b/a.txt",
+        subjects: ["Fix the parser"],
+        includeBranch,
+      });
+      assert.deepEqual(written, [writtenFor(false)]);
+      assert.deepEqual(commits, ["save", "Change a.txt"]);
+
+      // On a new branch: named with the message, made unique among the driver's refs.
+      const onBranch = yield* workflow.runStackedAction({
+        cwd,
+        actionId: "branch",
+        action: "commit",
+        featureBranch: true,
+      });
+      assert.deepEqual(written, [writtenFor(false), writtenFor(true)]);
+      assert.deepEqual(branches, ["feature/change-a-txt-2"]);
+      assert.deepEqual(onBranch.branch, { status: "created", name: "feature/change-a-txt-2" });
+      assert.deepEqual(commits, ["save", "Change a.txt", "Change a.txt"]);
+      // A name the plugin could not read back is refused before a branch is started.
+      const lineBreak = yield* workflow
+        .runStackedAction({
+          cwd,
+          actionId: "line-break",
+          action: "commit",
+          featureBranch: true,
+          filePaths: ["a\nb.txt"],
+          commitMessage: "save",
+        })
+        .pipe(Effect.flip);
+      assert.include(lineBreak, { _tag: "VcsUnsupportedOperationError" });
+      assert.deepEqual(branches, ["feature/change-a-txt-2"]);
+      // So is one among all the changes, when none are selected.
+      const statusFiles = status.workingTree.files;
+      (status.workingTree as { files: typeof statusFiles }).files = [
+        ...statusFiles,
+        { path: "c\nd.txt", insertions: 1, deletions: 0 },
+      ];
+      const allFiles = yield* workflow
+        .runStackedAction({ cwd, actionId: "all", action: "commit", featureBranch: true })
+        .pipe(Effect.flip);
+      assert.include(allFiles, { _tag: "VcsUnsupportedOperationError" });
+      assert.deepEqual(branches, ["feature/change-a-txt-2"]);
+      (status.workingTree as { files: typeof statusFiles }).files = statusFiles;
+
+      // A remote-tracking base is checked against the driver's remote refs.
+      assert.isTrue(yield* workflow.hasCommit({ cwd, refName: "refs/remotes/origin/trunk" }));
+      assert.isFalse(yield* workflow.hasCommit({ cwd, refName: "refs/remotes/origin/gone" }));
+
+      // A driver that commits every change refuses selected files before starting a branch.
+      const removed: string[] = [];
+      let pendingFiles: VcsStatusResult["workingTree"]["files"] = [];
+      const wholeOnly = {
+        ...handle,
+        driver: testVcsDriver({
+          capabilities: { ...capabilities, supportsPartialCommit: false },
+          workflow: {
+            ...driver.workflow!,
+            status: (input) =>
+              Effect.sync(() =>
+                input.cwd === "/worktrees/topic"
+                  ? { ...status, workingTree: { ...status.workingTree, files: pendingFiles } }
+                  : status,
+              ),
+            createWorktree: (input) =>
+              Effect.succeed({
+                worktree: { path: "/worktrees/topic", projectPath: null, refName: input.refName },
+              }),
+            removeWorktree: (input) =>
+              Effect.sync(() => {
+                removed.push(input.path);
+              }),
+          },
+        }),
+      };
+      const refusingWorkflow = yield* GitWorkflowService.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
+              hasAdditionalDrivers: true,
+              detect: () => Effect.succeed(wholeOnly),
+              resolve: () => Effect.succeed(wholeOnly),
+            }),
+            Layer.mock(GitVcsDriver.GitVcsDriver)({}),
+            Layer.mock(GitManager.GitManager)({}),
+          ),
+        ),
+      );
+      const refused = yield* refusingWorkflow
+        .runStackedAction({
+          cwd,
+          actionId: "partial",
+          action: "commit",
+          featureBranch: true,
+          filePaths: ["a.txt"],
+          commitMessage: "save",
+        })
+        .pipe(Effect.flip);
+      assert.include(refused, { _tag: "VcsUnsupportedOperationError" });
+      assert.deepEqual(branches, ["feature/change-a-txt-2"]);
+
+      // A new checkout without the project's folder lets the launch choose, as for Git.
+      let missingFolder:
+        | Parameters<NonNullable<GitVcsDriver.CreateWorktreeOptions["onMissingProjectFolder"]>>[0]
+        | null = null;
+      yield* refusingWorkflow.createWorktree(
+        { cwd: `${cwd}/app`, refName: "trunk", newRefName: "topic", path: null },
+        {
+          onMissingProjectFolder: (input) =>
+            Effect.sync(() => {
+              missingFolder = input;
+            }),
+        },
+      );
+      assert.equal(missingFolder!.root, "/worktrees/topic");
+      yield* missingFolder!.verify;
+      // Work saved there while the launch waited is never discarded.
+      pendingFiles = [{ path: "draft.txt", insertions: 1, deletions: 0 }];
+      yield* missingFolder!.discard("topic").pipe(Effect.flip);
+      assert.deepEqual(removed, []);
+      pendingFiles = [];
+      yield* missingFolder!.discard("topic");
+      assert.deepEqual(removed, ["/worktrees/topic"]);
+      // A branch the plugin keeps would be created again on the retry.
+      const kept = yield* missingFolder!.discard("trunk").pipe(Effect.flip);
+      assert.include(kept.message, "keeps the branch trunk");
     }),
   );
 

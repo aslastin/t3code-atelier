@@ -1,3 +1,4 @@
+import { vcsAllows } from "@t3tools/client-runtime/state/vcs-capabilities";
 import { ActiveNewTaskContext } from "../../state/active-new-task";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { msg, useMessages } from "gt-react-native";
@@ -149,6 +150,10 @@ type NewTaskFlowContextValue = {
   readonly workspaceMode: WorkspaceMode;
   readonly isGitRepo: boolean;
   readonly isGitRepoKnown: boolean;
+  /** False when the project's VCS plugin cannot create worktrees. */
+  readonly offersWorktrees: boolean;
+  /** False when the project's VCS plugin cannot switch branches in place. */
+  readonly canSwitchRefs: boolean;
   /** The project tracks a Git folder, so a worktree is possible without a Git project folder. */
   readonly tracksGitRepositories: boolean;
   /** The project's tracked Git folders; null while they load. */
@@ -164,6 +169,8 @@ type NewTaskFlowContextValue = {
     selection: ComposerDraftWorkspaceSelection | undefined,
   ) => ComposerDraftWorkspaceSelection;
   readonly startFromOrigin: boolean;
+  /** Atelier fork: false for a VCS plugin's repository, which cannot fetch a remote base. */
+  readonly offersStartFromRemote: boolean;
   readonly pullRequestReference: string | undefined;
   readonly draftKey: string | null;
   readonly prompt: string;
@@ -413,11 +420,18 @@ export function NewTaskFlowProvider(
     Arr.filter((branch) => !branch.isRemote),
   );
 
+  // The VCS decides what can run: without worktrees, a worktree default or saved choice resolves
+  // as local, so its branch is the checkout's, not a worktree base.
+  const offersWorktrees = vcsAllows(projectGitStatus.data, "worktree");
+  const canSwitchRefs = vcsAllows(projectGitStatus.data, "switchRef");
   const resolveWorkspaceSelection = (selection: ComposerDraftWorkspaceSelection | undefined) =>
     resolveNewTaskDraftWorkspace({
-      selection,
+      selection:
+        selection !== undefined && !offersWorktrees && selection.mode === "worktree"
+          ? { ...selection, mode: "local", branch: null, worktreePath: null }
+          : selection,
       canChooseWorkspace,
-      defaultMode: defaultWorkspaceMode,
+      defaultMode: offersWorktrees ? defaultWorkspaceMode : "local",
       defaultModeSettled: projectDefaults.defaultWorkspaceModeSettled,
       isGitRepo,
       tracksGitRepositories,
@@ -425,7 +439,7 @@ export function NewTaskFlowProvider(
       projectCwd: selectedProject?.workspaceRoot ?? null,
     });
   const workspaceSelection = resolveWorkspaceSelection(selectedProjectDraft.workspaceSelection);
-  const workspaceMode = workspaceSelection.mode;
+  const workspaceMode = offersWorktrees ? workspaceSelection.mode : "local";
   const selectedBranchName = workspaceSelection.branch;
   const selectedWorktreePath = workspaceSelection.worktreePath;
   // A new worktree does not exist yet, so the project root stands in for it.
@@ -446,8 +460,11 @@ export function NewTaskFlowProvider(
     { choices: worktreeRepositoryChoices, chosen: draftRepositories },
     messages,
   );
+  const offersStartFromRemote = vcsAllows(projectGitStatus.data, "startFromRemote");
   const startFromOrigin =
-    isGitRepo && (draftStartFromOrigin ?? projectSettings.settings.newWorktreesStartFromOrigin);
+    isGitRepo &&
+    offersStartFromRemote &&
+    (draftStartFromOrigin ?? projectSettings.settings.newWorktreesStartFromOrigin);
   const defaultRuntimeMode = projectSettings.settings.defaultRuntimeMode;
   const managedPolicy = selectedEnvironmentServerConfig?.managedPolicy;
   const runtimeMode = resolveNewThreadRuntimeMode(
@@ -813,7 +830,8 @@ export function NewTaskFlowProvider(
       return null;
     }
     const workspaceSelection = resolveWorkspaceSelection(draft.workspaceSelection);
-    const mode = workspaceSelection.mode;
+    // A saved or default worktree mode the repository's VCS cannot run sends as local, as shown.
+    const mode = offersWorktrees ? workspaceSelection.mode : "local";
     return {
       environmentId: selectedProject.environmentId,
       threadId: ThreadId.make(metadata.threadId),
@@ -923,6 +941,8 @@ export function NewTaskFlowProvider(
     workspaceMode,
     isGitRepo,
     isGitRepoKnown: knownIsGitRepo !== null,
+    offersWorktrees,
+    canSwitchRefs,
     tracksGitRepositories,
     worktreeRepositoryChoices,
     worktreeRepositorySelection,
@@ -933,6 +953,7 @@ export function NewTaskFlowProvider(
     workspaceCwd,
     resolveWorkspaceSelection,
     startFromOrigin,
+    offersStartFromRemote,
     draftKey: selectedProjectDraftKey,
     pullRequestReference: selectedProjectDraft.workspaceSelection?.pullRequestReference,
     prompt,

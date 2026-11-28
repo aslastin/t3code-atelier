@@ -173,6 +173,12 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeProjectClones]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeThreadTopics]: AuthOrchestrationReadScope,
   [WS_METHODS.threadTopicsMutate]: AuthOrchestrationOperateScope,
+  [WS_METHODS.pluginsList]: AuthOrchestrationReadScope,
+  // A plugin's commands run on this machine, as an update's do.
+  [WS_METHODS.pluginsImport]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.pluginsRemove]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.pluginsSetEnabled]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.pluginsRecheck]: AuthEnvironmentMaintainScope,
   [WS_METHODS.projectsListEntries]: AuthFilesystemReadScope,
   [WS_METHODS.projectsListIgnoredFiles]: AuthFilesystemReadScope,
   [WS_METHODS.projectsReadFile]: AuthFilesystemReadScope,

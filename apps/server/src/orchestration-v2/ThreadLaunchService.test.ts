@@ -153,6 +153,7 @@ interface HarnessOptions {
   readonly remoteExists?: GitWorkflow.GitWorkflowService["Service"]["remoteExists"];
   readonly hasCommit?: GitWorkflow.GitWorkflowService["Service"]["hasCommit"];
   readonly renameBranch?: GitWorkflow.GitWorkflowService["Service"]["renameBranch"];
+  readonly canRenameBranch?: GitWorkflow.GitWorkflowService["Service"]["canRenameBranch"];
   readonly runSetup?: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"];
   readonly generateTitle?: TextGeneration.TextGeneration["Service"]["generateThreadTitle"];
   readonly generateBranchName?: TextGeneration.TextGeneration["Service"]["generateBranchName"];
@@ -246,6 +247,7 @@ function makeHarness(options: HarnessOptions = {}) {
       repositoryRoot: () => Effect.succeed(project.workspaceRoot),
       createWorktree,
       renameBranch,
+      canRenameBranch: options.canRenameBranch ?? (() => Effect.succeed(true)),
       fetchWorktreeBaseCommit:
         options.fetchWorktreeBaseCommit ??
         (() => Effect.succeed({ commitSha: "remote-main-sha", remoteRefName: "origin/main" })),
@@ -1516,6 +1518,29 @@ it.effect(
   },
 );
 
+it.effect(
+  "keeps a temporary branch, without naming it, when the checkout's VCS cannot rename",
+  () => {
+    const harness = makeHarness({ canRenameBranch: () => Effect.succeed(false) });
+    return Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "no-rename",
+          thread: "no-rename-thread",
+          message: "Fix the parser",
+          workspace: { type: "worktree", baseRef: "main" },
+        }),
+      );
+      const projection = yield* preparationSettled(launched.threadId);
+      assert.equal(projection.runs[0]?.status, "starting");
+      assert.match(projection.thread.branch!, /^t3\/[0-9a-f]{8}$/);
+      assert.equal(harness.generateBranchName.mock.calls.length, 0);
+      assert.equal(harness.renameBranch.mock.calls.length, 0);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
 it.effect("renames a temporary branch with a configured prefix when generation succeeds", () => {
   const harness = makeHarness({
     serverSettings: { branchNamingMode: "static", branchNamePrefix: "my-prefix" },
@@ -2311,6 +2336,42 @@ it.effect("fetches the origin base from the remote it already resolved", () => {
     });
   }).pipe(Effect.provide(harness.layer));
 });
+
+it.effect("starts a worktree from the base a VCS plugin fetched, named as the plugin gave it", () =>
+  Effect.gen(function* () {
+    const created =
+      yield* Deferred.make<
+        Parameters<GitWorkflow.GitWorkflowService["Service"]["createWorktree"]>[0]
+      >();
+    const harness = makeHarness({
+      fetchWorktreeBaseCommit: () =>
+        Effect.succeed({
+          commitSha: "kite/main",
+          remoteRefName: "kite/main",
+          baseRefName: "kite/main",
+        }),
+      createWorktree: (input) =>
+        Deferred.succeed(created, input).pipe(
+          Effect.as({
+            worktree: { path: "/repo-worktrees/feature", refName: input.newRefName! },
+          } as never),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      yield* launches.launch(
+        launchInput({
+          command: "command:launch:plugin-remote-base",
+          thread: "thread:launch:plugin-remote-base",
+          workspace: { type: "worktree", baseRef: "main", startFromOrigin: true },
+        }),
+      );
+      const input = yield* Deferred.await(created);
+      assert.equal(input.refName, "kite/main");
+      assert.equal(input.baseRefName, "kite/main");
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
 
 it.effect("shows the fetch diagnosis when preparing a worktree from origin fails", () => {
   const detail =

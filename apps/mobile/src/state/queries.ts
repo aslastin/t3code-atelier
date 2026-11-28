@@ -468,6 +468,7 @@ export function useComposerPathSearch(target: ComposerPathSearchTarget) {
       !isSameCheckout ||
       normalizedTarget.query !== debouncedTarget.query ||
       (hasTarget && (fileAccess.isPending || result.isPending)),
+    unavailable: isSameCheckout && hasTarget && result.data?.unavailable === true,
     refresh: result.refresh,
   };
 }

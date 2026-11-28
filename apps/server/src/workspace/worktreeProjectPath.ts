@@ -1,6 +1,9 @@
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
+
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 
 import { resolveWorkspaceLocation } from "./workspaceLease.ts";
 import { WorkspacePathOutsideRootError } from "./WorkspacePaths.ts";
@@ -29,6 +32,29 @@ export const worktreeProjectFolder = Effect.fn("worktreeProjectFolder")(
   Effect.orElseSucceed(() => null),
 );
 
+/** Whether `folder` is a checkout root: Git's, or an installed VCS plugin's. */
+export const isCheckoutRoot = Effect.fn("isCheckoutRoot")(
+  function* (
+    fs: FileSystem.FileSystem,
+    path: Path.Path,
+    folder: string,
+    /** Marker paths of VCS plugins; those of every installed plugin when left out. */
+    markers?: ReadonlyArray<string>,
+  ) {
+    const rootMarkers =
+      markers ??
+      Option.match(yield* Effect.serviceOption(VcsPluginDrivers), {
+        onNone: () => [],
+        onSome: (plugins) => plugins.installedMarkers(),
+      });
+    for (const marker of [".git", ...rootMarkers]) {
+      if (yield* fs.exists(path.join(folder, marker))) return true;
+    }
+    return false;
+  },
+  Effect.orElseSucceed(() => false),
+);
+
 // A removed checkout has no gitfile. Match the source project's subfolder component by component
 // so recovery can find the same root, while a stored checkout root keeps its original meaning.
 export const worktreeRootForProject = Effect.fn("worktreeRootForProject")(
@@ -38,7 +64,17 @@ export const worktreeRootForProject = Effect.fn("worktreeRootForProject")(
     folder: string,
     projectCwd: string | Effect.Effect<string | undefined>,
     isManagedRoot?: (candidate: string) => Effect.Effect<boolean>,
+    /** Marker paths of VCS plugins, which mark a checkout root as `.git` does. */
+    markers?: ReadonlyArray<string>,
   ) {
+    // Without explicit markers, those of every installed plugin: a checkout stays one while its
+    // plugin is off.
+    const rootMarkers =
+      markers ??
+      Option.match(yield* Effect.serviceOption(VcsPluginDrivers), {
+        onNone: () => [],
+        onSome: (plugins) => plugins.installedMarkers(),
+      });
     const resolved = path.resolve(folder);
     if (resolved !== folder) {
       const trailing = folder.slice(resolved.length);
@@ -49,7 +85,13 @@ export const worktreeRootForProject = Effect.fn("worktreeRootForProject")(
         return folder;
       folder = resolved;
     }
-    const hasGit = (dir: string) => fs.exists(path.join(dir, ".git"));
+    const hasGit = Effect.fnUntraced(function* (dir: string) {
+      if (yield* fs.exists(path.join(dir, ".git"))) return true;
+      for (const marker of rootMarkers) {
+        if (yield* fs.exists(path.join(dir, marker))) return true;
+      }
+      return false;
+    });
     const gitDirectory = (dir: string) =>
       fs.stat(path.join(dir, ".git")).pipe(
         Effect.flatMap((info) =>

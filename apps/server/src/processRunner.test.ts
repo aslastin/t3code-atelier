@@ -120,6 +120,37 @@ describe("runProcess", () => {
     );
   });
 
+  it.effect("refuses a Windows batch file when the caller forbids a shell", () => {
+    let spawned = false;
+    const spawner = makeSpawner(() =>
+      Effect.sync(() => {
+        spawned = true;
+        return makeHandle({ stdout: "" });
+      }),
+    );
+    return runWith(spawner)({
+      command: "az",
+      args: ["feature & release"],
+      env: {},
+      forbidShell: true,
+    }).pipe(
+      Effect.flip,
+      Effect.provideService(HostProcess.Platform, "win32"),
+      Effect.provideService(HostProcess.Environment, {
+        PATH: "C:\\Users\\tester\\AppData\\Roaming\\npm",
+        PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      }),
+      Effect.provideService(
+        SpawnExecutableResolution,
+        () => "C:\\Users\\tester\\AppData\\Roaming\\npm\\az.cmd",
+      ),
+      Effect.map((error) => {
+        expect(error._tag).toBe("ProcessSpawnError");
+        expect(spawned).toBe(false);
+      }),
+    );
+  });
+
   it.effect("types spawn failures that the platform spawner throws synchronously", () =>
     Effect.gen(function* () {
       // File-valued PATH entries make spawn throw ENOTDIR synchronously, arriving through Effect.callback as a defect.

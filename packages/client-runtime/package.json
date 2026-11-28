@@ -391,6 +391,14 @@
       "types": "./src/state/sourceControl.ts",
       "default": "./src/state/sourceControl.ts"
     },
+    "./state/plugins": {
+      "types": "./src/state/plugins.ts",
+      "default": "./src/state/plugins.ts"
+    },
+    "./state/vcs-capabilities": {
+      "types": "./src/state/vcsCapabilities.ts",
+      "default": "./src/state/vcsCapabilities.ts"
+    },
     "./state/thread-topics": {
       "types": "./src/state/threadTopics.ts",
       "default": "./src/state/threadTopics.ts"

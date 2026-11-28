@@ -15,6 +15,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import { holdsRepository as holdsRepositoryBelow } from "../workspace/holdsRepository.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -22,6 +23,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import type * as ServerConfig from "../config.ts";
 import type * as ServerSettings from "../serverSettings.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
@@ -42,6 +44,7 @@ import { CheckpointRestoreError, CheckpointServiceV2 } from "./CheckpointService
 import { EventSinkV2 } from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
+import { removeEmptyDirectory } from "../vcs/removeEmptyDirectory.ts";
 import { GIT_INDEX_LOCKED_DETAIL } from "../vcs/VcsProcess.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -62,6 +65,7 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
       "unexpected-failure",
       "shared-workspace",
       "worktree-has-files",
+      "worktree-recreate-failed",
     ]),
     threadId: ThreadId,
     providerThreadId: ProviderThreadId,
@@ -81,6 +85,8 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
         return SHARED_WORKSPACE_RESTORE_MESSAGE;
       case "worktree-has-files":
         return "Move the remaining files out of the worktree before restoring this project folder.";
+      case "worktree-recreate-failed":
+        return "The thread's worktree is gone and could not be recreated on its branch, so nothing was rolled back. The server log has the reason.";
       case "unexpected-failure":
         return ROLLBACK_FAILED_MESSAGE;
     }
@@ -98,7 +104,8 @@ const isRuntimePolicyAboveCeilingError = Schema.is(RuntimePolicyAboveCeilingErro
  * output, so they fall back to the generic message.
  */
 export function rollbackFailureClientMessage(error: CheckpointRollbackExecutionError): string {
-  if (error.reason === "worktree-has-files") return error.message;
+  if (error.reason === "worktree-has-files" || error.reason === "worktree-recreate-failed")
+    return error.message;
   if (isRuntimePolicyAboveCeilingError(error.cause)) return error.cause.message;
   const restoreCause = isCheckpointRestoreError(error.cause) ? error.cause.cause : undefined;
   return isVcsProcessExitError(restoreCause) && restoreCause.detail === GIT_INDEX_LOCKED_DETAIL
@@ -156,6 +163,22 @@ export const layer: Layer.Layer<
     const taskFolders = yield* TaskFolders.TaskFolders;
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
+    const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
+    const rootMarkers = () => plugins?.installedMarkers() ?? [];
+    // A VCS plugin's checkout carries its marker where a Git checkout carries `.git`, even
+    // while that plugin is off: its folder is never a leftover to set aside.
+    const hasPluginMarker = Effect.fnUntraced(function* (folder: string) {
+      for (const marker of plugins?.installedMarkers() ?? []) {
+        if (yield* fileSystem.exists(path.join(folder, marker))) return true;
+      }
+      return false;
+    });
+    const hasCheckout = Effect.fnUntraced(function* (folder: string) {
+      for (const marker of [".git", ...(plugins?.installedMarkers() ?? [])]) {
+        if (yield* fileSystem.exists(path.join(folder, marker))) return true;
+      }
+      return false;
+    });
 
     const checkoutRoot = (thread: { projectId: ProjectId }, folder: string) =>
       worktreeRootForProject(
@@ -167,6 +190,7 @@ export const layer: Layer.Layer<
           Effect.orElseSucceed(() => undefined),
         ),
         isManagedWorktreePath,
+        rootMarkers(),
       );
     const execute = Effect.fn("orchestrationV2.checkpointRollback.execute")(function* (input: {
       readonly threadId: ThreadId;
@@ -276,6 +300,14 @@ export const layer: Layer.Layer<
           },
           replacedCheckoutRoot,
         );
+      const recreateFailed = (cause: unknown) =>
+        new CheckpointRollbackExecutionError({
+          reason: "worktree-recreate-failed",
+          threadId: input.threadId,
+          providerThreadId: input.providerThreadId,
+          checkpointId: input.checkpointId,
+          cause,
+        });
       const sharedWorkspace = () =>
         new CheckpointRollbackExecutionError({
           reason: "shared-workspace",
@@ -284,29 +316,83 @@ export const layer: Layer.Layer<
           checkpointId: input.checkpointId,
         });
 
+      // Atelier fork: a plugin's shadow checkpoints are keyed by path, so another checkout of the
+      // same VCS put there since would pass for the thread's. Only the project's own checkout, or
+      // one its VCS lists, is restored into, whether or not the thread has a branch.
+      if (
+        taskFolder === null &&
+        worktreePath != null &&
+        restoreFiles &&
+        (yield* fileSystem.exists(worktreePath)) &&
+        (yield* hasPluginMarker(worktreePath))
+      ) {
+        const project = yield* projects.get(context.thread.projectId);
+        const real = (target: string) =>
+          fileSystem.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
+        const own = yield* real(worktreePath);
+        let owned = false;
+        if (Option.isSome(project)) {
+          const root = project.value.workspaceRoot;
+          const repositoryRoot = yield* gitWorkflow
+            .repositoryRoot(root)
+            .pipe(Effect.orElseSucceed(() => null));
+          const listed = yield* gitWorkflow
+            .listWorktrees(root)
+            .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+          for (const entry of [
+            root,
+            ...(repositoryRoot === null ? [] : [repositoryRoot]),
+            ...listed,
+          ])
+            if ((yield* real(entry)) === own) owned = true;
+        }
+        if (!owned)
+          return yield* new CheckpointRollbackExecutionError({
+            reason: "worktree-has-files",
+            threadId: input.threadId,
+            providerThreadId: input.providerThreadId,
+            checkpointId: input.checkpointId,
+          });
+      }
       if (taskFolder !== null && branch != null) {
         // Cleanup can remove any of the folder's checkouts; the linked project folder has none.
-        yield* taskFolders.restore({
-          taskFolder,
-          branch,
-          recreate: (checkout) =>
-            gitWorkflow.pruneWorktrees({ cwd: checkout.repositoryPath }).pipe(
-              Effect.andThen(
-                gitWorkflow.createWorktree({
-                  cwd: checkout.repositoryPath,
-                  refName: branch,
-                  path: checkout.worktreePath,
-                }),
+        // A conversation-only rewind needs no files, so a sibling checkout that cannot be
+        // confirmed, such as one whose plugin is off, does not stop it.
+        yield* taskFolders
+          .restore({
+            taskFolder,
+            branch,
+            recreate: (checkout) =>
+              gitWorkflow.pruneWorktrees({ cwd: checkout.repositoryPath }).pipe(
+                Effect.andThen(
+                  gitWorkflow.createWorktree({
+                    cwd: checkout.repositoryPath,
+                    refName: branch,
+                    path: checkout.worktreePath,
+                  }),
+                ),
+                Effect.mapError(recreateFailed),
               ),
+          })
+          .pipe(
+            Effect.catch((cause) =>
+              restoreFiles
+                ? Effect.fail(cause)
+                : Effect.logWarning(
+                    "A conversation-only rewind left a task folder checkout as is",
+                    {
+                      cause,
+                    },
+                  ),
             ),
-        });
+          );
       } else if (worktreePath != null && branch != null) {
         // Recreated only where the server would have made it, as turn start does.
         // A failed removal can leave the folder without its checkout; only a file restore replaces it.
         const leftover =
           restoreFiles &&
           (yield* fileSystem.exists(worktreePath)) &&
-          !(yield* fileSystem.exists(path.join(worktreePath, ".git")));
+          !(yield* hasCheckout(worktreePath));
         if (
           (leftover || !(yield* fileSystem.exists(worktreePath))) &&
           (yield* isManagedWorktreePath(worktreePath))
@@ -321,6 +407,7 @@ export const layer: Layer.Layer<
                   path: worktreePath,
                 }),
               ),
+              Effect.mapError(recreateFailed),
             );
             const nested = folder !== null && path.relative(worktreePath, folder) !== "";
             if (leftover && !(yield* isolated(worktreePath))) return yield* sharedWorkspace();
@@ -334,7 +421,7 @@ export const layer: Layer.Layer<
             }
             if (leftover && !nested) {
               // Set aside, not removed: a checkout that fails puts the folder and its files back.
-              yield* Effect.acquireUseRelease(
+              const aside = yield* Effect.acquireUseRelease(
                 Effect.gen(function* () {
                   const aside = yield* fileSystem.makeTempDirectory({
                     directory: path.dirname(worktreePath),
@@ -343,27 +430,55 @@ export const layer: Layer.Layer<
                   yield* fileSystem.rename(worktreePath, path.join(aside, "folder"));
                   return aside;
                 }),
-                () => recreate,
+                (aside) => Effect.as(recreate, aside),
                 (aside, exit) =>
-                  (Exit.isSuccess(exit)
+                  Exit.isSuccess(exit)
                     ? Effect.void
-                    : fileSystem
-                        .remove(worktreePath, { recursive: true, force: true })
-                        .pipe(
-                          Effect.andThen(
-                            fileSystem.rename(path.join(aside, "folder"), worktreePath),
-                          ),
-                        )
-                  ).pipe(
-                    Effect.andThen(fileSystem.remove(aside, { recursive: true, force: true })),
-                    Effect.catchCause((cause) =>
-                      Effect.logWarning("Edit from here left a worktree folder set aside", {
-                        worktreePath,
-                        setAside: path.join(aside, "folder"),
-                        cause,
-                      }),
-                    ),
-                  ),
+                    : // Only an empty folder is cleared for the old one: files that appeared there
+                      // meanwhile, which the failed checkout refused, are not deleted.
+                      fileSystem.exists(worktreePath).pipe(
+                        Effect.flatMap((present) =>
+                          present
+                            ? removeEmptyDirectory(worktreePath).pipe(
+                                Effect.filterOrFail(
+                                  (removed) => removed,
+                                  () => `${worktreePath} holds files again`,
+                                ),
+                              )
+                            : Effect.void,
+                        ),
+                        Effect.andThen(fileSystem.rename(path.join(aside, "folder"), worktreePath)),
+                        Effect.andThen(fileSystem.remove(aside, { recursive: true, force: true })),
+                        Effect.catchCause((cause) =>
+                          Effect.logWarning("Edit from here left a worktree folder set aside", {
+                            worktreePath,
+                            setAside: path.join(aside, "folder"),
+                            cause,
+                          }),
+                        ),
+                      ),
+              );
+              // Atelier fork: kept until the whole rewind is done, so a checkpoint found
+              // unrestorable later does not cost the files left there. A repository or a mount
+              // inside, which no checkpoint saved, keeps it even then; the walk stops at the
+              // first one, so a mount is neither read through nor deleted with the folder.
+              const holdsRepository = holdsRepositoryBelow(
+                fileSystem,
+                path,
+                path.join(aside, "folder"),
+                [".git", ...rootMarkers()],
+              );
+              yield* Effect.addFinalizer((exit) =>
+                Effect.gen(function* () {
+                  if (Exit.isSuccess(exit) && !(yield* holdsRepository)) {
+                    yield* fileSystem.remove(aside, { recursive: true, force: true });
+                    return;
+                  }
+                  yield* Effect.logWarning("Edit from here kept the folder it set aside", {
+                    worktreePath,
+                    setAside: path.join(aside, "folder"),
+                  });
+                }).pipe(Effect.ignore),
               );
             } else {
               yield* recreate;
@@ -379,9 +494,11 @@ export const layer: Layer.Layer<
         folder !== null &&
         worktreePath !== null &&
         worktreePath !== folder &&
-        (yield* fileSystem.exists(path.join(worktreePath, ".git")))
+        (yield* hasCheckout(worktreePath))
       ) {
-        yield* restoreWorktreeProjectFolder(fileSystem, path, worktreePath, folder);
+        yield* restoreWorktreeProjectFolder(fileSystem, path, worktreePath, folder).pipe(
+          Effect.mapError(recreateFailed),
+        );
       }
 
       // Before the provider conversation changes: a rewind with nothing to restore is refused.
@@ -437,6 +554,12 @@ export const layer: Layer.Layer<
         ...repositoryTargets,
       ];
       if (restoreFiles && restoreTargets.length === 0) return yield* invalidTarget();
+      // The provider's conversation is rewound first; a snapshot gone since capture stops it here.
+      if (restoreFiles)
+        yield* checkpoints.ensureRestorable({
+          targets: restoreTargets,
+          scopes: [scope, ...repositories],
+        });
 
       const modelSelection = context.thread.modelSelection;
       const resolvedRuntimePolicy = yield* runtimePolicy.resolve({
@@ -468,16 +591,28 @@ export const layer: Layer.Layer<
           (turn.runAttemptId === null || !rolledBackAttemptIds.has(turn.runAttemptId)),
       );
 
+      // Atelier fork: each folder is saved before the conversation changes; a folder that cannot
+      // be saved, such as one whose VCS plugin's strategies fail, stops the rewind here.
+      const saved = restoreFiles
+        ? yield* checkpoints.saveBeforeRestore({
+            targets: restoreTargets,
+            scopes: [scope, ...repositories],
+          })
+        : null;
       const snapshot =
         runsToRollback.length === 0
           ? { providerThread }
-          : yield* session.rollbackThread({
-              providerThread,
-              target: rollbackTarget,
-              providerThreadTurns,
-            });
+          : yield* session
+              .rollbackThread({
+                providerThread,
+                target: rollbackTarget,
+                providerThreadTurns,
+              })
+              .pipe(Effect.onError(() => saved?.discard ?? Effect.void));
       if (restoreFiles) {
-        yield* checkpoints.restore({ targets: restoreTargets, scopes: [scope, ...repositories] });
+        yield* checkpoints
+          .restore({ targets: restoreTargets, scopes: [scope, ...repositories] })
+          .pipe(Effect.onError(() => saved?.discard ?? Effect.void));
       }
       const staleScopeCheckpoints = staleCheckpoints.filter((stale) => stale.scopeId === scope.id);
       if (staleScopeCheckpoints.length > 0) {
@@ -623,7 +758,7 @@ export const layer: Layer.Layer<
           yield* eventSink.write({ events });
         }),
       );
-    });
+    }, Effect.scoped);
 
     return CheckpointRollbackServiceV2.of({
       // The inner execute owns the rollback span; this wrapper selects the workspace lease.

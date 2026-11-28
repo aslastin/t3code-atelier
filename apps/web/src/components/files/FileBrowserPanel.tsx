@@ -178,6 +178,7 @@ export default function FileBrowserPanel({
     error,
     isPending,
     loadingDirectories,
+    treeWalkUnavailable,
   } = useDirectoryEntries(environmentId, cwd);
   const [query, setQuery] = useState("");
   const [expandAll, setExpandAll] = useState(false);
@@ -471,9 +472,10 @@ export default function FileBrowserPanel({
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- expands every directory in the Pierre tree model while expand-all is on and no search is active
   useEffect(() => {
-    if (expandAll && !query.trim())
+    // Atelier fork: a tree found to hold a VCS plugin's checkout stops expanding at once.
+    if (expandAll && !treeWalkUnavailable && !query.trim())
       setAllDirectoriesExpanded(model, expandableDirectoryPaths, true);
-  }, [expandableDirectoryPaths, expandAll, model, query]);
+  }, [expandableDirectoryPaths, expandAll, model, query, treeWalkUnavailable]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reveals an externally selected path in the Pierre tree model by expanding, selecting and scrolling
   useEffect(() => {
@@ -577,7 +579,7 @@ export default function FileBrowserPanel({
           onValueChange={handleSearchValueChange}
           onClose={closeSearch}
         />
-        {directoryPaths.length > 0 && !hostFolder ? (
+        {directoryPaths.length > 0 && !hostFolder && !treeWalkUnavailable ? (
           <Tooltip>
             <TooltipTrigger
               render={
@@ -637,7 +639,11 @@ export default function FileBrowserPanel({
       {hasNoSearchMatches ? (
         ready && !isPending && !pathSearch.isPending && !error && !pathSearch.error ? (
           <div role="status" className="px-3 py-4 text-xs text-muted-foreground">
-            <T>No matching files.</T>
+            {pathSearch.unavailable ? (
+              <T>File search isn't available in this repository yet. Open folders to browse it.</T>
+            ) : (
+              <T>No matching files.</T>
+            )}
           </div>
         ) : null
       ) : (

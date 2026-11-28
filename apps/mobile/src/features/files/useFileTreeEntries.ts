@@ -569,6 +569,7 @@ export function useFileTreeEntries(input: {
         directories.loading.size > 0 ||
         (searching && (query !== debouncedQuery || search.isPending))),
     searchTruncated: !missingRoot && searching && (search.data?.truncated ?? false),
+    searchUnavailable: !missingRoot && searching && search.data?.unavailable === true,
     loadedDirectories: new Set(directories.entries.keys()),
     loadingDirectories: directories.loading,
     loadDirectory: (path: string, retry = false) =>

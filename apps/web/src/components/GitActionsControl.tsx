@@ -1,3 +1,8 @@
+import {
+  limitGitMenuItems,
+  limitGitQuickAction,
+  vcsAllows,
+} from "@t3tools/client-runtime/state/vcs-capabilities";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { sourceControlInstallHintText } from "@t3tools/client-runtime/contract-labels";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
@@ -1085,9 +1090,20 @@ function CheckoutGitActionsControl({
         gitStatusForActions.branchChanges?.deletions,
       ])
     : null;
+  // A VCS plugin's driver has no branch review diff; its turn diffs come from checkpoints.
+  const offersReviewDiff = vcsAllows(gitStatusForActions, "reviewDiff");
+  // A VCS plugin's commit starts no branch of its own.
+  const offersFeatureBranch = vcsAllows(gitStatusForActions, "featureBranch");
+  // A plugin starts a branch only with a commit; a push alone moves to one through Git.
+  const offersPendingFeatureBranch =
+    offersFeatureBranch &&
+    (pendingDefaultBranchAction?.action !== "push" || vcsAllows(gitStatusForActions, "switchRef"));
+  // A plugin whose commit takes no file list commits every change: no file is left out.
+  const offersPartialCommit = vcsAllows(gitStatusForActions, "partialCommit");
   const changesPreview = useEnvironmentQuery(
     showChanges &&
       isRepo &&
+      offersReviewDiff &&
       canReadFiles &&
       changesRevision !== null &&
       activeEnvironmentId !== null &&
@@ -1136,18 +1152,27 @@ function CheckoutGitActionsControl({
   );
   const isDefaultRef = gitStatusForActions?.isDefaultRef ?? false;
 
-  const gitActionMenuItems = buildMenuItems(
+  const gitActionMenuItems = limitGitMenuItems(
+    buildMenuItems(gitStatusForActions, isGitActionRunning, hasPrimaryRemote, messages),
     gitStatusForActions,
-    isGitActionRunning,
-    hasPrimaryRemote,
-    messages,
   );
-  const quickAction = resolveQuickAction(
+  const quickAction = limitGitQuickAction(
+    resolveQuickAction(
+      gitStatusForActions,
+      isGitActionRunning,
+      isDefaultRef,
+      hasPrimaryRemote,
+      messages,
+    ),
     gitStatusForActions,
-    isGitActionRunning,
-    isDefaultRef,
-    hasPrimaryRemote,
-    messages,
+    {
+      labels: {
+        commit: gt("Commit", { $context: "verb, git action" }),
+        push: gt("Push", { $context: "verb, git action" }),
+        commit_push: gt("Commit & push"),
+      },
+      unsupportedHint: gt("This repository's version control cannot do this from T3 Code."),
+    },
   );
   const quickActionDisabledReason = !canWriteSourceControl
     ? gt("This connection cannot change source control.")
@@ -1293,7 +1318,12 @@ function CheckoutGitActionsControl({
 
   const continuePendingDefaultBranchAction = (featureBranch: boolean) => {
     if (!pendingDefaultBranchAction || !canWriteSourceControl) return;
-    if (featureBranch && (!canCreateFeatureBranch || featureBranchUnavailableReason !== null))
+    if (
+      featureBranch &&
+      (!offersPendingFeatureBranch ||
+        !canCreateFeatureBranch ||
+        featureBranchUnavailableReason !== null)
+    )
       return;
     const { action, commitMessage, onConfirmed, filePaths } = pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
@@ -1447,8 +1477,13 @@ function CheckoutGitActionsControl({
     })();
   };
 
+  // Publishing creates a Git remote; another VCS's repository nested in Git must not push that.
   const canPublishRepository =
-    canWriteSourceControl && isRepo && gitStatusForActions !== null && !hasPrimaryRemote;
+    canWriteSourceControl &&
+    isRepo &&
+    gitStatusForActions !== null &&
+    !hasPrimaryRemote &&
+    vcsAllows(gitStatusForActions, "publish");
   const isDetachedHead = gitStatusForActions?.refName === null;
   const isCleanAndBehind =
     gitStatusForActions !== null &&
@@ -1727,7 +1762,7 @@ function CheckoutGitActionsControl({
                 variant="ghost"
                 size="sm"
                 part="row"
-                disabled={!onOpenChanges}
+                disabled={!onOpenChanges || !offersReviewDiff}
                 onClick={onOpenChanges}
               />
             }
@@ -1849,7 +1884,7 @@ function CheckoutGitActionsControl({
                       </span>
                     )}
                   </div>
-                  {allFiles.length > 0 && (
+                  {allFiles.length > 0 && offersPartialCommit && (
                     <Button
                       variant="ghost"
                       size="xs"
@@ -1969,14 +2004,16 @@ function CheckoutGitActionsControl({
             >
               <T>Cancel</T>
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!canCreateFeatureBranch || noneSelected}
-              onClick={runDialogActionOnNewBranch}
-            >
-              <T>Commit on new branch</T>
-            </Button>
+            {offersFeatureBranch ? (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!canCreateFeatureBranch || noneSelected}
+                onClick={runDialogActionOnNewBranch}
+              >
+                <T>Commit on new branch</T>
+              </Button>
+            ) : null}
             <Button
               size="sm"
               disabled={!canWriteSourceControl || noneSelected}
@@ -2012,7 +2049,7 @@ function CheckoutGitActionsControl({
               {pendingDefaultBranchActionCopy?.title ?? gt("Run action on default branch?")}
             </DialogTitle>
             <DialogDescription>{pendingDefaultBranchActionCopy?.description}</DialogDescription>
-            {featureBranchUnavailableReason && (
+            {offersPendingFeatureBranch && featureBranchUnavailableReason && (
               <p className="text-xs text-muted-foreground">{featureBranchUnavailableReason}</p>
             )}
           </DialogHeader>
@@ -2034,14 +2071,16 @@ function CheckoutGitActionsControl({
             >
               {pendingDefaultBranchActionCopy?.continueLabel ?? gt("Continue")}
             </Button>
-            <Button
-              className="w-full max-w-full sm:w-auto"
-              size="sm-multiline"
-              onClick={() => continuePendingDefaultBranchAction(true)}
-              disabled={!canCreateFeatureBranch || featureBranchUnavailableReason !== null}
-            >
-              <T>Check out feature branch & continue</T>
-            </Button>
+            {offersPendingFeatureBranch && (
+              <Button
+                className="w-full max-w-full sm:w-auto"
+                size="sm-multiline"
+                onClick={() => continuePendingDefaultBranchAction(true)}
+                disabled={!canCreateFeatureBranch || featureBranchUnavailableReason !== null}
+              >
+                <T>Check out feature branch & continue</T>
+              </Button>
+            )}
           </DialogFooter>
         </DialogPopup>
       </Dialog>

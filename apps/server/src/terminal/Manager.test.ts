@@ -545,6 +545,7 @@ it.layer(
           Effect.provide(
             Layer.mergeAll(
               Layer.mock(ServerConfig.ServerConfig)({
+                baseDir,
                 worktreesDir,
               } as ServerConfig.ServerConfig["Service"]),
               ServerSettings.layerTest(),

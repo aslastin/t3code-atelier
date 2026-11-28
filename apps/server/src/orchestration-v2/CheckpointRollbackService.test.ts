@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it, vi } from "@effect/vitest";
 import {
+  GitCommandError,
   CheckpointId,
   CheckpointRef,
   EventId,
@@ -32,6 +33,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import { withSharedWorkspaceReservation, withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import { resolveCodexRollbackTurnCount } from "./Adapters/CodexAdapterV2.ts";
@@ -55,7 +57,10 @@ const layerCheckpointRollbackService = CheckpointRollbackService.layer.pipe(
     Layer.mergeAll(
       NodeServices.layer,
       layerNoTaskFolders,
-      Layer.mock(ServerConfig.ServerConfig)({ worktreesDir: "/synthetic-worktrees" } as never),
+      Layer.mock(ServerConfig.ServerConfig)({
+        baseDir: "/synthetic-home",
+        worktreesDir: "/synthetic-worktrees",
+      } as never),
       ServerSettings.layerTest(),
       Layer.mock(GitWorkflow.GitWorkflowService)({}),
       Layer.mock(ProjectStore.ProjectStoreV2)({ get: () => Effect.succeed(unrelatedProject) }),
@@ -101,6 +106,8 @@ it.effect.each(["initial", "waiting"])(
         Layer.mergeAll(
           ThreadCommandExecutor.layer,
           Layer.mock(CheckpointService.CheckpointServiceV2)({
+            ensureRestorable: () => Effect.void,
+            saveBeforeRestore: () => Effect.succeed({ discard: Effect.void }),
             restore,
             discardRepositorySnapshots: () => Effect.void,
           }),
@@ -185,6 +192,10 @@ it.effect.each([
   { order: "cleanup-first", restoreFiles: false, leavesFolder: true },
   { order: "cleanup-first", restoreFiles: true, leavesFolder: true, shared: true },
   { order: "cleanup-first", restoreFiles: true, leavesFolder: true, createFails: true },
+  // The checkout comes back, then its snapshot turns out to be gone with the old one.
+  { order: "cleanup-first", restoreFiles: true, leavesFolder: true, unrestorable: true },
+  // A bare repository left there outlives even a rewind that succeeds.
+  { order: "cleanup-first", restoreFiles: true, leavesFolder: true, bareInside: true },
 ])("locks rollback with %s", (row) =>
   Effect.gen(function* () {
     const { order, restoreFiles, unmanaged, leavesFolder, shared, createFails } = row;
@@ -244,7 +255,10 @@ it.effect.each([
           ThreadCommandExecutor.layer,
           NodeServices.layer,
           layerNoTaskFolders,
-          Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as never),
+          Layer.mock(ServerConfig.ServerConfig)({
+            baseDir: "/synthetic-home",
+            worktreesDir,
+          } as never),
           ServerSettings.layerTest(),
           Layer.mock(ProjectStore.ProjectStoreV2)({
             get: (id) => {
@@ -266,7 +280,13 @@ it.effect.each([
                   path: worktreePath,
                 });
                 calls.push("create");
-                if (createFails) return yield* Effect.die("the branch is gone");
+                if (createFails)
+                  return yield* new GitCommandError({
+                    operation: "test.createWorktree",
+                    command: "git worktree add",
+                    cwd: workspaceRoot,
+                    detail: "the branch is gone",
+                  });
                 yield* fileSystem
                   .makeDirectory(path.join(worktreePath, ".git"), { recursive: true })
                   .pipe(Effect.orDie);
@@ -274,6 +294,17 @@ it.effect.each([
               }),
           }),
           Layer.mock(CheckpointService.CheckpointServiceV2)({
+            ensureRestorable: () =>
+              row.unrestorable
+                ? Effect.fail(
+                    new CheckpointService.CheckpointRestoreError({
+                      scopeId,
+                      checkpointId,
+                      cause: "Checkpoint ref is unavailable.",
+                    }),
+                  )
+                : Effect.void,
+            saveBeforeRestore: () => Effect.succeed({ discard: Effect.void }),
             discardRepositorySnapshots: () => Effect.void,
             restore: () =>
               Effect.gen(function* () {
@@ -354,6 +385,16 @@ it.effect.each([
           if (leavesFolder) {
             yield* fileSystem.makeDirectory(worktreePath);
             yield* fileSystem.writeFileString(path.join(worktreePath, "unsaved.txt"), "keep");
+            if (row.bareInside)
+              for (const part of ["objects", "refs"])
+                yield* fileSystem.makeDirectory(path.join(worktreePath, "archive.git", part), {
+                  recursive: true,
+                });
+            if (row.bareInside)
+              yield* fileSystem.writeFileString(
+                path.join(worktreePath, "archive.git", "HEAD"),
+                "ref: refs/heads/main\n",
+              );
           }
           calls.push("cleanup");
         }),
@@ -394,8 +435,38 @@ it.effect.each([
         }
         return;
       }
+      if (row.bareInside) {
+        yield* Fiber.join(rollback);
+        const aside = (yield* fileSystem.readDirectory(path.dirname(worktreePath))).find((name) =>
+          name.startsWith(".t3-replaced-"),
+        );
+        assert.isDefined(aside);
+        assert.isTrue(
+          yield* fileSystem.exists(
+            path.join(path.dirname(worktreePath), aside!, "folder", "archive.git", "HEAD"),
+          ),
+        );
+        return;
+      }
+      if (row.unrestorable) {
+        yield* Fiber.join(rollback).pipe(Effect.flip);
+        // The files the failed removal left are kept aside, not deleted with the rewind.
+        const aside = (yield* fileSystem.readDirectory(path.dirname(worktreePath))).find((name) =>
+          name.startsWith(".t3-replaced-"),
+        );
+        assert.isDefined(aside);
+        assert.equal(
+          yield* fileSystem.readFileString(
+            path.join(path.dirname(worktreePath), aside!, "folder", "unsaved.txt"),
+          ),
+          "keep",
+        );
+        return;
+      }
       if (createFails) {
-        yield* Fiber.join(rollback).pipe(Effect.exit);
+        const error = yield* Fiber.join(rollback).pipe(Effect.flip);
+        assert.equal(error.reason, "worktree-recreate-failed");
+        assert.equal(CheckpointRollbackService.rollbackFailureClientMessage(error), error.message);
         assert.deepEqual(calls, ["cleanup", "prune", "create"]);
         assert.equal(
           yield* fileSystem.readFileString(path.join(worktreePath, "unsaved.txt")),
@@ -423,9 +494,14 @@ it.effect.each([
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect.each([{ restoreFiles: true }, { restoreFiles: false }])(
-  "holds turn starts inside the worktree during rollback with restoreFiles $restoreFiles",
-  ({ restoreFiles }) =>
+it.effect.each([
+  { restoreFiles: true, checkout: ".git" },
+  { restoreFiles: false, checkout: ".git" },
+  // A plugin's checkout has no `.git`; it must not read as a folder left without its checkout.
+  { restoreFiles: true, checkout: ".kite/HEAD" },
+])(
+  "holds turn starts inside the worktree during rollback with restoreFiles $restoreFiles in a $checkout checkout",
+  ({ restoreFiles, checkout }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -434,7 +510,7 @@ it.effect.each([{ restoreFiles: true }, { restoreFiles: false }])(
       );
       const worktreesDir = path.join(workspaceRoot, "worktrees");
       const worktreePath = path.join(worktreesDir, "repo", "feature");
-      yield* fileSystem.makeDirectory(path.join(worktreePath, ".git"), { recursive: true });
+      yield* fileSystem.makeDirectory(path.join(worktreePath, checkout), { recursive: true });
       const threadId = ThreadId.make("rollback-reservation");
       const providerThreadId = ProviderThreadId.make("rollback-reservation-provider-thread");
       const providerInstanceId = ProviderInstanceId.make("rollback-reservation-provider");
@@ -474,14 +550,31 @@ it.effect.each([{ restoreFiles: true }, { restoreFiles: false }])(
           Layer.mergeAll(
             ThreadCommandExecutor.layer,
             NodeServices.layer,
-            Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as never),
+            Layer.mock(ServerConfig.ServerConfig)({
+              baseDir: "/synthetic-home",
+              worktreesDir,
+            } as never),
             ServerSettings.layerTest(),
             Layer.mock(ProjectStore.ProjectStoreV2)({
               get: () => Effect.succeedSome({ workspaceRoot } as never),
             }),
             layerNoTaskFolders,
-            Layer.mock(GitWorkflow.GitWorkflowService)({}),
+            // The project's plugin lists its checkout, so a rewind restores into it.
+            Layer.mock(GitWorkflow.GitWorkflowService)({
+              listWorktrees: () => Effect.succeed([worktreePath]),
+              repositoryRoot: () => Effect.succeed(workspaceRoot),
+            }),
+            Layer.mock(VcsPluginDrivers)({
+              hasAny: () => true,
+              // Kite is off: its marker is installed but not among the running plugins'.
+              markers: () => [],
+              installedMarkers: () => [".kite/HEAD"],
+              available: () => [].map((marker) => ({ markers: [marker], worktrees: true })),
+              describe: () => undefined,
+            }),
             Layer.mock(CheckpointService.CheckpointServiceV2)({
+              ensureRestorable: () => Effect.void,
+              saveBeforeRestore: () => Effect.succeed({ discard: Effect.void }),
               discardRepositorySnapshots: () => Effect.void,
               restore: () =>
                 Deferred.succeed(restoreEntered, undefined).pipe(
@@ -817,6 +910,8 @@ const seedRollbackHistory = Effect.gen(function* () {
         ThreadCommandExecutor.layer,
         IdAllocator.layer,
         Layer.mock(CheckpointService.CheckpointServiceV2)({
+          ensureRestorable: () => Effect.void,
+          saveBeforeRestore: () => Effect.succeed({ discard: Effect.void }),
           restore: ({ targets }) =>
             Effect.sync(() => {
               restored.push(

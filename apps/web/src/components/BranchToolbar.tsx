@@ -99,6 +99,8 @@ interface BranchToolbarProps {
   worktreePath: string | null;
   isServerThread: boolean;
   /** Offers the workspace choice: the project folder is a repository or tracks one. */
+  /** False when the repository's VCS plugin cannot create worktrees. */
+  offersWorktrees?: boolean;
   showGitControls: boolean;
   /** False when the project folder has no branch of its own to pick. Defaults to `showGitControls`. */
   showBranchControls?: boolean;
@@ -637,6 +639,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   isServerThread,
   showGitControls,
   showBranchControls = showGitControls,
+  offersWorktrees = true,
   draftId,
   onEnvModeChange,
   envMode,
@@ -848,6 +851,7 @@ export const BranchToolbar = memo(function BranchToolbar({
               previousWorktreeLabel={previousWorktreeLabel}
               previousWorktreeBranch={previousWorktreeSeed?.branch ?? null}
               onUsePreviousWorktree={onUsePreviousWorktree}
+              offersWorktree={offersWorktrees}
             />
           ) : null}
         </div>

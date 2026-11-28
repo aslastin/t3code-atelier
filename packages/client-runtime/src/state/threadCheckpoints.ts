@@ -12,6 +12,7 @@ import * as DateTime from "effect/DateTime";
 import {
   changedFileTotals,
   deriveTurnRepositoryChanges,
+  isRepositoryCheckpointScope,
   type TurnRepositoryChanges,
 } from "./threadRepositories.ts";
 
@@ -37,6 +38,8 @@ export interface ThreadCheckpointSummary {
   readonly repositories?: ReadonlyArray<TurnRepositoryChanges>;
   readonly assistantMessageId: MessageId | null;
   readonly completedAt: string;
+  /** Atelier fork: why a VCS plugin left this turn without a checkpoint. */
+  readonly unavailableReason?: string;
 }
 
 export function deriveThreadCheckpointSummaries(
@@ -50,6 +53,30 @@ export function deriveThreadCheckpointSummaries(
           checkpoints: projection.checkpoints,
           checkpointScopes: projection.checkpointScopes,
         });
+  // Atelier fork: a tracked repository a VCS plugin could not snapshot says why in its turn's note.
+  const repositoryReasons = new Map<RunId, string>();
+  if (projection.checkpointScopes !== undefined) {
+    const scopeById = new Map(projection.checkpointScopes.map((scope) => [scope.id, scope]));
+    for (const checkpoint of projection.checkpoints) {
+      const scope = scopeById.get(checkpoint.scopeId);
+      if (
+        checkpoint.runId === null ||
+        // A ready one restores; only its diff is unavailable, and the turn's own note says so.
+        checkpoint.status === "ready" ||
+        checkpoint.unavailableReason === undefined ||
+        scope === undefined ||
+        !isRepositoryCheckpointScope(scope)
+      )
+        continue;
+      const name = scope.label ?? scope.cwd.replaceAll("\\", "/").split("/").findLast(Boolean);
+      const reason = `${name ?? scope.cwd}: ${checkpoint.unavailableReason}`;
+      const previous = repositoryReasons.get(checkpoint.runId);
+      repositoryReasons.set(
+        checkpoint.runId,
+        previous === undefined ? reason : `${previous} ${reason}`,
+      );
+    }
+  }
   let assistantMessageIdsByRun: Map<RunId, MessageId | null | undefined> | undefined;
   let nextMessageIndex = -1;
   return projection.checkpoints.flatMap((checkpoint) => {
@@ -80,6 +107,9 @@ export function deriveThreadCheckpointSummaries(
     }
     const assistantMessageId = assistantMessageIdsByRun.get(checkpoint.runId) ?? null;
     const repositories = repositoriesByRun?.get(checkpoint.runId);
+    const reasons = [checkpoint.unavailableReason, repositoryReasons.get(checkpoint.runId)].filter(
+      (reason) => reason !== undefined,
+    );
     return [
       {
         checkpointId: checkpoint.id,
@@ -93,6 +123,7 @@ export function deriveThreadCheckpointSummaries(
         ...(repositories === undefined ? {} : { repositories }),
         assistantMessageId,
         completedAt: DateTime.formatIso(checkpoint.capturedAt),
+        ...(reasons.length === 0 ? {} : { unavailableReason: reasons.join(" ") }),
       },
     ];
   });

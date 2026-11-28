@@ -302,6 +302,25 @@ interface CreateDevRunnerEnvInput {
   readonly devUrl: URL | undefined;
 }
 
+/**
+ * Atelier fork: where a checkout's own dev state keeps its worktrees. Outside the checkout, so
+ * tools that walk the repository never reach them: a VCS plugin's worktree can mount a whole
+ * monorepo. Not in an installed app's worktrees folder either, whose cleanup would claim them.
+ */
+export const devWorktreesDirectory = (
+  path: Path.Path,
+  homeDirectory: string,
+  worktreeHome: string,
+): string => {
+  const checkout = path.dirname(worktreeHome);
+  return path.join(
+    homeDirectory,
+    ".t3-dev-worktrees",
+    path.basename(path.dirname(checkout)),
+    path.basename(checkout),
+  );
+};
+
 export const createDevRunnerEnv = Effect.fn("dev-runner.createDevRunnerEnv")(function* ({
   mode,
   baseEnv,
@@ -806,6 +825,18 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
     devUrl: input.devUrl,
   });
 
+  if (
+    worktreeHome !== undefined &&
+    env.T3CODE_HOME === worktreeHome &&
+    !env.T3CODE_WORKTREES_DIR?.trim()
+  ) {
+    env.T3CODE_WORKTREES_DIR = devWorktreesDirectory(
+      yield* Path.Path,
+      yield* HostProcess.HomeDirectory,
+      worktreeHome,
+    );
+  }
+
   const selectionSuffix =
     serverOffset !== offset || webOffset !== offset
       ? ` selectedOffset(server=${serverOffset},web=${webOffset})`
@@ -813,7 +844,7 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
   const baseDir = env.T3CODE_HOME ?? (yield* DEFAULT_T3_HOME);
 
   yield* Effect.logInfo(
-    `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)} baseDir=${baseDir}`,
+    `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)} baseDir=${baseDir}${env.T3CODE_WORKTREES_DIR ? ` worktreesDir=${env.T3CODE_WORKTREES_DIR}` : ""}`,
   );
 
   // Before the share block: --dry-run only resolves and prints. Sharing would

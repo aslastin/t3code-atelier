@@ -2,6 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 
 import {
   GIT_VCS_KIND,
@@ -30,9 +31,15 @@ import {
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   type VcsStatusResult,
+  type VcsDriverKind,
 } from "@t3tools/contracts";
 
-import { toLocalStatusPart, toRemoteStatusPart } from "@t3tools/shared/git";
+import {
+  resolveAutoFeatureBranchName,
+  sanitizeFeatureBranchName,
+  toLocalStatusPart,
+  toRemoteStatusPart,
+} from "@t3tools/shared/git";
 import type { VcsWorkflowOps } from "../vcs/VcsDriver.ts";
 import * as GitManager from "./GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -58,6 +65,11 @@ export class GitWorkflowService extends Context.Service<
       input: VcsStatusInput,
       options?: GitManager.GitLocalStatusOptions,
     ) => Effect.Effect<VcsStatusLocalResult, GitManagerServiceError>;
+    /**
+     * Atelier fork: the VCS a folder answers to, found by its markers alone: no status runs, so
+     * callers that only need the kind skip a plugin's process spawns. Null outside a repository.
+     */
+    readonly vcsKind: (cwd: string) => Effect.Effect<VcsDriverKind | null, GitManagerServiceError>;
     readonly currentBranch: (cwd: string) => Effect.Effect<string | null, GitManagerServiceError>;
     readonly upstreamDivergence: (cwd: string) => Effect.Effect<
       {
@@ -136,7 +148,12 @@ export class GitWorkflowService extends Context.Service<
       readonly refName: string;
       readonly remote?: GitVcsDriver.GitWorktreeBaseRemote;
     }) => Effect.Effect<
-      { readonly commitSha: string; readonly remoteRefName: string } | null,
+      {
+        readonly commitSha: string;
+        readonly remoteRefName: string;
+        /** Atelier fork: a VCS plugin's base as it named it, used as is instead of a Git ref. */
+        readonly baseRefName?: string;
+      } | null,
       VcsWorkflowCommandError
     >;
     readonly resolveDefaultBranchName: (
@@ -164,6 +181,8 @@ export class GitWorkflowService extends Context.Service<
       readonly oldBranch: string;
       readonly newBranch: string;
     }) => Effect.Effect<{ readonly branch: string }, GitManagerServiceError>;
+    /** Atelier fork: whether the checkout's VCS can rename a branch, as a plugin may not. */
+    readonly canRenameBranch: (cwd: string) => Effect.Effect<boolean>;
   }
 >()("t3/git/GitWorkflowService") {}
 
@@ -223,6 +242,13 @@ function route<A, E>(
   return runDriver?.(handle.driver.workflow ?? {}) ?? Effect.fail(unsupported(handle, operation));
 }
 
+/** Ref names a driver lists, for the checks a worktree launch runs before it creates one. */
+function driverRefNames(ops: VcsWorkflowOps, cwd: string, local: boolean) {
+  return ops
+    .listRefs?.({ cwd, ...(local ? { refKind: "local" as const } : {}) })
+    .pipe(Effect.map((result) => result.refs.map((ref) => ref.name)));
+}
+
 function driverStatus(
   handle: DriverHandle,
   input: VcsStatusInput,
@@ -241,27 +267,41 @@ function withCapabilities<A extends VcsStatusLocalResult>(handle: DriverHandle, 
 const runDriverAction = Effect.fn("GitWorkflowService.runDriverAction")(function* (
   handle: DriverHandle,
   input: GitRunStackedActionInput,
-  options?: GitManager.GitRunStackedActionOptions,
+  options: GitManager.GitRunStackedActionOptions | undefined,
+  writeCommitMessage: GitManager.GitManager["Service"]["writeCommitMessage"],
 ) {
   const { action, cwd } = input;
-  if (input.featureBranch || action === "create_pr" || action === "commit_push_pr") {
-    return yield* unsupported(handle, input.featureBranch ? "featureBranch" : "create_pr");
+  if (action === "create_pr" || action === "commit_push_pr") {
+    return yield* unsupported(handle, "create_pr");
   }
   const ops = handle.driver.workflow;
   const commit = action === "push" ? undefined : ops?.commit;
   const push = action === "commit" ? undefined : ops?.push;
+  const createBranch = input.featureBranch ? ops?.createBranch : undefined;
   // Check the whole request before committing anything on a driver that cannot push.
+  if (input.featureBranch && (!createBranch || action === "push"))
+    return yield* unsupported(handle, "featureBranch");
   if (action !== "push" && !commit) return yield* unsupported(handle, "commit");
   if (action !== "commit" && !push) return yield* unsupported(handle, "push");
+  // Refused before a branch is started, so a failed request leaves the checkout as it was.
+  if (commit && input.filePaths && handle.driver.capabilities?.supportsPartialCommit === false)
+    return yield* unsupported(handle, "commit selected files");
+  // A plugin reads the selection one path per line.
+  if (commit && input.filePaths?.some((filePath) => /[\r\n]/.test(filePath)))
+    return yield* unsupported(handle, "commit a file whose name has a line break");
 
   const context = { action, cwd, actionId: options?.actionId ?? input.actionId };
   const reporter = options?.progressReporter;
-  const phases: Array<"commit" | "push"> = [];
+  const phases: Array<"branch" | "commit" | "push"> = [];
+  if (createBranch) phases.push("branch");
   if (commit) phases.push("commit");
   if (push) phases.push("push");
   if (reporter) yield* reporter.publish({ ...context, kind: "action_started", phases });
   const skipped = { status: "skipped_not_requested" } as const;
-  const runPhase = <A>(phase: "commit" | "push", effect: Effect.Effect<A, GitCommandError>) =>
+  const runPhase = <A, E extends { readonly message: string }>(
+    phase: "branch" | "commit" | "push",
+    effect: Effect.Effect<A, E>,
+  ) =>
     reporter
       ? reporter.publish({ ...context, kind: "phase_started", phase, label: phase }).pipe(
           Effect.andThen(effect),
@@ -270,13 +310,96 @@ const runDriverAction = Effect.fn("GitWorkflowService.runDriverAction")(function
           ),
         )
       : effect;
+
+  // The message, and for a new branch its name, written as for Git from what the driver says
+  // changed. Null when nothing selected changed.
+  const writeMessage = Effect.fn("GitWorkflowService.writeDriverCommitMessage")(function* (
+    includeBranch: boolean,
+  ) {
+    const typed = input.commitMessage?.trim();
+    const status = yield* driverStatus(handle, { cwd });
+    const selected = input.filePaths ? new Set(input.filePaths) : null;
+    const files = status.workingTree.files.filter(
+      (file) => selected === null || selected.has(file.path),
+    );
+    if (files.length === 0) return null;
+    // Checked before a branch is started: a plugin may list every file one per line.
+    if (includeBranch && files.some((file) => /[\r\n]/.test(file.path)))
+      return yield* unsupported(handle, "commit a file whose name has a line break");
+    if (typed) return { commitMessage: typed };
+    if (reporter)
+      yield* reporter.publish({
+        ...context,
+        kind: "phase_started",
+        phase: includeBranch ? "branch" : "commit",
+        label: "Generating commit message...",
+      });
+    // The files to describe are always named, so a diff that takes a file list gets one.
+    const patch = yield* (
+      ops?.workingDiff?.({ cwd, filePaths: files.map((file) => file.path) }) ?? Effect.succeed("")
+    ).pipe(Effect.orElseSucceed(() => ""));
+    const subjects = yield* (
+      ops?.recentCommitSubjects?.({ cwd }) ?? Effect.succeed<ReadonlyArray<string>>([])
+    ).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+    return yield* writeCommitMessage({
+      cwd,
+      threadId: input.threadId,
+      projectId: input.projectId,
+      branch: status.refName,
+      summary: files
+        .map((file) => `${file.path} (+${file.insertions} -${file.deletions})`)
+        .join("\n"),
+      patch,
+      subjects,
+      includeBranch,
+    });
+  });
+
+  let prepared: { readonly commitMessage: string; readonly branch?: string | undefined } | null =
+    null;
+  const branch: GitRunStackedActionResult["branch"] = createBranch
+    ? yield* runPhase(
+        "branch",
+        Effect.gen(function* () {
+          const message = yield* writeMessage(true);
+          prepared = message;
+          if (message === null)
+            return yield* new GitCommandError({
+              vcs: handle.kind,
+              operation: `${handle.kind}.featureBranch`,
+              command: "branchCreate",
+              cwd,
+              detail: "Cannot create a feature branch because there are no changes to commit.",
+            });
+          const listed = ops ? driverRefNames(ops, cwd, true) : undefined;
+          const existing =
+            listed === undefined
+              ? []
+              : yield* listed.pipe(Effect.orElseSucceed((): string[] => []));
+          const name = resolveAutoFeatureBranchName(
+            existing,
+            message.branch ?? sanitizeFeatureBranchName(message.commitMessage.split("\n")[0] ?? ""),
+          );
+          yield* createBranch({ cwd, refName: name });
+          return { status: "created" as const, name };
+        }),
+      )
+    : skipped;
   const result: GitRunStackedActionResult = {
     action,
-    branch: skipped,
+    branch,
     commit: commit
       ? yield* runPhase(
           "commit",
-          commit({ cwd, commitMessage: input.commitMessage, filePaths: input.filePaths }),
+          Effect.gen(function* () {
+            const message = prepared ?? (yield* writeMessage(false));
+            if (message === null) return { status: "skipped_no_changes" as const };
+            return yield* commit({
+              cwd,
+              commitMessage: message.commitMessage,
+              filePaths: input.filePaths,
+            });
+          }),
         )
       : skipped,
     push: push ? yield* runPhase("push", push({ cwd })) : skipped,
@@ -287,12 +410,47 @@ const runDriverAction = Effect.fn("GitWorkflowService.runDriverAction")(function
   return result;
 });
 
+/**
+ * Worktrees of the checkout at `cwd`, as the VCS that owns it lists them. Needs only the driver
+ * registry, so services below the Git workflow (known workspaces) can ask too.
+ */
+export const makeListWorktrees =
+  (
+    registry: VcsDriverRegistry.VcsDriverRegistry["Service"],
+    git: GitVcsDriver.GitVcsDriver["Service"],
+  ) =>
+  (cwd: string): Effect.Effect<ReadonlyArray<string>, VcsWorkflowCommandError> => {
+    const operation = "GitWorkflowService.listWorktrees";
+    if (!registry.hasAdditionalDrivers) return git.listWorktreePaths(cwd);
+    return registry.resolve({ cwd }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new GitCommandError({
+            operation,
+            command: "vcs-route",
+            cwd,
+            detail: "Failed to resolve the VCS driver for this Git command.",
+            cause,
+          }),
+      ),
+      Effect.flatMap((handle) =>
+        route<ReadonlyArray<string>, GitCommandError>(
+          handle,
+          operation,
+          () => git.listWorktreePaths(cwd),
+          (ops) => ops.listWorktrees?.({ cwd }),
+        ),
+      ),
+    );
+  };
+
 /** @public */
 export const make = Effect.gen(function* () {
   const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
   const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
 
   // Nested projects and path aliases must share the checkout's branch-mutation lease.
   const withCheckoutLease = <A, E, R>(rootPath: string, effect: Effect.Effect<A, E, R>) =>
@@ -371,6 +529,8 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  const listWorktrees = makeListWorktrees(registry, git);
+
   const isGitCheckout = (cwd: string) =>
     registry.detect({ cwd }).pipe(
       Effect.map((handle) => handle?.kind === GIT_VCS_KIND),
@@ -394,28 +554,56 @@ export const make = Effect.gen(function* () {
       );
     }),
     hasCommit: Effect.fn("GitWorkflowService.hasCommit")(function (input) {
-      return routeCommand("GitWorkflowService.hasCommit", input.cwd, () =>
-        git
-          .execute({
-            operation: "GitWorkflowService.hasCommit",
-            cwd: input.cwd,
-            args: ["rev-parse", "--verify", `${input.refName}^{commit}`],
-            allowNonZeroExit: true,
-          })
-          .pipe(Effect.map((result) => result.exitCode === 0)),
+      return routeCommand(
+        "GitWorkflowService.hasCommit",
+        input.cwd,
+        () =>
+          git
+            .execute({
+              operation: "GitWorkflowService.hasCommit",
+              cwd: input.cwd,
+              args: ["rev-parse", "--verify", `${input.refName}^{commit}`],
+              allowNonZeroExit: true,
+            })
+            .pipe(Effect.map((result) => result.exitCode === 0)),
+        // A driver cannot resolve arbitrary revisions; its worktreeCreate reports a bad base.
+        (ops) => {
+          const branch = /^refs\/heads\/(.+)$/.exec(input.refName)?.[1];
+          const remoteBranch = /^refs\/remotes\/(.+)$/.exec(input.refName)?.[1];
+          if (remoteBranch !== undefined)
+            return ops
+              .listRefs?.({ cwd: input.cwd, refKind: "remote" })
+              .pipe(Effect.map((result) => result.refs.some((ref) => ref.name === remoteBranch)));
+          if (branch === undefined) return Effect.succeed(true);
+          return driverRefNames(ops, input.cwd, true)?.pipe(
+            Effect.map((names) => names.includes(branch)),
+          );
+        },
       );
     }),
     hasRefNamed: Effect.fn("GitWorkflowService.hasRefNamed")(function (input) {
       // Pattern characters would widen the ref match.
       if (/[*?[\\]/.test(input.refName)) return Effect.succeed(false);
-      return routeCommand("GitWorkflowService.hasRefNamed", input.cwd, () =>
-        git
-          .execute({
-            operation: "GitWorkflowService.hasRefNamed",
-            cwd: input.cwd,
-            args: ["for-each-ref", "--count=1", "--format=%(refname)", `refs/**/${input.refName}`],
-          })
-          .pipe(Effect.map((result) => result.stdout.trim().length > 0)),
+      return routeCommand(
+        "GitWorkflowService.hasRefNamed",
+        input.cwd,
+        () =>
+          git
+            .execute({
+              operation: "GitWorkflowService.hasRefNamed",
+              cwd: input.cwd,
+              args: [
+                "for-each-ref",
+                "--count=1",
+                "--format=%(refname)",
+                `refs/**/${input.refName}`,
+              ],
+            })
+            .pipe(Effect.map((result) => result.stdout.trim().length > 0)),
+        (ops) =>
+          driverRefNames(ops, input.cwd, false)?.pipe(
+            Effect.map((names) => names.includes(input.refName)),
+          ),
       );
     }),
     status: Effect.fn("GitWorkflowService.status")(function* (input) {
@@ -433,6 +621,9 @@ export const make = Effect.gen(function* () {
         ? gitManager.localStatus(input, options)
         : Effect.map(driverStatus(handle, input), toLocalStatusPart);
       return withCapabilities(handle, local);
+    }),
+    vcsKind: Effect.fn("GitWorkflowService.vcsKind")(function* (cwd) {
+      return (yield* detectWorkflow("GitWorkflowService.vcsKind", cwd))?.kind ?? null;
     }),
     currentBranch: Effect.fn("GitWorkflowService.currentBranch")(function* (cwd) {
       const handle = yield* detectWorkflow("GitWorkflowService.currentBranch", cwd);
@@ -525,7 +716,7 @@ export const make = Effect.gen(function* () {
         handle.repository.rootPath,
         handle.kind === GIT_VCS_KIND
           ? gitManager.runStackedAction(input, options)
-          : runDriverAction(handle, input, options),
+          : runDriverAction(handle, input, options, gitManager.writeCommitMessage),
       );
     }),
     resolvePullRequest: Effect.fn("GitWorkflowService.resolvePullRequest")(function* (input) {
@@ -556,25 +747,78 @@ export const make = Effect.gen(function* () {
         (ops) => ops.listRefs?.(input),
       );
     }),
-    createWorktree: Effect.fn("GitWorkflowService.createWorktree")(function (input, options) {
-      return routeCommand(
-        "GitWorkflowService.createWorktree",
-        input.cwd,
+    createWorktree: Effect.fn("GitWorkflowService.createWorktree")(function* (input, options) {
+      const operation = "GitWorkflowService.createWorktree";
+      const handle = yield* resolveCommand(operation, input.cwd);
+      return yield* route(
+        handle,
+        operation,
         () => gitManager.createWorktree(input, options),
-        (ops) => ops.createWorktree?.(input),
+        (ops) => {
+          const created = ops.createWorktree?.(input);
+          const onMissing = options?.onMissingProjectFolder;
+          const { removeWorktree: remove, status } = ops;
+          if (!created || !onMissing || !remove || !status || input.newRefName === undefined)
+            return created;
+          // As for Git: a checkout without the project's folder lets the launch ask what to do,
+          // and it stays the one made here, without local work, until the answer.
+          return created.pipe(
+            Effect.tap((result) => {
+              if (result.worktree.projectPath !== null) return Effect.void;
+              const root = result.worktree.path;
+              return Effect.gen(function* () {
+                const initial = yield* status({ cwd: root });
+                const changed = new GitCommandError({
+                  operation: "GitWorkflowService.pendingWorktree",
+                  cwd: root,
+                  command: "worktree",
+                  detail:
+                    "The checkout contains local work or no longer matches the checkout created for this thread.",
+                });
+                const unchanged = status({ cwd: root }).pipe(
+                  Effect.filterOrFail(
+                    (now) =>
+                      now.refName === initial.refName && now.aheadCount === initial.aheadCount,
+                    () => changed,
+                  ),
+                );
+                const discard = Effect.fn("GitWorkflowService.discardPendingWorktree")(function* (
+                  ownedBranch: string,
+                ) {
+                  const now = yield* unchanged;
+                  if (now.workingTree.files.length > 0) return yield* changed;
+                  yield* remove({ cwd: input.cwd, path: root, force: true });
+                  // A plugin cannot delete a branch; one it keeps would be created again.
+                  const names = yield* driverRefNames(ops, input.cwd, true) ?? Effect.succeed([]);
+                  if (names.includes(ownedBranch))
+                    return yield* new GitCommandError({
+                      operation: "GitWorkflowService.discardPendingWorktree",
+                      cwd: input.cwd,
+                      command: "worktree",
+                      detail: `${handle.driver.capabilities?.kind ?? "The VCS plugin"} keeps the branch ${ownedBranch} after removing its checkout. Delete the branch, or launch again from a base that has the project's folder.`,
+                    });
+                });
+                yield* onMissing({
+                  root,
+                  relativePath: path.relative(handle.repository.rootPath, input.cwd),
+                  verify: Effect.asVoid(unchanged),
+                  discard,
+                });
+              });
+            }),
+          );
+        },
       );
     }),
     listWorktrees: Effect.fn("GitWorkflowService.listWorktrees")(function (cwd) {
-      return routeCommand<ReadonlyArray<string>>(
-        "GitWorkflowService.listWorktrees",
-        cwd,
-        () => git.listWorktreePaths(cwd),
-        (ops) => ops.listWorktrees?.({ cwd }),
-      );
+      return listWorktrees(cwd);
     }),
     listLocalBranchNames: Effect.fn("GitWorkflowService.listLocalBranchNames")(function (cwd) {
-      return routeCommand("GitWorkflowService.listLocalBranchNames", cwd, () =>
-        git.listLocalBranchNames(cwd),
+      return routeCommand(
+        "GitWorkflowService.listLocalBranchNames",
+        cwd,
+        () => git.listLocalBranchNames(cwd),
+        (ops) => driverRefNames(ops, cwd, true)?.pipe(Effect.map((names) => [...names])),
       );
     }),
     fetchRemote: Effect.fn("GitWorkflowService.fetchRemote")(function (input) {
@@ -608,22 +852,47 @@ export const make = Effect.gen(function* () {
     ),
     resolveWorktreeBaseRemote: Effect.fn("GitWorkflowService.resolveWorktreeBaseRemote")(
       function (input) {
-        return routeCommand("GitWorkflowService.resolveWorktreeBaseRemote", input.cwd, () =>
-          git.resolveWorktreeBaseRemote(input),
+        return routeCommand(
+          "GitWorkflowService.resolveWorktreeBaseRemote",
+          input.cwd,
+          () => git.resolveWorktreeBaseRemote(input),
+          // A driver's worktreeCreate starts from the base it is given; only a plugin with
+          // `fetchBase` has something to fetch first.
+          (ops) =>
+            Effect.succeed(
+              ops.fetchWorktreeBase === undefined
+                ? null
+                : { remoteName: "remote", branchName: input.refName },
+            ),
         );
       },
     ),
     fetchWorktreeBaseCommit: Effect.fn("GitWorkflowService.fetchWorktreeBaseCommit")(
       function (input) {
-        return routeCommand("GitWorkflowService.fetchWorktreeBaseCommit", input.cwd, () =>
-          git.fetchWorktreeBaseCommit(input),
+        return routeCommand(
+          "GitWorkflowService.fetchWorktreeBaseCommit",
+          input.cwd,
+          () => git.fetchWorktreeBaseCommit(input),
+          (ops) =>
+            ops.fetchWorktreeBase === undefined
+              ? Effect.succeed(null)
+              : ops.fetchWorktreeBase({ cwd: input.cwd, refName: input.refName }).pipe(
+                  Effect.map(({ baseRef }) => ({
+                    commitSha: baseRef,
+                    remoteRefName: baseRef,
+                    baseRefName: baseRef,
+                  })),
+                ),
         );
       },
     ),
     resolveDefaultBranchName: Effect.fn("GitWorkflowService.resolveDefaultBranchName")(
       function (cwd, remoteName) {
-        return routeCommand("GitWorkflowService.resolveDefaultBranchName", cwd, () =>
-          git.resolveDefaultBranchName(cwd, remoteName),
+        return routeCommand(
+          "GitWorkflowService.resolveDefaultBranchName",
+          cwd,
+          () => git.resolveDefaultBranchName(cwd, remoteName),
+          () => Effect.succeed(null),
         );
       },
     ),
@@ -636,8 +905,11 @@ export const make = Effect.gen(function* () {
       );
     }),
     pruneWorktrees: Effect.fn("GitWorkflowService.pruneWorktrees")(function (input) {
-      return routeCommand("GitWorkflowService.pruneWorktrees", input.cwd, () =>
-        git.pruneWorktrees(input),
+      return routeCommand(
+        "GitWorkflowService.pruneWorktrees",
+        input.cwd,
+        () => git.pruneWorktrees(input),
+        (ops) => ops.pruneWorktrees?.(input),
       );
     }),
     deleteLocalBranch: Effect.fn("GitWorkflowService.deleteLocalBranch")(function (input) {
@@ -673,8 +945,21 @@ export const make = Effect.gen(function* () {
     }),
     renameBranch: Effect.fn("GitWorkflowService.renameBranch")(function* (input) {
       const operation = "GitWorkflowService.renameBranch";
-      return yield* route(yield* resolveWorkflow(operation, input.cwd), operation, () =>
-        git.renameBranch(input),
+      return yield* route(
+        yield* resolveWorkflow(operation, input.cwd),
+        operation,
+        () => git.renameBranch(input),
+        (ops) => ops.renameBranch?.(input),
+      );
+    }),
+    canRenameBranch: Effect.fn("GitWorkflowService.canRenameBranch")(function (cwd) {
+      return registry.detect({ cwd }).pipe(
+        Effect.map((handle) =>
+          handle === null
+            ? false
+            : handle.kind === GIT_VCS_KIND || handle.driver.workflow?.renameBranch !== undefined,
+        ),
+        Effect.orElseSucceed(() => false),
       );
     }),
   });

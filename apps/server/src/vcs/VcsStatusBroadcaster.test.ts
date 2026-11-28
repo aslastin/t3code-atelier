@@ -11,6 +11,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Scheduler from "effect/Scheduler";
@@ -32,6 +33,7 @@ import * as VcsAutomaticFetchInterval from "./VcsAutomaticFetchInterval.ts";
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
@@ -94,8 +96,21 @@ function layerTestFor(state: {
   headPathCalls?: number;
   failLocalStatus?: boolean;
   onLocalStatusFailure?: Effect.Effect<void>;
+  pluginChanges?: Stream.Stream<void>;
 }) {
   return VcsStatusBroadcaster.layer.pipe(
+    Layer.provide(
+      state.pluginChanges
+        ? Layer.mock(VcsPluginDrivers)({
+            changes: state.pluginChanges,
+            hasAny: () => true,
+            markers: () => [],
+            installedMarkers: () => [],
+            available: () => [].map((marker) => ({ markers: [marker], worktrees: true })),
+            describe: () => undefined,
+          })
+        : Layer.empty,
+    ),
     Layer.provideMerge(
       state.fileSystem
         ? Layer.merge(Layer.succeed(FileSystem.FileSystem, state.fileSystem), Path.layer)
@@ -319,6 +334,42 @@ describe("VcsStatusBroadcaster", () => {
       assert.equal(state.localStatusCalls, releasedCalls + 1);
     }).pipe(Effect.provide(layerTestFor(state)));
   });
+
+  it.effect("republishes a watched status when a VCS plugin changes", () =>
+    Effect.gen(function* () {
+      const changes = yield* PubSub.unbounded<void>();
+      const state = {
+        currentLocalStatus: baseLocalStatus,
+        currentRemoteStatus: remoteStatusWithPr as typeof remoteStatusWithPr | null,
+        localStatusCalls: 0,
+        remoteStatusCalls: 0,
+        localInvalidationCalls: 0,
+        remoteInvalidationCalls: 0,
+        backgroundWorkEnabled: false,
+        pluginChanges: Stream.fromPubSub(changes),
+      };
+      yield* Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        const events = yield* Queue.unbounded<VcsStatusStreamEvent>();
+        yield* Stream.runForEach(
+          broadcaster.streamStatus({ cwd: "/repo", includeRemote: true }),
+          (event) => Queue.offer(events, event),
+        ).pipe(Effect.forkScoped);
+        assert.equal((yield* Queue.take(events))._tag, "snapshot");
+        // A nearer plugin repository now owns the folder: its local status and no remote state,
+        // though the branch name is the same.
+        const pluginLocal = { ...baseLocalStatus };
+        state.currentLocalStatus = pluginLocal;
+        state.currentRemoteStatus = null;
+        yield* PubSub.publish(changes, undefined);
+        // The old repository's remote state, cached under the same branch name, is replaced.
+        let event = yield* Queue.take(events);
+        while (event._tag !== "remoteUpdated" || event.remote !== null)
+          event = yield* Queue.take(events);
+        assert.deepStrictEqual(event, { _tag: "remoteUpdated", remote: null });
+      }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
+    }),
+  );
 
   it.effect("keeps an unwatched refresh coherent while other directories fill the cache", () => {
     const state = {

@@ -66,6 +66,11 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.projectCloneCancel]: AuthSourceControlWriteScope,
   [WS_METHODS.projectCloneRetry]: AuthSourceControlWriteScope,
   [WS_METHODS.threadTopicsMutate]: AuthOrchestrationOperateScope,
+  // A plugin's commands run on the server, as an update's do.
+  [WS_METHODS.pluginsImport]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.pluginsRemove]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.pluginsSetEnabled]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.pluginsRecheck]: AuthEnvironmentMaintainScope,
   [WS_METHODS.worktreeSetupChooseFolder]: AuthOrchestrationOperateScope,
   [WS_METHODS.vcsPull]: AuthSourceControlWriteScope,
   [WS_METHODS.gitRunStackedAction]: AuthSourceControlWriteScope,

@@ -1,3 +1,4 @@
+import { limitGitQuickAction } from "@t3tools/client-runtime/state/vcs-capabilities";
 import { msg, useGT, useMessages } from "gt-react-native";
 
 import * as Dialog from "../../components/ui/Dialog";
@@ -6,6 +7,7 @@ import type { AppBarMenu } from "../../components/ui/AppBar.types";
 import {
   AuthSourceControlWriteScope,
   EnvironmentId,
+  GIT_VCS_KIND,
   type GitRunStackedActionResult,
   type ProjectScript,
   ThreadId,
@@ -22,6 +24,8 @@ import { changeRequestTermKind } from "../../lib/changeRequestTerm";
 
 import { m, type MessageResolver } from "../../i18n/messages";
 import { useEnvironmentScope } from "../../state/session";
+import { pluginEnvironment } from "../../state/plugins";
+import { useEnvironmentQuery } from "../../state/query";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import {
   basename,
@@ -140,6 +144,19 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
   const { gitStatus, gitOperationLabel, onPull, onRunAction } = props;
 
   const currentBranchLabel = gitStatus?.refName ?? props.currentBranch ?? gt("Detached HEAD");
+  // Atelier fork: name the VCS that owns the repository, Git or a plugin.
+  const vcsKind = gitStatus?.capabilities?.kind;
+  const plugins = useEnvironmentQuery(
+    environmentId && vcsKind !== undefined && vcsKind !== GIT_VCS_KIND
+      ? pluginEnvironment.list({
+          environmentId: EnvironmentId.make(String(environmentId)),
+          input: {},
+        })
+      : null,
+  );
+  const vcsLabel =
+    plugins.data?.plugins.find((plugin) => plugin.id === vcsKind)?.label ??
+    (vcsKind === GIT_VCS_KIND ? "Git" : null);
   const busy = gitOperationLabel !== null;
   const isRepo = gitStatus?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
@@ -154,7 +171,18 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
         hint: gt("This workspace is not a git repository."),
       };
     }
-    const action = resolveQuickAction(gitStatus, busy, isDefaultRef, hasPrimaryRemote, messages);
+    const action = limitGitQuickAction(
+      resolveQuickAction(gitStatus, busy, isDefaultRef, hasPrimaryRemote, messages),
+      gitStatus,
+      {
+        labels: {
+          commit: gt("Commit", { $context: "verb, git action" }),
+          push: gt("Push", { $context: "verb, git action" }),
+          commit_push: gt("Commit & push"),
+        },
+        unsupportedHint: gt("This repository's version control cannot do this from T3 Code."),
+      },
+    );
     return !canWriteSourceControl && (action.kind === "run_pull" || action.kind === "run_action")
       ? {
           ...action,
@@ -281,6 +309,7 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
 
   return {
     currentBranchLabel,
+    vcsLabel,
     isRepo,
     openGitInspector,
     openReview,
@@ -382,7 +411,9 @@ export function useThreadGitMenuDefinition(props: ThreadGitMenuProps): AppBarMen
               title: compactMenuBranchLabel(model.currentBranchLabel),
               icon: "point.topleft.down.curvedto.point.bottomright.up",
               disabled: true,
-              subtitle: compactMenuStatus(props.gitStatus, messages),
+              subtitle: model.vcsLabel
+                ? `${model.vcsLabel} · ${compactMenuStatus(props.gitStatus, messages)}`
+                : compactMenuStatus(props.gitStatus, messages),
               onPress: () => {},
             },
             {

@@ -247,7 +247,8 @@ const make = Effect.gen(function* () {
         .pipe(asOperationFailed(`Unable to fetch the remote base of '${baseRef}'`));
       if (resolvedRemoteBase !== null) {
         worktreeBaseRef = resolvedRemoteBase.commitSha;
-        baseRefName = `refs/remotes/${resolvedRemoteBase.remoteRefName}`;
+        baseRefName =
+          resolvedRemoteBase.baseRefName ?? `refs/remotes/${resolvedRemoteBase.remoteRefName}`;
         startedFromOrigin = true;
       }
     }

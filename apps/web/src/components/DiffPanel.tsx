@@ -1,3 +1,4 @@
+import { vcsAllows } from "@t3tools/client-runtime/state/vcs-capabilities";
 import { T, useGT, useMessages, Var } from "gt-react";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { useAtomValue } from "@effect/atom-react";
@@ -351,7 +352,21 @@ export default function DiffPanel({
   );
   // A plain folder holding tracked repositories has no branch or working tree of its own; every
   // way into the panel lands on its latest turn.
-  const turnDiffsOnly = !isGitRepo && hasRepositoryChanges;
+  // A VCS plugin's repository has turn diffs, but no Git branch, working-tree or commit views.
+  // A selected repository answers for itself: it may belong to a plugin the thread's folder does not.
+  const selectedRepositoryStatusQuery = useEnvironmentQuery(
+    activeThread != null && gitRepository !== null
+      ? vcsEnvironment.status({
+          environmentId: activeThread.environmentId,
+          input: { cwd: gitRepository.cwd },
+        })
+      : null,
+  );
+  const offersGitScopes = vcsAllows(
+    gitRepository === null ? gitStatusQuery.data : selectedRepositoryStatusQuery.data,
+    "reviewDiff",
+  );
+  const turnDiffsOnly = (!isGitRepo && hasRepositoryChanges) || (isGitRepo && !offersGitScopes);
   const diffSelection: DiffPanelSelection =
     turnDiffsOnly &&
     latestTurn !== undefined &&
@@ -439,7 +454,7 @@ export default function DiffPanel({
     { enabled: (isGitRepo || hasRepositoryChanges) && selectedTurn !== undefined },
   );
   const branchDiffPreviewInput =
-    canReadFiles && isGitSelection && activeThread && gitCwd
+    canReadFiles && offersGitScopes && isGitSelection && activeThread && gitCwd
       ? {
           cwd: gitCwd,
           ...(selectedBaseRef ? { baseRef: selectedBaseRef } : {}),
@@ -456,7 +471,8 @@ export default function DiffPanel({
             : {}),
         }
       : undefined;
-  const canRefreshGitDiff = isGitRepo && isGitSelection && activeThread != null && gitCwd != null;
+  const canRefreshGitDiff =
+    isGitRepo && offersGitScopes && isGitSelection && activeThread != null && gitCwd != null;
   // Read under the workspace mutation id, so each mutation refetches the diff; the panel stays
   // mounted while hidden, so a mutation made then is already reflected when it shows.
   const branchDiffPreview = useEnvironmentQuery(
@@ -472,7 +488,7 @@ export default function DiffPanel({
     messages,
   );
   const branchCommitsQuery = useEnvironmentQuery(
-    visible && isGitRepo && canReadFiles && activeThread && gitCwd
+    visible && isGitRepo && offersGitScopes && canReadFiles && activeThread && gitCwd
       ? reviewEnvironment.branchCommits({
           environmentId: activeThread.environmentId,
           input: {
@@ -1174,7 +1190,9 @@ export default function DiffPanel({
             )}
           </DropdownMenuContent>
         </DropdownMenu>
-        {isGitSelection && gitRepositories.length > 0 && (
+        {/* Still offered on a plugin repository's turn diffs, the thread's own folder included,
+            so another repository can be chosen. */}
+        {(isGitSelection || (isGitRepo && !offersGitScopes)) && gitRepositories.length > 0 && (
           <DropdownMenu>
             <DropdownMenuTrigger
               render={<Button size="xs" variant="ghost-muted" />}

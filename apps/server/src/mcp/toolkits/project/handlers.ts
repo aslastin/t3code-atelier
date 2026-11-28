@@ -1,4 +1,5 @@
 import {
+  GIT_VCS_KIND,
   CommandId,
   MessageId,
   ThreadId,
@@ -34,6 +35,8 @@ import {
   worktreeRootForProject,
 } from "../../../workspace/worktreeProjectPath.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
+import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
+import { VcsPluginDrivers } from "../../../plugins/VcsPluginDrivers.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import * as DateTime from "effect/DateTime";
@@ -100,15 +103,25 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
   worktreePath: string,
 ) {
   const git = yield* GitVcsDriver.GitVcsDriver;
+  // The workflow also asks a VCS plugin; without one in context, Git's own list is the answer.
+  const workflow = Option.getOrUndefined(
+    yield* Effect.serviceOption(GitWorkflowService.GitWorkflowService),
+  );
+  const markers = Option.match(yield* Effect.serviceOption(VcsPluginDrivers), {
+    onNone: () => [],
+    onSome: (plugins) => plugins.markers(),
+  });
   const fileSystem = yield* FileSystem.FileSystem;
   const real = (path: string) => fileSystem.realPath(path).pipe(Effect.orElseSucceed(() => path));
-  const worktrees = yield* git.listWorktreePaths(workspaceRoot).pipe(
+  const worktrees = yield* (workflow?.listWorktrees ?? git.listWorktreePaths)(workspaceRoot).pipe(
     Effect.flatMap((paths) => Effect.forEach(paths, real)),
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
   const path = yield* Path.Path;
   const folder = yield* real(worktreePath);
-  const root = yield* worktreeRootForProject(fileSystem, path, folder, workspaceRoot);
+  const rootOf = (target: string) =>
+    worktreeRootForProject(fileSystem, path, target, workspaceRoot, undefined, markers);
+  const root = yield* rootOf(folder);
   if (
     !worktrees.includes(root) ||
     (root !== folder &&
@@ -119,21 +132,27 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
   )
     return yield* new OrchestratorMcpFailure({
       code: "invalid_request",
-      message:
-        "worktreePath must be one of the project's git worktrees. t3_worktree_list shows them.",
+      message: "worktreePath must be one of the project's worktrees. t3_worktree_list shows them.",
     });
   const requested = path.resolve(worktreePath);
   const binding =
     requested === worktreePath || (yield* real(requested)) === folder ? requested : folder;
   if (folder !== root) {
     if (binding === folder) return folder;
-    const boundRoot = yield* worktreeRootForProject(fileSystem, path, binding, workspaceRoot);
+    const boundRoot = yield* rootOf(binding);
     return (yield* real(boundRoot)) === root ? binding : folder;
   }
   const realProject = yield* real(workspaceRoot);
-  const source = worktrees
+  // Git lists the repository with its worktrees; a VCS plugin lists only the worktrees.
+  const listedSource = worktrees
     .filter((candidate) => isWithinRoot(path, realProject, candidate))
     .toSorted((a, b) => b.length - a.length)[0];
+  const repositoryRoot =
+    listedSource === undefined && workflow !== undefined
+      ? yield* workflow.repositoryRoot(realProject).pipe(Effect.orElseSucceed(() => null))
+      : null;
+  const source =
+    listedSource ?? (repositoryRoot === null ? undefined : yield* real(repositoryRoot));
   if (source === undefined) return binding;
   return (
     (yield* worktreeProjectFolder(fileSystem, path, path.relative(source, realProject), binding)) ??
@@ -166,7 +185,7 @@ const defaultWorktreeStrategy = Effect.fn("mcp.defaultWorktreeStrategy")(functio
 ): Effect.fn.Return<
   OrchestrationV2ThreadLaunchWorkspaceStrategy | undefined,
   OrchestratorMcpFailure,
-  GitVcsDriver.GitVcsDriver
+  GitVcsDriver.GitVcsDriver | FileSystem.FileSystem | Path.Path
 > {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const unreadable = new OrchestratorMcpFailure({
@@ -174,6 +193,48 @@ const defaultWorktreeStrategy = Effect.fn("mcp.defaultWorktreeStrategy")(functio
     message:
       "Could not read the project's current branch for the new worktree. No thread was created. Retry, or pass workspaceStrategy.",
   });
+  // Another VCS answers for its own repository: a worktree from its current branch when it
+  // offers worktrees, the shared checkout otherwise, as the composer does.
+  const workflow = Option.getOrUndefined(
+    yield* Effect.serviceOption(GitWorkflowService.GitWorkflowService),
+  );
+  const status =
+    workflow === undefined
+      ? null
+      : yield* workflow.localStatus({ cwd: workspaceRoot }).pipe(Effect.orElseSucceed(() => null));
+  // A plugin repository whose status failed must not read as "not a repository" to Git below.
+  if (workflow !== undefined && status === null) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const markers = Option.match(yield* Effect.serviceOption(VcsPluginDrivers), {
+      onNone: () => [],
+      onSome: (plugins) => plugins.installedMarkers(),
+    });
+    // A symlinked project resolves to its repository as the plugin's own detection does.
+    const realRoot = yield* fileSystem
+      .realPath(workspaceRoot)
+      .pipe(Effect.orElseSucceed(() => workspaceRoot));
+    for (const start of new Set([workspaceRoot, realRoot])) {
+      for (let folder = start; ; folder = path.dirname(folder)) {
+        for (const marker of markers) {
+          if (
+            yield* fileSystem
+              .exists(path.join(folder, marker))
+              .pipe(Effect.orElseSucceed(() => false))
+          )
+            return yield* unreadable;
+        }
+        if (path.dirname(folder) === folder) break;
+      }
+    }
+  }
+  const capabilities = status?.capabilities;
+  if (status !== null && capabilities !== undefined && capabilities.kind !== GIT_VCS_KIND) {
+    if (!capabilities.supportsWorktrees) return undefined;
+    // A detached checkout has no branch to start from; it stays shared, as Git's does.
+    if (status.refName === null) return undefined;
+    return { type: "worktree" as const, baseRef: status.refName };
+  }
   const commit = yield* git
     .execute({
       operation: "mcp.defaultWorktreeStrategy",

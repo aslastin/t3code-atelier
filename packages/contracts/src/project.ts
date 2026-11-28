@@ -315,6 +315,8 @@ export type ProjectEntry = typeof ProjectEntry.Type;
 export const ProjectSearchEntriesResult = Schema.Struct({
   entries: Schema.Array(ProjectEntry),
   truncated: Schema.Boolean,
+  /** Atelier fork: set when file search is off here, as in a VCS plugin's repository. */
+  unavailable: Schema.optionalKey(Schema.Boolean),
 });
 export type ProjectSearchEntriesResult = typeof ProjectSearchEntriesResult.Type;
 
@@ -362,6 +364,8 @@ export type ProjectListEntriesInput = typeof ProjectListEntriesInput.Type;
 export const ProjectListEntriesResult = Schema.Struct({
   entries: Schema.Array(ProjectEntry),
   truncated: Schema.Boolean,
+  /** Atelier fork: a VCS plugin's repository, whose folders open one at a time, never all. */
+  treeWalkUnavailable: Schema.optionalKey(Schema.Boolean),
 });
 export type ProjectListEntriesResult = typeof ProjectListEntriesResult.Type;
 
@@ -404,7 +408,15 @@ type ProjectEntriesFailureContext = {
   readonly timeout?: string;
   readonly detail?: string;
   readonly cause?: unknown;
+  /** Atelier fork: replaces the generic text, for a failure a client cannot tell apart. */
+  readonly message?: string;
 };
+
+/**
+ * Atelier fork: `detail` of a text search refused in a VCS plugin's repository. Sent under an
+ * existing failure so that clients built before it still decode the error and show its message.
+ */
+export const PROJECT_SEARCH_UNAVAILABLE_DETAIL = "search_unavailable";
 
 function decodedProjectErrorMessage(props: object): string | undefined {
   if (!("message" in props)) return undefined;

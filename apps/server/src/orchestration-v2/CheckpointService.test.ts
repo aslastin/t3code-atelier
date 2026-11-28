@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   GIT_VCS_KIND,
+  VcsDriverKind,
   CheckpointRef,
   CheckpointScopeId,
   NodeId,
@@ -102,6 +103,10 @@ it.effect(
               ? { baseline: "Success", turn: "missing", files: [] }
               : { baseline: "Failure", turn: "error", files: [] },
           );
+          assert.strictEqual(
+            checkpoint.unavailableReason,
+            captureError._tag === "VcsUnsupportedOperationError" ? captureError.detail : undefined,
+          );
           if (baseline._tag === "Failure") {
             assert.strictEqual(baseline.failure.cause, captureError);
           } else {
@@ -116,6 +121,64 @@ it.effect(
         }).pipe(Effect.provide(layerTest));
       }
     }),
+);
+
+it.effect("keeps a snapshot its VCS cannot compare with the one before, and says why", () =>
+  Effect.gen(function* () {
+    const scope: OrchestrationV2CheckpointScope = {
+      id: CheckpointScopeId.make("checkpoint-scope:incomparable"),
+      threadId: ThreadId.make("thread:incomparable"),
+      runId: RunId.make("run:incomparable:2"),
+      nodeId: NodeId.make("node:incomparable:2"),
+      parentScopeId: null,
+      providerThreadId: ProviderThreadId.make("provider-thread:incomparable"),
+      kind: "root_run",
+      ordinalWithinParent: 0,
+      advancesAppRunCount: true,
+      cwd: "/repo/plugin",
+      createdAt: DateTime.makeUnsafe("2026-07-28T00:00:00.000Z"),
+    };
+    const detail = "The snapshots were taken with different strategies.";
+    const layerTest = CheckpointService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          layerNoTrackedFolders,
+          Layer.mock(CheckpointStore.CheckpointStore)({
+            isGitRepository: () => Effect.succeed(true),
+            hasCheckpointRef: () => Effect.succeed(true),
+            captureCheckpoint: () => Effect.void,
+            listAuthoredPaths: () => Effect.succeed(null),
+            diffCheckpoints: () =>
+              Effect.fail(
+                new VcsUnsupportedOperationError({
+                  operation: "kite.diffCheckpoints",
+                  kind: VcsDriverKind.make("kite"),
+                  detail,
+                }),
+              ),
+          }),
+        ),
+      ),
+      Layer.provideMerge(NodeCrypto.layer),
+    );
+    const checkpoint = yield* Effect.gen(function* () {
+      const checkpoints = yield* CheckpointService.CheckpointServiceV2;
+      return yield* checkpoints.capture({
+        scope,
+        ordinalWithinScope: 2,
+        runId: scope.runId!,
+        nodeId: scope.nodeId!,
+        appRunOrdinal: 2,
+        capturedAt: scope.createdAt,
+      });
+    }).pipe(Effect.provide(layerTest));
+
+    assert.deepEqual(
+      { status: checkpoint.status, files: checkpoint.files, reason: checkpoint.unavailableReason },
+      { status: "ready", files: [], reason: detail },
+    );
+  }),
 );
 
 it.effect(
@@ -582,6 +645,10 @@ it.effect("keeps the pre-rewind snapshot of a folder a failed rewind could not p
                 targets.some((target) => target.checkpoint.ref === input.checkpointRef) ||
                 existing.has(input.checkpointRef),
             ),
+          verifyRestorable: (input) =>
+            Effect.sync(() =>
+              targets.some((target) => target.checkpoint.ref === input.checkpointRef),
+            ),
           captureCheckpoint: (input) =>
             Effect.sync(() => {
               captured.push(input.cwd);
@@ -621,3 +688,72 @@ it.effect("keeps the pre-rewind snapshot of a folder a failed rewind could not p
     assert.deepEqual(captured, ["/repo/first", "/repo/second", "/repo/second"]);
   }).pipe(Effect.provide(layerTest));
 });
+
+it.effect.each(["restore", "lookup"] as const)(
+  "drops the pre-rewind copies a failed restore never used, and keeps the rest: %s fails",
+  (failing) => {
+    const targets = ["first", "second"].map((name) => ({
+      scope: { id: CheckpointScopeId.make(`checkpoint-scope:saved:${name}`), cwd: `/repo/${name}` },
+      checkpoint: {
+        ordinalWithinScope: 1,
+        ref: CheckpointRef.make(`refs/t3/test/saved/${name}`),
+        status: "ready" as const,
+      },
+    }));
+    const failure = new VcsProcessTimeoutError({
+      operation: "test.restore",
+      command: "git",
+      cwd: "/repo",
+      timeoutMs: 30000,
+    });
+    const saved = new Map<string, string>();
+    const existing = new Set<string>();
+    let lookupFails = false;
+    const layerTest = CheckpointService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          layerNoTrackedFolders,
+          Layer.mock(CheckpointStore.CheckpointStore)({
+            hasCheckpointRef: (input) =>
+              lookupFails && existing.has(input.checkpointRef)
+                ? Effect.fail(failure)
+                : Effect.sync(
+                    () =>
+                      targets.some((target) => target.checkpoint.ref === input.checkpointRef) ||
+                      existing.has(input.checkpointRef),
+                  ),
+            verifyRestorable: () => Effect.succeed(true),
+            captureCheckpoint: (input) =>
+              Effect.sync(() => {
+                existing.add(input.checkpointRef);
+                saved.set(input.cwd, input.checkpointRef);
+              }),
+            // The first folder fails, and so does putting it back; the second is never reached.
+            restoreCheckpoint: () => Effect.fail(failure),
+            deleteCheckpointRefs: (input) =>
+              Effect.sync(() => {
+                for (const ref of input.checkpointRefs) existing.delete(ref);
+              }),
+          }),
+        ),
+      ),
+      Layer.provideMerge(NodeCrypto.layer),
+    );
+    return Effect.gen(function* () {
+      const checkpoints = yield* CheckpointService.CheckpointServiceV2;
+      const scopes = targets.map((target) => target.scope);
+      const copies = yield* checkpoints.saveBeforeRestore({ targets, scopes });
+      lookupFails = failing === "lookup";
+      assert.strictEqual(
+        (yield* Effect.result(checkpoints.restore({ targets, scopes })))._tag,
+        "Failure",
+      );
+      lookupFails = false;
+      yield* copies.discard;
+      // A copy the restore could not put back is the folder's only one; a copy it never used would
+      // pass for the folder's state in the next rewind.
+      assert.deepEqual([...existing], failing === "restore" ? [saved.get("/repo/first")] : []);
+    }).pipe(Effect.provide(layerTest));
+  },
+);

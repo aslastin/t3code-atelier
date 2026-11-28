@@ -532,6 +532,25 @@ describe("t3_worktree_handoff", () => {
     });
   });
 
+  it.effect("starts from a VCS plugin's fetched base as the plugin named it", () => {
+    const harness = makeHarness({
+      git: {
+        fetchWorktreeBaseCommit: () =>
+          Effect.succeed({
+            commitSha: "kite/trunk",
+            remoteRefName: "kite/trunk",
+            baseRefName: "kite/trunk",
+          }),
+      },
+    });
+    return Effect.gen(function* () {
+      yield* runHandoff(harness, { branch: "feature/plugin-base", startFromOrigin: true });
+      expect(harness.createWorktree).toHaveBeenCalledWith(
+        expect.objectContaining({ refName: "kite/trunk", baseRefName: "kite/trunk" }),
+      );
+    });
+  });
+
   it.effect("defaults startFromOrigin to the project's override", () => {
     const harness = makeHarness({ projectNewWorktreesStartFromOrigin: true });
     return Effect.gen(function* () {

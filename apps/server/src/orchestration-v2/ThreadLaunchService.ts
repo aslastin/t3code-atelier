@@ -40,7 +40,12 @@ import {
   withExclusiveWorkspaceReservation,
   withSharedWorkspaceReservation,
 } from "../workspace/workspaceLease.ts";
-import { relativeProjectFolder, worktreeProjectFolder } from "../workspace/worktreeProjectPath.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
+import {
+  isCheckoutRoot,
+  relativeProjectFolder,
+  worktreeProjectFolder,
+} from "../workspace/worktreeProjectPath.ts";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -297,6 +302,7 @@ const make = Effect.gen(function* () {
   const terminals = yield* TerminalManager.TerminalManager;
   const git = yield* GitWorkflow.GitWorkflowService;
   const fs = yield* FileSystem.FileSystem;
+  const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
   const path = yield* Path.Path;
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
   const setupScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
@@ -541,7 +547,8 @@ const make = Effect.gen(function* () {
         if (remoteBase.base !== null) {
           return {
             startRef: remoteBase.base.commitSha,
-            baseRefName: `refs/remotes/${remoteBase.base.remoteRefName}`,
+            baseRefName:
+              remoteBase.base.baseRefName ?? `refs/remotes/${remoteBase.base.remoteRefName}`,
           };
         }
         // A completed fetch that found no branch means the branch is gone and its
@@ -743,7 +750,7 @@ const make = Effect.gen(function* () {
               .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
             if (remoteBase !== null) {
               startRef = remoteBase.commitSha;
-              baseRefName = `refs/remotes/${remoteBase.remoteRefName}`;
+              baseRefName = remoteBase.baseRefName ?? `refs/remotes/${remoteBase.remoteRefName}`;
               fetchedBase = true;
             }
           }
@@ -1022,12 +1029,14 @@ const make = Effect.gen(function* () {
       }
       workspaceRecorded = true;
 
+      // Atelier fork: a VCS plugin without `branchRename` keeps the temporary branch, unnamed.
       if (
         reused === undefined &&
         worktreePath !== null &&
         branch !== null &&
         initialMessage !== undefined &&
-        (generatedTemporaryBranch || isTemporaryWorktreeBranch(branch))
+        (generatedTemporaryBranch || isTemporaryWorktreeBranch(branch)) &&
+        (createdTaskFolder !== null || (yield* git.canRenameBranch(worktreePath)))
       ) {
         const oldBranch = branch;
         const worktreeCwd = worktreePath;
@@ -1592,9 +1601,12 @@ const make = Effect.gen(function* () {
           workspaceStrategy.type === "existing_worktree" &&
           !input.initialMessage?.sourcePlanRef &&
           Option.isNone(launchReceipt) &&
-          (yield* fs
-            .exists(path.join(workspaceStrategy.worktreePath, ".git"))
-            .pipe(Effect.orElseSucceed(() => false)))
+          (yield* isCheckoutRoot(
+            fs,
+            path,
+            workspaceStrategy.worktreePath,
+            plugins?.installedMarkers(),
+          ))
         ) {
           const root = yield* git
             .repositoryRoot(project.workspaceRoot)

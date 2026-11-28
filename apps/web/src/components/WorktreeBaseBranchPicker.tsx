@@ -1,3 +1,4 @@
+import { vcsAllows } from "@t3tools/client-runtime/state/vcs-capabilities";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useGT, useMessages } from "gt-react";
 import { ChevronDownIcon, GitBranchIcon } from "lucide-react";
@@ -55,6 +56,12 @@ export function WorktreeBaseBranchPicker({
         })
       : null,
   );
+  const statusQuery = useEnvironmentQuery(
+    cwd && onStartFromOriginChange
+      ? vcsEnvironment.status({ environmentId, input: { cwd } })
+      : null,
+  );
+  const canStartFromRemote = vcsAllows(statusQuery.data, "startFromRemote");
   const selectedRef =
     branches.refs.find((branch) => branch.name === value) ??
     selectedRefQuery.data?.refs.find((branch) => branch.name === value);
@@ -64,7 +71,7 @@ export function WorktreeBaseBranchPicker({
       effectiveEnvMode: "worktree",
       resolvedActiveBranch: value || null,
       resolvedActiveBranchIsRemote: selectedRef ? selectedRef.isRemote === true : null,
-      startFromOrigin,
+      startFromOrigin: startFromOrigin && canStartFromRemote,
     },
     messages,
   );
@@ -112,7 +119,7 @@ export function WorktreeBaseBranchPicker({
       onLoadNext={branches.loadNext}
       statusText={statusText}
       originControl={
-        onStartFromOriginChange
+        onStartFromOriginChange && canStartFromRemote
           ? { checked: startFromOrigin, onCheckedChange: onStartFromOriginChange }
           : undefined
       }

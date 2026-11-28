@@ -460,6 +460,11 @@ export function useComposerMenuItems({
         ? gt("No pull request matches {query}.", { query: composerTrigger.query })
         : gt("No pull requests found in this repository.");
     }
+    if (composerTriggerKind === "path" && workspaceEntries.unavailable) {
+      return gt(
+        "File search isn't available in this repository yet. Type two or more letters to find threads or models.",
+      );
+    }
     return composerTriggerKind === "path"
       ? gt("No matching files or folders.")
       : gt("No matching command.");

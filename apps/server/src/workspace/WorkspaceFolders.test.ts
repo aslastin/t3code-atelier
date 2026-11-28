@@ -8,6 +8,7 @@ import * as Path from "effect/Path";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import * as TaskFolderStore from "./TaskFolderStore.ts";
 import * as WorkspaceFolders from "./WorkspaceFolders.ts";
 
@@ -190,6 +191,98 @@ it.layer(NodeServices.layer)("WorkspaceFolders", (it) => {
           ["Outside", outside],
         ]);
       }).pipe(Effect.provide(layerFor({ workspaceRoot, trackedFolders })));
+    }),
+  );
+
+  it.effect("finds a VCS plugin's repository inside a project folder", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tmp = yield* makeTempDir;
+      const workspaceRoot = path.join(tmp, "wrapper");
+      yield* fileSystem.makeDirectory(path.join(workspaceRoot, "api", ".git"), { recursive: true });
+      yield* fileSystem.makeDirectory(path.join(workspaceRoot, "web", ".kite"), {
+        recursive: true,
+      });
+      yield* fileSystem.writeFileString(path.join(workspaceRoot, "web", ".kite", "HEAD"), "main\n");
+      // A plugin that cannot create worktrees.
+      yield* fileSystem.makeDirectory(path.join(workspaceRoot, "docs", ".other"), {
+        recursive: true,
+      });
+      yield* fileSystem.writeFileString(path.join(workspaceRoot, "docs", ".other", "HEAD"), "x\n");
+      // Its marker wins over `.git` at the same root, as the driver registry decides.
+      for (const marker of [".git", ".other"])
+        yield* fileSystem.makeDirectory(path.join(workspaceRoot, "both", marker), {
+          recursive: true,
+        });
+      yield* fileSystem.writeFileString(path.join(workspaceRoot, "both", ".other", "HEAD"), "x\n");
+      for (const marker of [".kite", ".other"]) {
+        yield* fileSystem.makeDirectory(path.join(workspaceRoot, "pair", marker), {
+          recursive: true,
+        });
+        yield* fileSystem.writeFileString(path.join(workspaceRoot, "pair", marker, "HEAD"), "x\n");
+      }
+      // Off, so no driver reads it.
+      yield* fileSystem.makeDirectory(path.join(workspaceRoot, "off", ".gone"), {
+        recursive: true,
+      });
+      yield* fileSystem.writeFileString(path.join(workspaceRoot, "off", ".gone", "HEAD"), "x\n");
+      const plugins = {
+        markers: () => [".kite/HEAD", ".other/HEAD"],
+        installedMarkers: () => [".kite/HEAD", ".other/HEAD", ".gone/HEAD"],
+        // Other comes first and cannot create worktrees, so it owns a folder Kite marks too.
+        available: () => [
+          { markers: [".other/HEAD"], worktrees: false },
+          { markers: [".kite/HEAD"], worktrees: true },
+        ],
+      } as unknown as VcsPluginDrivers["Service"];
+      const found = yield* WorkspaceFolders.discoverFolders(workspaceRoot).pipe(
+        Effect.provideService(VcsPluginDrivers, plugins),
+      );
+      assert.deepEqual(
+        found.map((folder) => folder.name),
+        ["api", "both", "docs", "off", "pair", "web"],
+      );
+      // A project in a plugin's repository, or its subfolder, is never scanned folder by folder:
+      // such a checkout can be a monorepo on a network mount.
+      const web = path.join(workspaceRoot, "web");
+      yield* fileSystem.makeDirectory(path.join(web, "app", "lib", ".git"), { recursive: true });
+      for (const root of [web, path.join(web, "app")])
+        assert.deepEqual(
+          yield* WorkspaceFolders.discoverFolders(root).pipe(
+            Effect.provideService(VcsPluginDrivers, plugins),
+          ),
+          [],
+        );
+      // A Git project inside it is Git's, and keeps finding its own repositories.
+      const gitProject = path.join(web, "tools");
+      yield* fileSystem.makeDirectory(path.join(gitProject, ".git"), { recursive: true });
+      yield* fileSystem.makeDirectory(path.join(gitProject, "lib", ".git"), { recursive: true });
+      assert.deepEqual(
+        (yield* WorkspaceFolders.discoverFolders(gitProject).pipe(
+          Effect.provideService(VcsPluginDrivers, plugins),
+        )).map((folder) => folder.name),
+        ["lib"],
+      );
+      // Both are repositories, but only one whose plugin can create worktrees is offered one.
+      yield* Effect.gen(function* () {
+        const workspaceFolders = yield* WorkspaceFolders.WorkspaceFolders;
+        const { folders } = yield* workspaceFolders.list({ projectId });
+        assert.deepEqual(
+          folders.map((folder) => [folder.name, folder.state, folder.worktrees]),
+          [
+            ["api", "git", undefined],
+            ["both", "git", false],
+            ["docs", "git", false],
+            ["off", "git", false],
+            ["pair", "git", false],
+            ["web", "git", undefined],
+          ],
+        );
+      }).pipe(
+        Effect.provideService(VcsPluginDrivers, plugins),
+        Effect.provide(layerFor({ workspaceRoot, trackedFolders: [] })),
+      );
     }),
   );
 

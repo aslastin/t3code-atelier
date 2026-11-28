@@ -18,6 +18,8 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
   const [loadingDirectories, setLoadingDirectories] = useState<ReadonlySet<string>>(
     () => new Set([""]),
   );
+  // Atelier fork: a VCS plugin's repository says its tree is never opened whole.
+  const [treeWalkUnavailable, setTreeWalkUnavailable] = useState(false);
   // Source of truth for `directories`, so a listing can purge folders it no longer holds.
   const listings = useRef(new Map<string, readonly ProjectEntry[]>());
   const requests = useRef(new Map<string, Promise<void>>());
@@ -55,6 +57,8 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
         // A request is dropped from `requests` when its folder disappears, so its read is stale.
         if (!active.current || !result || requests.current.get(directoryPath) !== request) return;
         if (result._tag === "Success") {
+          // Any folder can say so, once a checkout below it appears, and it stays said.
+          if (result.value.treeWalkUnavailable === true) setTreeWalkUnavailable(true);
           const children = result.value.entries.filter(
             (entry) =>
               entry.path.slice(0, Math.max(0, entry.path.lastIndexOf("/"))) === directoryPath,
@@ -188,6 +192,7 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
     refresh,
     isPending: pending > 0,
     loadingDirectories,
+    treeWalkUnavailable,
     ready: directories.has(""),
     error: [...errors].find(([path]) => reachableDirectories.has(path))?.[1] ?? null,
   };

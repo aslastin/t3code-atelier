@@ -1,6 +1,7 @@
 import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import { expect, it } from "@effect/vitest";
 import {
+  VcsDriverKind,
   EnvironmentId,
   GitCommandError,
   ProjectId,
@@ -42,6 +43,8 @@ import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
 import * as SourceControlProviderRegistry from "../../../sourceControl/SourceControlProviderRegistry.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
+import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
+import { VcsPluginDrivers } from "../../../plugins/VcsPluginDrivers.ts";
 import * as VcsProcess from "../../../vcs/VcsProcess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -65,6 +68,10 @@ const clientLaunchHarness = (input: {
   readonly hostedAppUrl?: string;
   /** The orchestrator refuses the new thread's mode, as under a managed ceiling. */
   readonly refusedByCeiling?: true;
+  /** A VCS workflow that answers for the project, as for a VCS plugin's repository. */
+  readonly workflow?: Partial<GitWorkflowService.GitWorkflowService["Service"]>;
+  /** Markers of the installed VCS plugins. */
+  readonly pluginMarkers?: ReadonlyArray<string>;
 }) => {
   const projectId = ProjectId.make("project:client-target");
   const modelSelection = {
@@ -185,6 +192,19 @@ const clientLaunchHarness = (input: {
       workspaceScanDirectory: Effect.succeed,
     }),
     Layer.mock(PeerForwarding.PeerForwarding)({}),
+    ...(input.workflow === undefined
+      ? []
+      : [Layer.mock(GitWorkflowService.GitWorkflowService)(input.workflow)]),
+    ...(input.pluginMarkers === undefined
+      ? []
+      : [
+          Layer.succeed(VcsPluginDrivers, {
+            markers: () => input.pluginMarkers ?? [],
+            installedMarkers: () => input.pluginMarkers ?? [],
+            available: () =>
+              (input.pluginMarkers ?? []).map((marker) => ({ markers: [marker], worktrees: true })),
+          } as unknown as VcsPluginDrivers["Service"]),
+        ]),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
       namedProjectsRoot: "/projects",
       isScratchProject: () => Effect.succeed(false),
@@ -858,6 +878,114 @@ it.effect("a defaulted worktree launch stays shared only when Git says HEAD has 
       }
     }
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a launch into a VCS plugin's repository asks the plugin, not Git", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const base = yield* fileSystem.realPath(
+      yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-launch-plugin-" }),
+    );
+    const repo = `${base}/repo`;
+    const checkout = `${base}/worktrees/feature`;
+    for (const folder of [`${repo}/my-project`, `${checkout}/my-project`])
+      yield* fileSystem.makeDirectory(folder, { recursive: true });
+    const status = (supportsWorktrees: boolean, refName: string | null) =>
+      ({
+        refName,
+        capabilities: { kind: VcsDriverKind.make("kite"), supportsWorktrees },
+      }) as never;
+    for (const [supportsWorktrees, expected, refName] of [
+      [true, { type: "worktree", baseRef: "main" }, "main"],
+      [false, { type: "root" }, "main"],
+      // Detached: no branch to start one from, so the launch shares the checkout.
+      [true, { type: "root" }, null],
+    ] as const) {
+      const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+      const { projectId, dependencies } = clientLaunchHarness({
+        runtimeModeCeiling: "auto",
+        launched,
+        workspaceRoot: `${repo}/my-project`,
+        defaultThreadEnvMode: "worktree",
+        workflow: {
+          localStatus: () => Effect.succeed(status(supportsWorktrees, refName)),
+          // A plugin lists its worktrees, not the repository they come from.
+          listWorktrees: () => Effect.succeed([checkout]),
+          repositoryRoot: () => Effect.succeed(repo),
+        },
+      });
+      const toolkit = yield* ProjectToolkit.pipe(
+        Effect.provide(
+          McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
+            Layer.provide(dependencies),
+          ),
+        ),
+      );
+      yield* toolkit
+        .handle("t3_thread_launch", { title: "Fix", projectId })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      expect(launched.map((launch) => launch.workspaceStrategy)).toMatchObject([expected]);
+
+      if (!supportsWorktrees || refName === null) continue;
+      // An existing checkout works in the project's subfolder there.
+      yield* toolkit
+        .handle("t3_thread_launch", {
+          title: "Fix",
+          projectId,
+          workspaceStrategy: { type: "existing_worktree", worktreePath: checkout },
+        })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      expect(launched.at(-1)?.workspaceStrategy).toMatchObject({
+        worktreePath: `${checkout}/my-project`,
+      });
+    }
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each([{ linked: false }, { linked: true }])(
+  "a defaulted launch into a plugin repository whose status fails creates nothing (%j)",
+  ({ linked }) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const repo = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-launch-plugin-fail-" });
+      yield* fileSystem.makeDirectory(`${repo}/.kite`);
+      yield* fileSystem.writeFileString(`${repo}/.kite/HEAD`, "main\n");
+      yield* fileSystem.makeDirectory(`${repo}/app`);
+      // A project opened through a link outside the repository still belongs to it.
+      const outside = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-launch-link-" });
+      if (linked) yield* fileSystem.symlink(`${repo}/app`, `${outside}/app`);
+      const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+      const { projectId, dependencies } = clientLaunchHarness({
+        runtimeModeCeiling: "auto",
+        launched,
+        workspaceRoot: linked ? `${outside}/app` : repo,
+        defaultThreadEnvMode: "worktree",
+        pluginMarkers: [".kite/HEAD"],
+        workflow: {
+          localStatus: () =>
+            Effect.fail(
+              new GitCommandError({
+                operation: "kite.status",
+                command: "status",
+                cwd: repo,
+                detail: "the plugin failed",
+              }),
+            ),
+        },
+      });
+      const toolkit = yield* ProjectToolkit.pipe(
+        Effect.provide(
+          McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
+            Layer.provide(dependencies),
+          ),
+        ),
+      );
+      const result = (yield* toolkit
+        .handle("t3_thread_launch", { title: "Fix", projectId })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies))).at(-1)?.result;
+      expect(result).toMatchObject({ code: "orchestration_error" });
+      expect(launched).toHaveLength(0);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 it.effect("a launch into a new worktree creates nothing when its branch collides", () =>

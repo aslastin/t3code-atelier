@@ -23,6 +23,8 @@ export interface ProcessRunInput {
   readonly spawnCwd?: string | undefined;
   readonly timeout?: Duration.Input | undefined;
   readonly env?: NodeJS.ProcessEnv | undefined;
+  /** False runs the command with `env` alone instead of on top of the server's environment. */
+  readonly extendEnv?: boolean | undefined;
   readonly stdin?: string | undefined;
   /** Receives every stdout chunk, including bytes beyond the buffered output limit. */
   readonly onStdoutChunk?: ((chunk: Uint8Array) => void) | undefined;
@@ -33,6 +35,8 @@ export interface ProcessRunInput {
   readonly truncatedMarker?: string | undefined;
   /** Timed-out results discard partial stdout/stderr. */
   readonly timeoutBehavior?: "error" | "timedOutResult" | undefined;
+  /** Refuse a command that would run through a shell, such as a Windows batch file. */
+  readonly forbidShell?: boolean | undefined;
 }
 
 export interface ProcessRunOutput {
@@ -273,7 +277,7 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
   const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   const outputMode = input.outputMode ?? "error";
   const truncatedMarker = input.truncatedMarker ?? "";
-  const extendEnv = input.env !== undefined;
+  const extendEnv = input.env !== undefined && input.extendEnv !== false;
   const spawnCommand = yield* resolveSpawnCommand(
     input.command,
     input.args,
@@ -291,6 +295,11 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
       shell: spawnCommand.shell,
       cause,
     });
+
+  if (input.forbidShell && spawnCommand.shell)
+    return yield* toSpawnError(
+      new Error("The command runs through a shell, which arguments must not depend on."),
+    );
 
   const spawn = spawner
     .spawn(

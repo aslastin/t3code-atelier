@@ -24,6 +24,17 @@ const missingFrom = (from: Catalog, catalog: Catalog) =>
 const root = NodePath.resolve(import.meta.dirname, "..");
 const problems: string[] = [];
 
+// gt's own version check globs every package.json below the repository, worktrees in `.t3`
+// included, so the configs skip it; the pair it keeps in step is compared here instead.
+const gtReact = readJson(NodePath.join(root, "apps/web/package.json")).dependencies?.["gt-react"];
+const gtReactNative = readJson(NodePath.join(root, "apps/mobile/package.json")).dependencies?.[
+  "gt-react-native"
+];
+if (gtReact !== gtReactNative)
+  problems.push(
+    `gt-react ${gtReact} and gt-react-native ${gtReactNative} must be the same version`,
+  );
+
 for (const [app, [command, ...args]] of Object.entries(GENERATE)) {
   const appDir = NodePath.join(root, app);
   const config = readJson(NodePath.join(appDir, "gt.config.json"));

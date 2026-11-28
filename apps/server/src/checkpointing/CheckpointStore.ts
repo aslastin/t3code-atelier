@@ -1,11 +1,15 @@
 import { GIT_VCS_KIND, type CheckpointRef } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 
 import type { CheckpointStoreError } from "./Errors.ts";
 import type { VcsCheckpointOps } from "../vcs/VcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import { pluginMarksBeforeGit, VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 
 export interface CaptureCheckpointInput {
   readonly cwd: string;
@@ -85,6 +89,10 @@ export class CheckpointStore extends Context.Service<
     readonly hasCheckpointRef: (
       input: Omit<RestoreCheckpointInput, "fallbackToHead">,
     ) => Effect.Effect<boolean, CheckpointStoreError>;
+    /** Whether a restore would succeed now, which can be stricter than the ref existing. */
+    readonly verifyRestorable: (
+      input: Omit<RestoreCheckpointInput, "fallbackToHead">,
+    ) => Effect.Effect<boolean, CheckpointStoreError>;
 
     readonly restoreCheckpoint: (
       input: RestoreCheckpointInput,
@@ -108,6 +116,9 @@ export class CheckpointStore extends Context.Service<
 /** @public */
 export const make = Effect.gen(function* () {
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
 
   const resolveCheckpoints = Effect.fn("CheckpointStore.resolveCheckpoints")(function* (
     cwd: string,
@@ -117,9 +128,18 @@ export const make = Effect.gen(function* () {
   });
 
   // The registry reads an unreadable repository as none; ask Git again so that fails here.
+  // A VCS plugin's repository counts too: its driver decides how, or whether, it checkpoints.
   const isGitRepository: CheckpointStore["Service"]["isGitRepository"] = Effect.fn(
     "CheckpointStore.isGitRepository",
   )(function* (cwd) {
+    if (vcsRegistry.hasAdditionalDrivers) {
+      const handle = yield* vcsRegistry.detect({ cwd });
+      if (handle !== null && handle.kind !== GIT_VCS_KIND) return true;
+    }
+    // Atelier fork: a checkout of a plugin that is off, every plugin off included, is not the
+    // `.git` around it.
+    if (yield* pluginMarksBeforeGit(fileSystem, path, cwd, plugins?.installedMarkers() ?? []))
+      return false;
     if ((yield* vcsRegistry.detect({ cwd, requestedKind: GIT_VCS_KIND })) !== null) return true;
     const git = yield* vcsRegistry.get(GIT_VCS_KIND);
     return (yield* git.detectRepository(cwd)) !== null;
@@ -151,6 +171,13 @@ export const make = Effect.gen(function* () {
   )(function* (input) {
     const checkpoints = yield* resolveCheckpoints(input.cwd);
     return yield* checkpoints.hasCheckpointRef(input);
+  });
+
+  const verifyRestorable: CheckpointStore["Service"]["verifyRestorable"] = Effect.fn(
+    "verifyRestorable",
+  )(function* (input) {
+    const checkpoints = yield* resolveCheckpoints(input.cwd);
+    return yield* (checkpoints.verifyRestorable ?? checkpoints.hasCheckpointRef)(input);
   });
 
   const restoreCheckpoint: CheckpointStore["Service"]["restoreCheckpoint"] = Effect.fn(
@@ -187,6 +214,7 @@ export const make = Effect.gen(function* () {
     resolveCleanHead,
     captureHeadCheckpoint,
     hasCheckpointRef,
+    verifyRestorable,
     restoreCheckpoint,
     diffCheckpoints,
     listAuthoredPaths,

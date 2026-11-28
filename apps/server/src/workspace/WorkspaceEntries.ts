@@ -6,6 +6,7 @@ import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as RcMap from "effect/RcMap";
 import * as Schema from "effect/Schema";
@@ -28,6 +29,7 @@ import { isExplicitRelativePath, isWindowsAbsolutePath } from "@t3tools/shared/p
 import { normalizeSearchQuery } from "@t3tools/shared/searchRanking";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
 import * as WorkspaceSearchIndex from "./WorkspaceSearchIndex.ts";
@@ -76,6 +78,20 @@ export class WorkspaceEntriesReadDirectoryError extends Schema.TaggedError<Works
   }
 }
 
+/**
+ * Atelier fork: text search in a VCS plugin's repository. Walking or indexing its tree can be
+ * costly, such as downloading every file on a FUSE mount, so it waits for search through the
+ * plugin itself.
+ */
+export class WorkspaceEntriesSearchUnavailableError extends Schema.TaggedError<WorkspaceEntriesSearchUnavailableError>()(
+  "WorkspaceEntriesSearchUnavailableError",
+  { cwd: Schema.String },
+) {
+  override get message(): string {
+    return `Text search is not available in a VCS plugin's repository, or a folder holding one, yet: ${this.cwd}.`;
+  }
+}
+
 export const WorkspaceEntriesBrowseError = Schema.Union([
   WorkspaceEntriesWindowsPathUnsupportedError,
   WorkspaceEntriesCurrentProjectRequiredError,
@@ -92,6 +108,7 @@ export const WorkspaceEntriesError = Schema.Union([
   WorkspaceSearchIndex.WorkspaceSearchIndexCreateFailed,
   WorkspaceSearchIndex.WorkspaceSearchIndexScanTimedOut,
   WorkspaceSearchIndex.WorkspaceSearchIndexSearchFailed,
+  WorkspaceEntriesSearchUnavailableError,
 ]);
 export type WorkspaceEntriesError = typeof WorkspaceEntriesError.Type;
 
@@ -119,6 +136,9 @@ export class WorkspaceEntries extends Context.Service<
 
 /** Ignored files offered for copying; more than this is a build folder, not config. */
 const IGNORED_FILES_LIMIT = 200;
+// Atelier fork: how long a folder's probe for a VCS plugin's checkout below it holds.
+const PLUGIN_CHECKOUT_PROBE_TTL_MS = 60_000;
+const PLUGIN_CHECKOUT_MISS_TTL_MS = 5_000;
 
 /** Paths sent to one `git check-ignore` call when labelling a folder's children. */
 const IGNORE_CHECK_CHUNK_SIZE = 1000;
@@ -154,12 +174,251 @@ const resolveBrowseTarget = Effect.fn("WorkspaceEntries.resolveBrowseTarget")(fu
   );
 });
 
+/**
+ * Atelier fork: mount points in `mount` output (macOS, `<device> on <path> (<options>)`) or in
+ * `/proc/self/mounts` (Linux, octal-escaped fields).
+ */
+export function parseMountPoints(output: string, platform: string): ReadonlyArray<string> {
+  const lines = output.split("\n").filter((line) => line.length > 0);
+  if (platform === "linux")
+    return lines.flatMap((line) => {
+      const field = line.split(" ")[1];
+      return field === undefined
+        ? []
+        : [
+            field.replace(/\\([0-7]{3})/g, (_, octal: string) =>
+              String.fromCharCode(parseInt(octal, 8)),
+            ),
+          ];
+    });
+  return lines.flatMap((line) => {
+    const match = / on (.+) \([^()]*\)$/.exec(line);
+    return match === null ? [] : [match[1]!];
+  });
+}
+
+// macOS firmlinks: `/System/Volumes/Data/Users/…` and `/Users/…` are one folder, and `realpath`
+// keeps whichever spelling it was given.
+const DARWIN_DATA_VOLUME = "/System/Volumes/Data";
+const withoutDataVolume = (target: string) =>
+  target === DARWIN_DATA_VOLUME
+    ? "/"
+    : target.startsWith(`${DARWIN_DATA_VOLUME}/`)
+      ? target.slice(DARWIN_DATA_VOLUME.length)
+      : target;
+
+/** Atelier fork: whether a mount point lies strictly inside `root`. */
+export function hasMountBelow(
+  root: string,
+  points: ReadonlyArray<string>,
+  path: Path.Path,
+  platform: string,
+): boolean {
+  const below = (from: string, to: string) => {
+    const relative = path.relative(from, to);
+    return (
+      relative !== "" &&
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative)
+    );
+  };
+  // As spelled, and on macOS with the Data volume's prefix taken off both.
+  return points.some(
+    (point) =>
+      below(root, point) ||
+      (platform === "darwin" && below(withoutDataVolume(root), withoutDataVolume(point))),
+  );
+}
+
 /** @public */
 export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
   const workspaceSearchIndexes = yield* WorkspaceSearchIndex.WorkspaceSearchIndexMap;
   const vcsProcess = yield* VcsProcess.VcsProcess;
+
+  // Atelier fork: a folder inside a VCS plugin's repository, installed plugins off included,
+  // gets no tree walk or index. The nearest checkout root decides; in the same folder a plugin's
+  // marker wins over `.git`, as the driver registry decides.
+  const constructedPlugins = yield* Effect.serviceOption(VcsPluginDrivers);
+  const inPluginRepository = Effect.fnUntraced(function* (cwd: string) {
+    const current = Option.isSome(constructedPlugins)
+      ? constructedPlugins
+      : yield* Effect.serviceOption(VcsPluginDrivers);
+    const markers = Option.isSome(current) ? current.value.installedMarkers() : [];
+    if (markers.length === 0) return false;
+    const exists = (target: string) =>
+      Effect.promise(() =>
+        NodeFSP.access(target).then(
+          () => true,
+          () => false,
+        ),
+      );
+    // Physical ancestors, as the driver finds the repository: a link can point into one.
+    const start = yield* Effect.promise(() => NodeFSP.realpath(cwd).catch(() => path.resolve(cwd)));
+    for (let folder = start; ; folder = path.dirname(folder)) {
+      for (const marker of markers) {
+        if (yield* exists(path.join(folder, marker))) return true;
+      }
+      if (yield* exists(path.join(folder, ".git"))) return false;
+      if (path.dirname(folder) === folder) return false;
+    }
+  });
+
+  // A folder that holds a plugin's checkout a level or two down, such as a home folder or a
+  // wrapper of repositories, walks into it as well. Probed as the folder scan does, outside Git,
+  // and remembered for a while: it reads the folder's children and theirs.
+  const holdsPluginCheckout = new Map<string, { readonly at: number; readonly holds: boolean }>();
+  // A checkout can be another file system, such as a FUSE mount, at any depth: none is walked.
+  const platform = yield* HostProcess.Platform;
+  // Null when the table cannot be read, which counts as a mount anywhere.
+  let mounts: { readonly at: number; readonly points: ReadonlyArray<string> | null } | undefined;
+  const mountPoints = Effect.fnUntraced(function* (now: number) {
+    if (mounts !== undefined && now - mounts.at < PLUGIN_CHECKOUT_MISS_TTL_MS) return mounts.points;
+    const output =
+      platform === "linux"
+        ? yield* Effect.promise(() =>
+            NodeFSP.readFile("/proc/self/mounts", "utf8").catch(() => null),
+          )
+        : platform === "darwin"
+          ? yield* vcsProcess
+              .run({
+                operation: "WorkspaceEntries.mountPoints",
+                command: "/sbin/mount",
+                args: [],
+                cwd: "/",
+                allowNonZeroExit: true,
+                timeoutMs: 5_000,
+                maxOutputBytes: 1024 * 1024,
+              })
+              .pipe(
+                Effect.map((result) =>
+                  result.exitCode === 0 && !result.stdoutTruncated ? result.stdout : null,
+                ),
+                Effect.orElseSucceed(() => null),
+              )
+          : "";
+    mounts = { at: now, points: output === null ? null : parseMountPoints(output, platform) };
+    return mounts.points;
+  });
+  // Checkouts a folder listing found deeper than the probe reaches, asked again on each probe.
+  const foundCheckouts = new Map<string, Set<string>>();
+  const containsPluginCheckout = Effect.fnUntraced(function* (cwd: string) {
+    const current = Option.isSome(constructedPlugins)
+      ? constructedPlugins
+      : yield* Effect.serviceOption(VcsPluginDrivers);
+    const markers = Option.isSome(current) ? current.value.installedMarkers() : [];
+    if (markers.length === 0) return false;
+    const now = yield* Clock.currentTimeMillis;
+    const known = holdsPluginCheckout.get(cwd);
+    // A checkout found stays found a while; none found is asked again soon, as one can appear.
+    if (
+      known !== undefined &&
+      now - known.at < (known.holds ? PLUGIN_CHECKOUT_PROBE_TTL_MS : PLUGIN_CHECKOUT_MISS_TTL_MS)
+    )
+      return known.holds;
+    const root = yield* Effect.promise(() => NodeFSP.realpath(cwd).catch(() => path.resolve(cwd)));
+    // In a Git repository, only the mount table is asked: Arc's checkouts are mounts, and Git
+    // users keep the search they had, without folder reads on each probe.
+    const inGit = yield* Effect.promise(async () => {
+      for (let folder = root; ; folder = path.dirname(folder)) {
+        if (
+          await NodeFSP.access(path.join(folder, ".git")).then(
+            () => true,
+            () => false,
+          )
+        )
+          return true;
+        if (path.dirname(folder) === folder) return false;
+      }
+    });
+    const probed = yield* Effect.promise(async () => {
+      if (inGit) return false;
+      const marked = async (folder: string) => {
+        for (const marker of markers) {
+          if (
+            await NodeFSP.access(path.join(folder, marker)).then(
+              () => true,
+              () => false,
+            )
+          )
+            return true;
+        }
+        return false;
+      };
+      const childFolders = async (folder: string) =>
+        (await NodeFSP.readdir(folder, { withFileTypes: true }).catch(() => []))
+          .filter(
+            (entry) =>
+              entry.isDirectory() && entry.name !== ".git" && entry.name !== "node_modules",
+          )
+          .map((entry) => path.join(folder, entry.name));
+      for (const child of await childFolders(cwd)) {
+        if (await marked(child)) return true;
+        for (const grandchild of await childFolders(child))
+          if (await marked(grandchild)) return true;
+      }
+      return false;
+    });
+    const found = yield* Effect.promise(async () => {
+      for (const folder of foundCheckouts.get(cwd) ?? []) {
+        for (const marker of markers) {
+          if (
+            await NodeFSP.access(path.join(folder, marker)).then(
+              () => true,
+              () => false,
+            )
+          )
+            return true;
+        }
+      }
+      return false;
+    });
+    const points = yield* mountPoints(now);
+    const holds = probed || found || points === null || hasMountBelow(root, points, path, platform);
+    holdsPluginCheckout.set(cwd, { at: now, holds });
+    return holds;
+  });
+  const holdsMarkedFolder = Effect.fnUntraced(function* (
+    cwd: string,
+    entries: ReadonlyArray<ProjectEntry>,
+  ) {
+    const current = Option.isSome(constructedPlugins)
+      ? constructedPlugins
+      : yield* Effect.serviceOption(VcsPluginDrivers);
+    const markers = Option.isSome(current) ? current.value.installedMarkers() : [];
+    if (markers.length === 0) return false;
+    const marked = yield* Effect.promise(async () => {
+      const folders: string[] = [];
+      for (const entry of entries) {
+        if (entry.kind !== "directory") continue;
+        for (const marker of markers) {
+          if (
+            await NodeFSP.access(path.join(cwd, entry.path, marker)).then(
+              () => true,
+              () => false,
+            )
+          ) {
+            folders.push(path.join(cwd, entry.path));
+            break;
+          }
+        }
+      }
+      return folders;
+    });
+    if (marked.length === 0) return false;
+    // The probe asks about these from now on, so search stops indexing the folder too.
+    const known = foundCheckouts.get(cwd) ?? new Set<string>();
+    for (const folder of marked) known.add(folder);
+    foundCheckouts.set(cwd, known);
+    holdsPluginCheckout.set(cwd, { at: yield* Clock.currentTimeMillis, holds: true });
+    return true;
+  });
+  const walksPluginRepository = (cwd: string) =>
+    inPluginRepository(cwd).pipe(
+      Effect.flatMap((inside) => (inside ? Effect.succeed(true) : containsPluginCheckout(cwd))),
+    );
 
   const normalizeWorkspaceRoot = Effect.fn("WorkspaceEntries.normalizeWorkspaceRoot")(function* (
     cwd: string,
@@ -184,9 +443,17 @@ export const make = Effect.gen(function* () {
       const normalizedCwd = yield* normalizeWorkspaceRoot(cwd).pipe(
         Effect.orElseSucceed(() => cwd),
       );
+      let pluginRepository: boolean | undefined;
       for (const variant of WorkspaceSearchIndex.WORKSPACE_SEARCH_INDEX_VARIANTS) {
         const indexKey = WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, variant);
         if (!(yield* RcMap.has(workspaceSearchIndexes.rcMap, indexKey))) {
+          continue;
+        }
+        // An index made before a plugin claimed the folder is dropped, never refreshed.
+        pluginRepository ??= yield* walksPluginRepository(normalizedCwd);
+        if (pluginRepository) {
+          lastSearchedAt.delete(indexKey);
+          yield* workspaceSearchIndexes.invalidate(indexKey);
           continue;
         }
         const searchedAt = lastSearchedAt.get(indexKey) ?? 0;
@@ -275,6 +542,8 @@ export const make = Effect.gen(function* () {
   const search: WorkspaceEntries["Service"]["search"] = Effect.fn("WorkspaceEntries.search")(
     function* (input) {
       const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
+      if (yield* walksPluginRepository(normalizedCwd))
+        return { entries: [], truncated: false, unavailable: true };
       const normalizedQuery = normalizeSearchQuery(input.query, {
         trimLeadingPattern: /^[@./]+/,
       });
@@ -372,6 +641,8 @@ export const make = Effect.gen(function* () {
     "WorkspaceEntries.searchContents",
   )(function* (input) {
     const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
+    if (yield* walksPluginRepository(normalizedCwd))
+      return yield* new WorkspaceEntriesSearchUnavailableError({ cwd: normalizedCwd });
     const indexKey = WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, "content");
     markSearched(indexKey, yield* Clock.currentTimeMillis);
     return yield* Effect.gen(function* () {
@@ -500,6 +771,20 @@ export const make = Effect.gen(function* () {
           },
           catch: toError,
         });
+        // Atelier fork: a Git repository around a VCS plugin's checkout does not decide what the
+        // plugin's files are; only one nested inside the folder does. Its tree is never opened
+        // whole, so clients do not offer to.
+        // A checkout among this folder's own, at any depth, stops a walk before it goes in.
+        const pluginRepository = yield* inPluginRepository(normalizedCwd);
+        // Asked even when the probe already says so, so the checkout is remembered after the
+        // probe's own finding goes away.
+        const marked = yield* holdsMarkedFolder(normalizedCwd, entries);
+        const walk =
+          pluginRepository || marked || (yield* containsPluginCheckout(normalizedCwd))
+            ? { treeWalkUnavailable: true }
+            : {};
+        if (nestedGitRoots.length === 0 && pluginRepository)
+          return { entries, truncated: false, ...walk };
         let gitRoot = "";
         let gitPrefix = "";
         // stdin avoids argument limits; ignore classification is optional without git/repositories.
@@ -535,6 +820,7 @@ export const make = Effect.gen(function* () {
           return {
             entries: entries.map((entry) => ({ ...entry, ignored: true })),
             truncated: false,
+            ...walk,
           };
         }
         const ignored = new Set<string>();
@@ -550,8 +836,11 @@ export const make = Effect.gen(function* () {
             ignored.has(entry.path) ? { ...entry, ignored: true } : entry,
           ),
           truncated: false,
+          ...walk,
         };
       }
+      // The whole tree at once; one folder at a time, above, reads only that folder.
+      if (yield* walksPluginRepository(normalizedCwd)) return { entries: [], truncated: false };
       const indexKey = WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, "paths");
       markSearched(indexKey, yield* Clock.currentTimeMillis);
       return yield* Effect.gen(function* () {
@@ -565,6 +854,8 @@ export const make = Effect.gen(function* () {
     "WorkspaceEntries.listIgnoredFiles",
   )(function* (input) {
     const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
+    // Atelier fork: a Git repository around a VCS plugin's checkout would list its whole tree.
+    if (yield* walksPluginRepository(normalizedCwd)) return { files: [], truncated: false };
     // `--directory` reports a folder holding nothing but ignored files as one
     // `name/` entry, which is how `node_modules` and build output drop out.
     const result = yield* vcsProcess

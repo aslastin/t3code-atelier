@@ -17,6 +17,7 @@ import {
 import {
   ProjectSearchContentsError,
   PROJECT_SEARCH_CONTENTS_QUERY_MAX_LENGTH,
+  PROJECT_SEARCH_UNAVAILABLE_DETAIL,
   THREAD_SEARCH_QUERY_MAX_LENGTH,
 } from "@t3tools/contracts";
 import { messageSearchTokens } from "@t3tools/shared/paletteSearch";
@@ -357,6 +358,7 @@ export function useProjectPathSearch(
     searchedTarget: debouncedTarget,
     searchedQuery: debouncedTarget.query ?? "",
     truncated: result.data?.truncated ?? false,
+    unavailable: hasTarget && result.data?.unavailable === true,
     refresh: result.refresh,
   };
 }
@@ -449,7 +451,10 @@ export function useProjectContentSearch(
                   count: PROJECT_SEARCH_CONTENTS_QUERY_MAX_LENGTH,
                 }),
               )
-            : result.error,
+            : isProjectSearchContentsError(result.failure) &&
+                result.failure.detail === PROJECT_SEARCH_UNAVAILABLE_DETAIL
+              ? resolve(msg("Text search is not available in this repository yet."))
+              : result.error,
     isPending:
       isCheckingAccess ||
       (canReadFiles && hasQuery && !queryTooLong && (query !== debouncedQuery || result.isPending)),

@@ -58,7 +58,10 @@ function setup() {
   mocks.reachable = Atom.make(false);
   mocks.connectedSession = Atom.make(1);
   let view!: ReturnType<typeof useDirectoryEntries>;
-  const calls: Array<{ path: string; resolve: (entries: readonly ProjectEntry[]) => void }> = [];
+  const calls: Array<{
+    path: string;
+    resolve: (entries: readonly ProjectEntry[], treeWalkUnavailable?: boolean) => void;
+  }> = [];
   let activeQueries = 0;
   let peakQueries = 0;
   function HookProbe() {
@@ -69,8 +72,12 @@ function setup() {
     return null;
   }
 
-  async function settle(index: number, entries: readonly ProjectEntry[] = []) {
-    await act(async () => calls[index]!.resolve(entries));
+  async function settle(
+    index: number,
+    entries: readonly ProjectEntry[] = [],
+    treeWalkUnavailable?: boolean,
+  ) {
+    await act(async () => calls[index]!.resolve(entries, treeWalkUnavailable));
   }
 
   listEntries.mockReset().mockImplementation((request) => {
@@ -79,9 +86,11 @@ function setup() {
     return new Promise((resolve) => {
       calls.push({
         path: request.input.directoryPath,
-        resolve: (entries) => {
+        resolve: (entries, treeWalkUnavailable) => {
           activeQueries--;
-          resolve({ entries });
+          resolve(
+            treeWalkUnavailable === undefined ? { entries } : { entries, treeWalkUnavailable },
+          );
         },
       });
     });
@@ -120,6 +129,22 @@ it("coalesces 20 overlapping refreshes", async () => {
   for (let index = 1; index < state.calls.length; index++) await state.settle(index);
   expect(state.calls).toHaveLength(3); // Initial load, active refresh, one final rescan.
   expect(state.view.isPending).toBe(false);
+});
+
+it("keeps a folder's word that the tree is never walked whole", async () => {
+  const state = setup();
+  // The hook probe does not navigate.
+  await using _screen = await render(<state.Probe />, { router: false });
+  await state.settle(0, [{ path: "work", kind: "directory" }]);
+  expect(state.view.treeWalkUnavailable).toBe(false);
+  // A plugin's checkout among `work`'s folders, found once `work` is listed.
+  await act(async () => void state.view.load("work"));
+  await state.settle(1, [{ path: "work/mono", kind: "directory" }], true);
+  expect(state.view.treeWalkUnavailable).toBe(true);
+  await act(async () => state.view.refresh());
+  for (let index = 2; index < state.calls.length; index++)
+    await state.settle(index, [{ path: "work", kind: "directory" }]);
+  expect(state.view.treeWalkUnavailable).toBe(true);
 });
 
 it("rescans mutations during both the initial listing and the follow-up", async () => {

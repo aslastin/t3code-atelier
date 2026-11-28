@@ -14,6 +14,7 @@ import type * as Scope from "effect/Scope";
 import * as ServerConfig from "../config.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as TaskFolders from "./TaskFolders.ts";
+import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
 import * as TaskFolderStore from "./TaskFolderStore.ts";
 import {
   layerTaskFoldersWithGit,
@@ -93,6 +94,61 @@ const withState = <A, E>(
   const state: TaskFoldersTestState = { workspaceRoot: "/unset", trackedFolders: [], thread: null };
   return test(state).pipe(Effect.provide(layerFor(state)), Effect.scoped);
 };
+
+it.live("never empties a file system mounted inside a plain project's task folder", () => {
+  const state: TaskFoldersTestState = { workspaceRoot: "/unset", trackedFolders: [], thread: null };
+  // A folder reported on another device, as a mount point is.
+  let mount: string | null = null;
+  const onMount = (target: string) =>
+    mount !== null && (target === mount || target.startsWith(`${mount}/`));
+  const mountedFileSystem = Layer.effect(
+    FileSystem.FileSystem,
+    Effect.map(FileSystem.FileSystem, (fs) =>
+      FileSystem.FileSystem.of({
+        ...fs,
+        stat: (target) =>
+          fs
+            .stat(target)
+            .pipe(Effect.map((info) => (onMount(target) ? { ...info, dev: info.dev + 1n } : info))),
+      }),
+    ),
+  ).pipe(Layer.provide(NodeServices.layer));
+  return Effect.gen(function* () {
+    const { fileSystem, path, tmp, repository } = yield* fixture;
+    const shop = path.join(tmp, "shop");
+    const web = yield* repository("shop/web");
+    yield* fileSystem.writeFileString(path.join(shop, "AGENTS.md"), "rules\n");
+    state.workspaceRoot = shop;
+    state.trackedFolders = tracked(web);
+    const { taskFolder } = yield* create("feature", [{ path: web }]);
+    // Holding nothing but a link, it would read as one of this service's own folders.
+    const mnt = path.join(taskFolder.projectPath, "mnt");
+    yield* fileSystem.makeDirectory(mnt);
+    yield* fileSystem.symlink(path.join(shop, "AGENTS.md"), path.join(mnt, "kept-link"));
+    mount = mnt;
+    const taskFolders = yield* TaskFolders.TaskFolders;
+    yield* taskFolders.remove({ root: taskFolder.root, force: false, forget: true });
+    assert.isTrue(
+      Option.isSome(yield* fileSystem.readLink(path.join(mnt, "kept-link")).pipe(Effect.option)),
+    );
+  }).pipe(
+    Effect.provide(
+      layerTaskFoldersWithGit(state).pipe(
+        Layer.provideMerge(
+          GitVcsDriver.layer.pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "t3-task-folders-" }),
+            ),
+            Layer.provideMerge(
+              Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, mountedFileSystem),
+            ),
+          ),
+        ),
+      ),
+    ),
+    Effect.scoped,
+  );
+});
 
 it.live("lays a plain wrapper out as links around its repositories' worktrees", () =>
   withState((state) =>
@@ -275,6 +331,180 @@ it.live("gives two creations on one branch a folder each", () =>
     }),
   ),
 );
+
+it.live("gives a VCS plugin's project folder a checkout, not links to the original", () => {
+  const state: TaskFoldersTestState = { workspaceRoot: "/unset", trackedFolders: [], thread: null };
+  return Effect.gen(function* () {
+    const { fileSystem, path, tmp, repository } = yield* fixture;
+    const shop = path.join(tmp, "shop");
+    yield* fileSystem.makeDirectory(path.join(shop, ".kite"), { recursive: true });
+    yield* fileSystem.writeFileString(path.join(shop, ".kite", "HEAD"), "main\n");
+    const api = yield* repository("shop/api");
+    state.workspaceRoot = shop;
+    state.trackedFolders = tracked(api);
+    const taskFolders = yield* TaskFolders.TaskFolders;
+    const plan = yield* taskFolders.plan({ projectId });
+    assert.isTrue(plan?.projectIsRepository);
+
+    // Recovery finds the plugin's checkout in place: the plugin lists it, so it is the thread's.
+    const root = path.join(tmp, "task");
+    const checkout = path.join(root, "shop");
+    yield* fileSystem.makeDirectory(path.join(checkout, ".kite"), { recursive: true });
+    yield* fileSystem.writeFileString(path.join(checkout, ".kite", "HEAD"), "feature\n");
+    const restore = taskFolders.restore({
+      taskFolder: {
+        root,
+        projectId,
+        projectRoot: shop,
+        anchor: shop,
+        projectPath: checkout,
+        projectIsWorktree: true,
+        repositories: [],
+      },
+      branch: "feature",
+      recreate: () => Effect.die("an existing checkout is never recreated"),
+    });
+    const unlisted = yield* restore.pipe(Effect.flip);
+    assert.include(unlisted.detail, "is not a worktree of");
+    state.pluginWorktrees = [shop, checkout];
+    // A marker left behind with its store gone answers no status: it is not the thread's.
+    state.brokenCheckouts = [checkout];
+    const broken = yield* restore.pipe(Effect.flip);
+    assert.include(broken.detail, "is not a worktree of");
+    state.brokenCheckouts = [];
+    yield* restore;
+    // A plugin may keep a Git clone of its own there; its marker still decides.
+    yield* fileSystem.makeDirectory(path.join(checkout, ".git"));
+    yield* restore;
+    yield* fileSystem.remove(path.join(checkout, ".git"), { recursive: true });
+    // Another VCS's checkout at the listed path is not the thread's.
+    yield* fileSystem.remove(path.join(checkout, ".kite"), { recursive: true });
+    yield* fileSystem.makeDirectory(path.join(checkout, ".other"), { recursive: true });
+    yield* fileSystem.writeFileString(path.join(checkout, ".other", "HEAD"), "main\n");
+    const replaced = yield* restore.pipe(Effect.flip);
+    assert.include(replaced.detail, "is not a worktree of");
+  }).pipe(
+    Effect.provide(
+      layerFor(state).pipe(
+        Layer.provide(
+          Layer.succeed(VcsPluginDrivers, {
+            hasAny: () => true,
+            markers: () => [".kite/HEAD", ".other/HEAD"],
+            installedMarkers: () => [".kite/HEAD", ".other/HEAD"],
+            available: () =>
+              [".kite/HEAD", ".other/HEAD"].map((marker) => ({
+                markers: [marker],
+                worktrees: true,
+              })),
+          } as unknown as VcsPluginDrivers["Service"]),
+        ),
+      ),
+    ),
+    Effect.scoped,
+  );
+});
+
+it.live(
+  "starts a VCS plugin's repository from its default branch, and only one that can get a worktree",
+  () => {
+    const state: TaskFoldersTestState = {
+      workspaceRoot: "/unset",
+      trackedFolders: [],
+      thread: null,
+      pluginRefs: [{ name: "main", isDefault: true }, { name: "experiment" }],
+    };
+    return Effect.gen(function* () {
+      const { fileSystem, path, tmp } = yield* fixture;
+      const shop = path.join(tmp, "shop");
+      const web = path.join(shop, "web");
+      yield* fileSystem.makeDirectory(path.join(web, ".kite"), { recursive: true });
+      yield* fileSystem.writeFileString(path.join(web, ".kite", "HEAD"), "experiment\n");
+      // Beside it, one whose plugin cannot create worktrees stays shared.
+      const docs = path.join(shop, "docs");
+      yield* fileSystem.makeDirectory(path.join(docs, ".other"), { recursive: true });
+      yield* fileSystem.writeFileString(path.join(docs, ".other", "HEAD"), "main\n");
+      state.workspaceRoot = shop;
+      state.trackedFolders = tracked(web, docs);
+      const taskFolders = yield* TaskFolders.TaskFolders;
+      assert.deepEqual(
+        (yield* taskFolders.plan({ projectId }))?.repositories.map((folder) => folder.path),
+        [web],
+      );
+      const chosen = yield* taskFolders
+        .plan({ projectId, repositories: [{ path: docs }] })
+        .pipe(Effect.flip);
+      assert.include(chosen.detail, "cannot create worktrees");
+      // The base asked for is one the plugin's repository does not have.
+      const { taskFolder } = yield* create("feature", undefined, "develop");
+      // Left out of the folder like any repository not chosen, never linked to its checkout.
+      assert.isFalse(yield* fileSystem.exists(path.join(taskFolder.root, "docs")));
+
+      assert.deepEqual(
+        state.pluginCreated?.map((created) => created.refName),
+        ["main"],
+      );
+      // A plugin that names the branch its own way cannot join a folder of one branch.
+      state.pluginNamesBranch = "kite/other";
+      const renamed = yield* create("second").pipe(Effect.flip);
+      assert.include(renamed.detail, "is on kite/other, not second");
+    }).pipe(
+      Effect.provide(
+        layerFor(state).pipe(
+          Layer.provide(
+            Layer.succeed(VcsPluginDrivers, {
+              hasAny: () => true,
+              // Other is available, but cannot create worktrees.
+              markers: () => [".kite/HEAD", ".other/HEAD"],
+              installedMarkers: () => [".kite/HEAD", ".other/HEAD"],
+              available: () => [
+                { markers: [".kite/HEAD"], worktrees: true },
+                { markers: [".other/HEAD"], worktrees: false },
+              ],
+            } as unknown as VcsPluginDrivers["Service"]),
+          ),
+        ),
+      ),
+      Effect.scoped,
+    );
+  },
+);
+
+it.live("gives no task folder to a project in a subfolder of a VCS plugin's repository", () => {
+  const state: TaskFoldersTestState = { workspaceRoot: "/unset", trackedFolders: [], thread: null };
+  return Effect.gen(function* () {
+    const { fileSystem, path, tmp, repository } = yield* fixture;
+    const mono = path.join(tmp, "mono");
+    yield* fileSystem.makeDirectory(path.join(mono, ".kite"), { recursive: true });
+    yield* fileSystem.writeFileString(path.join(mono, ".kite", "HEAD"), "main\n");
+    const app = path.join(mono, "app");
+    yield* fileSystem.makeDirectory(app, { recursive: true });
+    const web = yield* repository("web");
+    state.workspaceRoot = app;
+    state.trackedFolders = tracked(web);
+    const taskFolders = yield* TaskFolders.TaskFolders;
+    // Its files would be linked to the originals, so the launch checks out the plugin's
+    // repository alone, and a repository chosen beside it is refused.
+    assert.isNull(yield* taskFolders.plan({ projectId }));
+    const chosen = yield* taskFolders
+      .plan({ projectId, repositories: [{ path: web }] })
+      .pipe(Effect.flip);
+    assert.include(chosen.detail, "subfolder of a VCS plugin's repository");
+  }).pipe(
+    Effect.provide(
+      layerFor(state).pipe(
+        Layer.provide(
+          Layer.succeed(VcsPluginDrivers, {
+            hasAny: () => true,
+            markers: () => [".kite/HEAD"],
+            installedMarkers: () => [".kite/HEAD"],
+            available: () => [{ markers: [".kite/HEAD"], worktrees: true }],
+          } as unknown as VcsPluginDrivers["Service"]),
+        ),
+      ),
+    ),
+    Effect.scoped,
+  );
+});
 
 it.live.each([{ projectIsRepository: true }, { projectIsRepository: false }])(
   "answers an existing thread's worktree request with a task folder, project is a repository=$projectIsRepository",

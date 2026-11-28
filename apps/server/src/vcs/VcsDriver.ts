@@ -102,6 +102,10 @@ export interface VcsCheckpointOps {
   readonly restoreCheckpoint: (
     input: VcsRestoreCheckpointInput,
   ) => Effect.Effect<boolean, VcsError>;
+  /** Atelier fork: whether a restore would succeed now; `hasCheckpointRef` when absent. */
+  readonly verifyRestorable?: (
+    input: Omit<VcsRestoreCheckpointInput, "fallbackToHead">,
+  ) => Effect.Effect<boolean, VcsError>;
   readonly diffCheckpoints: (input: VcsDiffCheckpointsInput) => Effect.Effect<string, VcsError>;
   readonly listAuthoredPaths: (
     input: VcsListAuthoredPathsInput,
@@ -119,6 +123,44 @@ export interface VcsWorkflowOps {
   readonly createWorktree?: WorkflowOperation<VcsCreateWorktreeInput, VcsCreateWorktreeResult>;
   readonly removeWorktree?: WorkflowOperation<VcsRemoveWorktreeInput, void>;
   readonly listWorktrees?: WorkflowOperation<VcsStatusInput, ReadonlyArray<string>>;
+  /** Uncommitted changes as a Git-format patch, to write a commit message from. */
+  readonly workingDiff?: WorkflowOperation<
+    { readonly cwd: string; readonly filePaths?: ReadonlyArray<string> | undefined },
+    string
+  >;
+  /** Recent commit subjects, newest first, for the style of written commit messages. */
+  readonly recentCommitSubjects?: WorkflowOperation<
+    { readonly cwd: string },
+    ReadonlyArray<string>
+  >;
+  /** Starts a branch from the checkout and switches to it, keeping uncommitted changes. */
+  readonly createBranch?: WorkflowOperation<
+    { readonly cwd: string; readonly refName: string },
+    void
+  >;
+  /**
+   * Atelier fork: renames a branch. Unless `exactName`, a taken name gets a free variant; the
+   * name it took is returned.
+   */
+  readonly renameBranch?: WorkflowOperation<
+    {
+      readonly cwd: string;
+      readonly oldBranch: string;
+      readonly newBranch: string;
+      readonly exactName?: boolean;
+    },
+    { readonly branch: string }
+  >;
+  /**
+   * Atelier fork: brings a branch up to date from the remote without touching the checkout, and
+   * returns the ref or revision a worktree should start from.
+   */
+  readonly fetchWorktreeBase?: WorkflowOperation<
+    { readonly cwd: string; readonly refName: string },
+    { readonly baseRef: string }
+  >;
+  /** Forgets worktrees whose folder is gone, before one is created at the same path again. */
+  readonly pruneWorktrees?: WorkflowOperation<{ readonly cwd: string }, void>;
   readonly commit?: WorkflowOperation<
     Pick<GitRunStackedActionInput, "cwd" | "filePaths" | "commitMessage">,
     GitRunStackedActionResult["commit"]

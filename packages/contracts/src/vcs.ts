@@ -35,6 +35,14 @@ export const VcsDriverCapabilities = Schema.Struct({
   supportsAtomicSnapshot: Schema.Boolean,
   supportsPushDefaultRemote: Schema.Boolean,
   ignoreClassifier: Schema.Literals(["native", "git-compatible-fallback"]),
+  /** Atelier fork: a VCS plugin can start a branch from the checkout, for "Commit on a new branch". */
+  supportsBranchCreate: Schema.optionalKey(Schema.Boolean),
+  /** Atelier fork: false when a VCS plugin can only commit every change, not selected files. */
+  supportsPartialCommit: Schema.optionalKey(Schema.Boolean),
+  /** Atelier fork: whether a VCS plugin can pull. */
+  supportsPull: Schema.optionalKey(Schema.Boolean),
+  /** Atelier fork: whether a VCS plugin can fetch a worktree's base, for "Start from remote". */
+  supportsFetchBase: Schema.optionalKey(Schema.Boolean),
 });
 export type VcsDriverCapabilities = typeof VcsDriverCapabilities.Type;
 
@@ -283,6 +291,20 @@ export class VcsCheckpointStorageError extends Schema.TaggedError<VcsCheckpointS
   }
 }
 
+/** Atelier fork: a VCS plugin printed output that breaks the `t3-plugin/1` contract. */
+export class VcsPluginOutputError extends Schema.TaggedError<VcsPluginOutputError>()(
+  "VcsPluginOutputError",
+  {
+    operation: Schema.String,
+    kind: VcsDriverKind,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `The ${this.kind} plugin's ${this.operation} output is not valid: ${this.detail}`;
+  }
+}
+
 export const VcsError = Schema.Union([
   VcsCheckpointStorageError,
   VcsProcessSpawnError,
@@ -294,5 +316,6 @@ export const VcsError = Schema.Union([
   VcsProcessMissingExitCodeError,
   VcsRepositoryDetectionError,
   VcsUnsupportedOperationError,
+  VcsPluginOutputError,
 ]);
 export type VcsError = typeof VcsError.Type;

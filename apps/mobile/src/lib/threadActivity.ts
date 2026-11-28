@@ -2785,11 +2785,12 @@ export function buildThreadFeed(
   }
   const checkpointByMessageId = new Map(
     (options?.checkpointSummaries ?? [])
-      // A plain folder holding repositories never has a ready checkpoint of its own.
-      .filter(
-        (checkpoint) =>
-          (checkpoint.status === "ready" || checkpoint.repositories !== undefined) &&
-          turnHasChanges(checkpoint),
+      // A plain folder holding repositories never has a ready checkpoint of its own. A turn
+      // without changes to show keeps its summary only to say why.
+      .filter((checkpoint) =>
+        turnHasChanges(checkpoint)
+          ? checkpoint.status === "ready" || checkpoint.repositories !== undefined
+          : checkpoint.unavailableReason !== undefined,
       )
       .map((checkpoint) => [checkpoint.assistantMessageId, checkpoint]),
   );

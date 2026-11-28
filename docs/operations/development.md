@@ -90,6 +90,9 @@ The first start in any checkout also builds the native resource monitor with Car
 `native/resource-monitor/target` has no binary. Without Rust, dev starts with a warning
 and no process telemetry; install Rust and run `vp run build:resource-monitor`.
 Never run a development server against the live `~/.t3/userdata`.
+A linked worktree's own state puts the worktrees its threads create in
+`~/.t3-dev-worktrees/<repository>/<worktree>`, outside the checkout, so tools that walk the
+repository never reach them; `T3CODE_WORKTREES_DIR` overrides the folder.
 See [test data](../../AGENTS.md#test-data) for copying a consistent database snapshot.
 
 Read ports from the `[dev-runner]` output. Worktrees derive stable preferences from their paths,
@@ -108,6 +111,13 @@ To add a scenario, point a `SCENARIOS` entry at a generic ACP replay fixture
 (`registry_transcript.ndjson`) or a file in [dev-replay](../../apps/server/scripts/dev-replay).
 The agent replays session updates, permission requests, and questions. It drops session setup
 and vendor frames, so Grok and fx recordings lose their vendor-only behavior.
+
+### Kite VCS plugin
+
+`vp run --filter t3 kite-plugin <folder>` writes Kite, the made-up VCS the plugin tests use, to
+`<folder>/plugin` and a Kite repository to `<folder>/repo`. Import the plugin in Settings → Source
+control and add the repository as a project to try VCS plugin features without a real VCS. Kite
+keeps its state in plain files under `.kite/` and logs every command to `.kite/calls.log`.
 
 ### Profiling dev startup
 

@@ -1,3 +1,4 @@
+import { vcsAllows } from "@t3tools/client-runtime/state/vcs-capabilities";
 import { useAtomValue } from "@effect/atom-react";
 import { resolveFilesystemReadAccess } from "@t3tools/client-runtime/state/filesystem";
 import { Atom } from "effect/reactivity";
@@ -25,6 +26,7 @@ import {
   type ReviewGitSectionKind,
   type ReviewSectionItem,
 } from "./reviewModel";
+import { vcsEnvironment } from "../../state/vcs";
 import { setReviewSelectedSectionId, type ReviewCacheForThread } from "./reviewState";
 
 const NO_GIT_SECTIONS_ATOM = Atom.make<ReadonlyArray<ReviewDiffPreviewSource>>([]).pipe(
@@ -62,8 +64,19 @@ export function useReviewSections(input: {
   const selectedThread = useSelectedThreadProjection();
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const { selectedThreadProject } = useThreadSelection();
+  // A VCS plugin's repository has turn diffs, but no Git working-tree or branch previews.
+  const vcsStatus = useEnvironmentQuery(
+    enabled && environmentId !== undefined && selectedThreadCwd !== null
+      ? vcsEnvironment.status({ environmentId, input: { cwd: selectedThreadCwd } })
+      : null,
+  );
+  const offersGitSections = vcsAllows(vcsStatus.data, "reviewDiff");
   const diffPreviewQuery = (sourceKind: ReviewGitSectionKind) =>
-    canReadFiles && enabled && environmentId !== undefined && selectedThreadCwd !== null
+    canReadFiles &&
+    offersGitSections &&
+    enabled &&
+    environmentId !== undefined &&
+    selectedThreadCwd !== null
       ? reviewEnvironment.diffPreview({
           environmentId,
           input: { cwd: selectedThreadCwd, sourceKind },
@@ -77,11 +90,14 @@ export function useReviewSections(input: {
       : NO_GIT_SECTIONS_ATOM,
   );
 
+  // Sections remembered from before the repository went to a VCS plugin are not its own.
   const gitSections = (
-    [
-      ["working-tree", workingTreePreview],
-      ["branch-range", branchPreview],
-    ] as const
+    offersGitSections
+      ? ([
+          ["working-tree", workingTreePreview],
+          ["branch-range", branchPreview],
+        ] as const)
+      : []
   ).flatMap(([kind, preview]) =>
     (preview.data?.incomplete
       ? lastGitSections
@@ -107,10 +123,12 @@ export function useReviewSections(input: {
     checkpoints: readyCheckpoints,
     gitSections: canReadFiles || fileAccess.isPending ? gitSections : [],
     turnDiffById: reviewTurnDiffsBySectionId(readyCheckpoints, lastTurnDiffs),
-    gitSectionStates: {
-      "working-tree": gitSectionState(fileAccess.isPending, workingTreePreview),
-      "branch-range": gitSectionState(fileAccess.isPending, branchPreview),
-    },
+    gitSectionStates: offersGitSections
+      ? {
+          "working-tree": gitSectionState(fileAccess.isPending, workingTreePreview),
+          "branch-range": gitSectionState(fileAccess.isPending, branchPreview),
+        }
+      : { "working-tree": null, "branch-range": null },
     ...(selectedThreadProject ? { rootName: selectedThreadProject.title } : {}),
     resolve: messages,
   });

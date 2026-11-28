@@ -922,7 +922,11 @@ export function NewTaskDraftScreen(props: {
             : gt("Switches to the current checkout")
         }
         accessibilityLabel={workspaceLabel}
-        disabled={isComposerInteractionLocked || !(flow.isGitRepo || flow.tracksGitRepositories)}
+        disabled={
+          isComposerInteractionLocked ||
+          !flow.offersWorktrees ||
+          !(flow.isGitRepo || flow.tracksGitRepositories)
+        }
         renderIcon={(size) => (
           <NewTaskWorkspaceIcon
             workspaceMode={flow.workspaceMode}
