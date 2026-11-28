@@ -1181,7 +1181,9 @@ describe("ManifestVcsDriver", () => {
           },
         });
         yield* Effect.gen(function* () {
-          const { driver, repository, plugins } = yield* setup({ checkpoints: ["changed-files"] });
+          const { driver, repository, plugins, sql } = yield* setup({
+            checkpoints: ["changed-files"],
+          });
           const checkpoints = driver!.checkpoints;
           yield* plugins.importFolder(
             writeFakeVcsPlugin(NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-other-plugin-`), {
@@ -1213,6 +1215,38 @@ describe("ManifestVcsDriver", () => {
             .restoreCheckpoint({ cwd: repository, checkpointRef: ref("1") })
             .pipe(Effect.ignore);
           assert.strictEqual(NodeFS.readFileSync(`${repository}/sub/new.txt`, "utf8"), "mine\n");
+          // A record that still lists the file, as one saved before such files were left out,
+          // does not delete it either, even when Kite reports nothing else in the checkout.
+          NodeFS.writeFileSync(`${repository}/.kite/ignored`, "sub/.other\n");
+          yield* sql`
+            UPDATE atelier_vcs_plugin_checkpoint_records
+            SET files_json = ${JSON.stringify([{ path: "sub/new.txt", status: "added" }])}
+            WHERE checkpoint_ref = ${ref("1")}
+          `;
+          yield* checkpoints
+            .restoreCheckpoint({ cwd: repository, checkpointRef: ref("1") })
+            .pipe(Effect.ignore);
+          assert.strictEqual(NodeFS.readFileSync(`${repository}/sub/new.txt`, "utf8"), "mine\n");
+          // A saved file whose folder is now another checkout, holding a folder in its place, is
+          // refused without reading that folder.
+          NodeFS.rmSync(`${repository}/sub/.other`, { recursive: true });
+          NodeFS.rmSync(`${repository}/sub/new.txt`);
+          NodeFS.rmSync(`${repository}/.kite/ignored`);
+          NodeFS.writeFileSync(`${repository}/sub/b.txt`, "saved\n");
+          yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("2") });
+          NodeFS.rmSync(`${repository}/sub/b.txt`);
+          NodeFS.mkdirSync(`${repository}/sub/b.txt/deep`, { recursive: true });
+          NodeFS.writeFileSync(`${repository}/sub/b.txt/deep/theirs.txt`, "theirs\n");
+          NodeFS.mkdirSync(`${repository}/sub/.other`);
+          NodeFS.writeFileSync(`${repository}/sub/.other/HEAD`, "main\n");
+          reads.length = 0;
+          assert.isFalse(
+            yield* checkpoints.verifyRestorable!({ cwd: repository, checkpointRef: ref("2") }),
+          );
+          assert.deepStrictEqual(
+            reads.filter((target) => target.includes("sub/b.txt")),
+            [],
+          );
         }).pipe(Effect.provideService(FileSystem.FileSystem, tracked));
       }).pipe(Effect.provide(layer), Effect.scoped),
   );
@@ -1450,7 +1484,7 @@ describe("ManifestVcsDriver", () => {
 
   it.live("full stages the whole folder, but never the VCS's own metadata", () =>
     Effect.gen(function* () {
-      const { driver, repository, sql, home } = yield* setup({ checkpoints: ["full"] });
+      const { driver, repository, sql, home, plugins } = yield* setup({ checkpoints: ["full"] });
       const checkpoints = driver!.checkpoints;
       yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
       NodeFS.writeFileSync(`${repository}/a.txt`, "edited\n");
@@ -1489,6 +1523,30 @@ describe("ManifestVcsDriver", () => {
       assert.notInclude(literal, "[ab]/x.txt");
       NodeFS.rmSync(`${repository}/[ab]`, { recursive: true });
       NodeFS.rmSync(`${repository}/a`, { recursive: true });
+
+      // Another installed plugin's checkout inside is never staged: Git would read all of it.
+      yield* plugins.importFolder(
+        writeFakeVcsPlugin(NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-other-plugin-`), {
+          id: "other",
+          extraManifest: { detect: { markers: [".other/HEAD"] } },
+        }),
+      );
+      NodeFS.mkdirSync(`${repository}/vendor/.other`, { recursive: true });
+      NodeFS.writeFileSync(`${repository}/vendor/.other/HEAD`, "main\n");
+      NodeFS.writeFileSync(`${repository}/vendor/theirs.txt`, "theirs\n");
+      NodeFS.writeFileSync(`${repository}/mine.txt`, "mine\n");
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("v") });
+      const withNested = yield* checkpoints.diffCheckpoints({
+        cwd: repository,
+        fromCheckpointRef: ref("0"),
+        toCheckpointRef: ref("v"),
+        ignoreWhitespace: false,
+      });
+      assert.include(withNested, "b/mine.txt");
+      assert.notInclude(withNested, "vendor/");
+      yield* checkpoints.deleteCheckpointRefs({ cwd: repository, checkpointRefs: [ref("v")] });
+      NodeFS.rmSync(`${repository}/vendor`, { recursive: true });
+      NodeFS.rmSync(`${repository}/mine.txt`);
 
       // A Git repository made inside since is saved as its commit alone, so it is never removed.
       const tool = `${repository}/vendor/tool`;

@@ -347,38 +347,52 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     };
   });
 
+  /**
+   * Whether a folder of `entry`'s path below the root, not `entry` itself, is a link, a mount or
+   * a repository of its own: what is inside is not this checkout's. `cache` spans one operation.
+   */
+  const enclosedByNested = Effect.fnUntraced(function* (
+    location: Location,
+    entry: string,
+    cache: Map<string, boolean>,
+  ) {
+    if (!cache.has("")) {
+      const root = yield* fs.stat(location.root).pipe(Effect.option);
+      cache.set("", Option.isSome(root));
+      if (Option.isSome(root)) rootDevices.set(location.root, root.value.dev);
+    }
+    const rootDevice = rootDevices.get(location.root);
+    const parts = entry.split("/");
+    for (let index = 1; index < parts.length; index++) {
+      const folder = parts.slice(0, index).join("/");
+      let nested = cache.get(folder);
+      if (nested === undefined) {
+        const absolute = path.join(location.root, folder);
+        nested =
+          Option.isSome(yield* fs.readLink(absolute).pipe(Effect.option)) ||
+          (yield* fs.stat(absolute).pipe(
+            Effect.map((info) => rootDevice !== undefined && info.dev !== rootDevice),
+            Effect.orElseSucceed(() => false),
+          )) ||
+          (yield* isRepositoryRoot(absolute));
+        cache.set(folder, nested);
+      }
+      if (nested) return true;
+    }
+    return false;
+  });
+  const rootDevices = new Map<string, bigint>();
+
   // A file inside a repository, a mount or a linked folder is not this checkout's to save,
   // whatever the plugin lists. A restore still sees it, and refuses to change it.
   const ownFiles = Effect.fnUntraced(function* (
     location: Location,
     files: ReadonlyArray<ChangedFile>,
   ) {
-    const rootDevice = (yield* fs.stat(location.root).pipe(Effect.option)).pipe(
-      Option.map((info) => info.dev),
-      Option.getOrUndefined,
-    );
-    const nestedFolder = new Map<string, boolean>();
-    const isNestedFolder = Effect.fnUntraced(function* (folder: string) {
-      const known = nestedFolder.get(folder);
-      if (known !== undefined) return known;
-      const absolute = path.join(location.root, folder);
-      const nested =
-        Option.isSome(yield* fs.readLink(absolute).pipe(Effect.option)) ||
-        (yield* fs.stat(absolute).pipe(
-          Effect.map((info) => rootDevice !== undefined && info.dev !== rootDevice),
-          Effect.orElseSucceed(() => false),
-        )) ||
-        (yield* isRepositoryRoot(absolute));
-      nestedFolder.set(folder, nested);
-      return nested;
-    });
+    const cache = new Map<string, boolean>();
     const own: ChangedFile[] = [];
     for (const file of files) {
-      const parts = file.path.split("/");
-      let enclosed = false;
-      for (let index = 1; index < parts.length && !enclosed; index++)
-        enclosed = yield* isNestedFolder(parts.slice(0, index).join("/"));
-      if (!enclosed) own.push(file);
+      if (!(yield* enclosedByNested(location, file.path, cache))) own.push(file);
     }
     return own;
   });
@@ -593,8 +607,30 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     }),
   };
 
-  const stageFull = (location: Location, index: string, excludes: ReadonlyArray<string>) =>
-    git(
+  // A mount or another plugin's checkout inside is left out: Git would read all of it. A Git
+  // repository inside is staged as its commit alone, as Git does.
+  const stageFull = Effect.fnUntraced(function* (
+    location: Location,
+    index: string,
+    excludes: ReadonlyArray<string>,
+  ) {
+    const scope = location.scope === "" ? location.root : path.join(location.root, location.scope);
+    const walked = yield* walk(scope, true, true);
+    if (walked === null)
+      return yield* unsupported("captureCheckpoint", `${location.scope || "."} could not be read.`);
+    const prefix = location.scope === "" ? "" : `${location.scope}/`;
+    const nested: string[] = [];
+    for (const entry of walked) {
+      if (entry.kind === "mount") nested.push(`${prefix}${entry.path}`);
+      else if (
+        entry.kind === "repository" &&
+        !(yield* fs
+          .exists(path.join(scope, entry.path, ".git"))
+          .pipe(Effect.orElseSucceed(() => false)))
+      )
+        nested.push(`${prefix}${entry.path}`);
+    }
+    yield* git(
       location,
       [
         "add",
@@ -602,12 +638,13 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         "--all",
         "--",
         location.scope === "" ? ":(top)" : `:(top,literal)${location.scope}`,
-        ...[...context.metadataFolders, ...excludes].map(
+        ...[...context.metadataFolders, ...excludes, ...nested].map(
           (exclude) => `:(top,literal,exclude)${exclude}`,
         ),
       ],
       { index },
-    ).pipe(Effect.asVoid);
+    );
+  });
 
   const captureCheckpoint: VcsCheckpointOps["captureCheckpoint"] = Effect.fn(
     "pluginCheckpoints.captureCheckpoint",
@@ -818,7 +855,12 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
    * Every entry below `absolute`, `/`-separated, links listed but never followed: a recursive
    * directory read can descend into a linked folder. Null when a folder cannot be read.
    */
-  const walk = Effect.fnUntraced(function* (absolute: string, stopAtRepositories = false) {
+  const walk = Effect.fnUntraced(function* (
+    absolute: string,
+    stopAtRepositories = false,
+    // The folder itself is the checkout being walked, not a repository inside it.
+    ownRoot = false,
+  ) {
     const found: Array<{
       readonly path: string;
       readonly kind: "link" | "folder" | "file" | "mount" | "repository";
@@ -832,6 +874,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       // A repository's files are its own: never read, however large.
       if (
         stopAtRepositories &&
+        !(ownRoot && relative === "") &&
         (yield* isRepositoryRoot(relative === "" ? absolute : path.join(absolute, relative)))
       ) {
         found.push({ path: relative, kind: "repository" });
@@ -1183,9 +1226,15 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     for (const file of plan.targetFiles) {
       if (file.status === "deleted") yield* removeKeeping(location, file.path, excludes);
     }
+    const enclosure = new Map<string, boolean>();
     for (const file of plan.current.files) {
-      // A folder the checkpoint added may have gained files since.
-      if (plan.targetPaths.has(file.path) && file.status === "added") {
+      // A folder the checkpoint added may have gained files since. One inside another
+      // repository or a mount is that one's, whatever an older checkpoint recorded.
+      if (
+        plan.targetPaths.has(file.path) &&
+        file.status === "added" &&
+        !(yield* enclosedByNested(location, file.path, enclosure))
+      ) {
         const nested = (yield* nestedRepositories(location, file.path)) ?? [file.path];
         for (const extra of yield* listFiles(location, file.path)) {
           if (!overlaySet.has(extra) && inScope(extra, location.scope, [...excludes, ...nested]))
@@ -1257,8 +1306,8 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     // A mount is never listed through; restores refuse or keep it, as a nested repository.
     const root = yield* fs.stat(location.root).pipe(Effect.orElseSucceed(() => null));
     if (root !== null && root.dev !== info.dev) return [];
-    // Nor a folder reached through a linked parent, which a restore refuses: it is elsewhere.
-    if (yield* throughLinkedParent(location, folder)) return [];
+    // Nor a folder inside a link, a mount or a repository of its own, which a restore refuses.
+    if (yield* enclosedByNested(location, folder, new Map())) return [];
     // A link is removed itself; its target, maybe outside the checkout, is never visited. A
     // repository inside is never read: its files are its own.
     return ((yield* walk(absolute, true)) ?? [])
