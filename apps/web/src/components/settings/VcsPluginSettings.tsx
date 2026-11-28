@@ -242,7 +242,9 @@ function PluginRow({
             <AlertDialogDescription>
               <T>
                 Its installed copy is deleted, and its repositories are no longer detected until you
-                import the plugin again. Turn it off instead to keep it installed.
+                import the plugin again. Until then they are plain folders, so file search and the
+                file tree may read every file in them, which on a large or mounted repository can be
+                slow. Turn it off instead to keep it installed and its repositories unread.
               </T>
             </AlertDialogDescription>
           </AlertDialogHeader>
