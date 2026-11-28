@@ -196,7 +196,8 @@ a new thread starts from the top of the list again.
 - `changed-files` asks `changedFiles` for the changed paths and keeps a copy of them in a Git
   repository under T3 home. Only modified and added files are read, and deletions are recorded
   without reading anything. A new folder reported as one entry is read in full, except repositories and mounts
-  inside it. Unchanged files
+  inside it, and a rewind removes it whole, ignored files in it included: list untracked files
+  one by one if your VCS can. Unchanged files
   are never read; when a diff needs their committed version, it comes from `readFile`. Two
   snapshots can be compared only when `changedFiles` reported the same `revision` for both.
 - `full` copies the whole thread folder into that Git repository. It reads every file, so on a
