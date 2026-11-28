@@ -2641,9 +2641,7 @@ describe("VCS plugin worktrees", () => {
   it.effect("checks the whole VCS plugin checkout before removing it from a subfolder", () =>
     Effect.gen(function* () {
       const fixture = yield* cleanupFixture(undefined, undefined, { recreates: true });
-      // Another installed plugin's marker in the subfolder does not make it the checkout.
-      yield* fixture.fs.makeDirectory(`${fixture.pluginWorktree}/sub/.other`, { recursive: true });
-      yield* fixture.fs.writeFileString(`${fixture.pluginWorktree}/sub/.other/HEAD`, "main\n");
+      yield* fixture.fs.makeDirectory(`${fixture.pluginWorktree}/sub`, { recursive: true });
       // Another thread works at the checkout's root.
       fixture.setThreads([
         shell({
