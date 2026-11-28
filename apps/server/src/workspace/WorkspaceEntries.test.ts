@@ -1287,6 +1287,26 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
         }),
     );
 
+    it.effect("remembers a listed checkout while a shallower one already says so", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir();
+        yield* writeTextFile(cwd, "first/.kite/HEAD", "main\n");
+        yield* writeTextFile(cwd, "a/b/second/.kite/HEAD", "main\n");
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const inPlugin = Effect.provideService(VcsPluginDrivers, {
+          installedMarkers: () => [".kite/HEAD"],
+        } as unknown as VcsPluginDrivers["Service"]);
+        yield* workspaceEntries.list({ cwd, directoryPath: "a/b" }).pipe(inPlugin);
+        // The shallow checkout goes; the deep one, listed before, still stops the walk.
+        yield* Effect.promise(() => NodeFSP.rm(`${cwd}/first`, { recursive: true }));
+        yield* TestClock.adjust("2 minutes");
+        expect(
+          (yield* workspaceEntries.list({ cwd, directoryPath: "" }).pipe(inPlugin))
+            .treeWalkUnavailable,
+        ).toBe(true);
+      }).pipe(Effect.provide(TestClock.layer())),
+    );
+
     it("reads mount points from mount and /proc/self/mounts output", () => {
       expect(
         WorkspaceEntries.parseMountPoints(

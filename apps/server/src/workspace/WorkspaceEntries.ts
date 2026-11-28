@@ -739,10 +739,11 @@ export const make = Effect.gen(function* () {
         // whole, so clients do not offer to.
         // A checkout among this folder's own, at any depth, stops a walk before it goes in.
         const pluginRepository = yield* inPluginRepository(normalizedCwd);
+        // Asked even when the probe already says so, so the checkout is remembered after the
+        // probe's own finding goes away.
+        const marked = !pluginRepository && (yield* holdsMarkedFolder(normalizedCwd, entries));
         const walk =
-          pluginRepository ||
-          (yield* containsPluginCheckout(normalizedCwd)) ||
-          (yield* holdsMarkedFolder(normalizedCwd, entries))
+          pluginRepository || marked || (yield* containsPluginCheckout(normalizedCwd))
             ? { treeWalkUnavailable: true }
             : {};
         if (nestedGitRoots.length === 0 && pluginRepository)
