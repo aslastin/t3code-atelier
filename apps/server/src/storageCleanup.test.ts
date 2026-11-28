@@ -2459,7 +2459,14 @@ describe("VCS plugin worktrees", () => {
   );
 
   it.effect.each([
-    { name: "a clean checkout", files: [], verdict: { keep: null, force: true } },
+    // Clean, it is removed without force, so the plugin keeps work saved after this check.
+    { name: "a clean checkout", files: [], verdict: { keep: null, force: false } },
+    {
+      name: "a clean checkout under a rule that keeps ignored files",
+      files: [],
+      keepWhen: "any-local-files" as const,
+      verdict: { keep: "may hold ignored files its VCS plugin does not list", force: false },
+    },
     {
       name: "a checkout with changes",
       files: [{ path: "a.txt" }],
@@ -2474,7 +2481,18 @@ describe("VCS plugin worktrees", () => {
   ])("checks $name in a task folder through the plugin", (row) =>
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
-      const fixture = yield* cleanupFixture(undefined, undefined, { recreates: true });
+      const fixture = yield* cleanupFixture(
+        "keepWhen" in row
+          ? {
+              ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+              worktreeAfterDays: 8,
+              worktreeOnDelete: true,
+              worktreeKeepWhen: row.keepWhen,
+            }
+          : undefined,
+        undefined,
+        { recreates: true },
+      );
       const thread = shell({ branch: "feature", worktreePath: fixture.pluginWorktree });
       fixture.setThreads([]);
       fixture.setDeletedThreads([thread]);

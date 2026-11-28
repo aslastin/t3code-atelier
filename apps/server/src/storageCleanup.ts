@@ -359,6 +359,11 @@ const make = Effect.gen(function* () {
   const gitManager = yield* GitManager.GitManager;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const plugins = Option.getOrUndefined(yield* Effect.serviceOption(VcsPluginDrivers));
+  // Installed plugins' markers, off ones too: an off plugin's checkout is still the nearest
+  // repository to whatever is inside it.
+  const guardMarkers = () => [
+    ...new Set([...(plugins?.markers() ?? []), ...(plugins?.installedMarkers() ?? [])]),
+  ];
   const gitWorkflowHasPlugins = () => plugins?.hasAny() === true;
   const reconcileBranch = yield* WorktreeBranchSync.makeReconcile;
   const terminals = yield* TerminalManager.TerminalManager;
@@ -502,8 +507,7 @@ const make = Effect.gen(function* () {
   ) {
     const status = yield* gitWorkflow.status({ cwd: worktreePath });
     const plugin = plugins?.describe(status.capabilities?.kind ?? "");
-    // Untracked files count unless the rule keeps only tracked changes. A plugin lists no
-    // ignored files, so "any local files" sees only what its status shows.
+    // Untracked files count unless the rule keeps only tracked changes.
     const files = status.workingTree.files.filter(
       (file) => rules.worktreeKeepWhen !== "tracked-changes" || file.untracked !== true,
     ).length;
@@ -512,13 +516,19 @@ const make = Effect.gen(function* () {
       label: plugin?.label ?? "Its VCS plugin",
       recreates: plugin?.recreatesWorktrees === true,
       branchChanged: status.refName !== branch,
+      // Only a checkout with files the rule lets go is removed by force; a clean one is removed
+      // without, so the plugin keeps work saved after this check.
+      force: status.workingTree.files.length > 0,
       changes:
-        files > 0
-          ? `has uncommitted changes (${files} ${files === 1 ? "file" : "files"})`
-          : // Some VCSs keep a worktree's branch only in the worktree, so its commits go with it.
-            status.aheadCount > 0
-            ? "has commits that are not pushed"
-            : null,
+        // A plugin lists no ignored files, so a rule that keeps them cannot tell: it keeps all.
+        rules.worktreeKeepWhen === "any-local-files"
+          ? "may hold ignored files its VCS plugin does not list"
+          : files > 0
+            ? `has uncommitted changes (${files} ${files === 1 ? "file" : "files"})`
+            : // Some VCSs keep a worktree's branch only in the worktree, so its commits go with it.
+              status.aheadCount > 0
+              ? "has commits that are not pushed"
+              : null,
     };
   });
   const worktreePathsForCheck = () => {
@@ -562,15 +572,7 @@ const make = Effect.gen(function* () {
       pluginCheckout ??
       (projectCwd === undefined
         ? ((yield* gitWorkflow.repositoryRoot(target)) ?? target)
-        : yield* worktreeRootForProject(
-            fs,
-            path,
-            target,
-            projectCwd,
-            undefined,
-            // Installed ones too: an off plugin's checkout is still the nearest repository.
-            [...new Set([...(plugins?.markers() ?? []), ...(plugins?.installedMarkers() ?? [])])],
-          ))
+        : yield* worktreeRootForProject(fs, path, target, projectCwd, undefined, guardMarkers()))
     );
   });
   const boundThreads = Effect.fn("StorageCleanup.boundThreads")(function* (root: string) {
@@ -1343,7 +1345,7 @@ const make = Effect.gen(function* () {
           if (lastReason !== null)
             return { keep: lastReason, force: false, bytes: inspection.bytes };
           // Checked as the sweep checks it, so the plugin is not asked to keep untracked files.
-          return { keep: null, force: true, bytes: inspection.bytes };
+          return { keep: null, force: last.force, bytes: inspection.bytes };
         }
         const reason =
           (yield* worktreePathReason(checkoutPath)) ??
@@ -1415,14 +1417,7 @@ const make = Effect.gen(function* () {
         "workspaceRoot" in thread ? thread.workspaceRoot : projectRoots.get(thread.projectId);
       const root =
         projectRoot && thread.branch !== null
-          ? yield* worktreeRootForProject(
-              fs,
-              path,
-              folder,
-              projectRoot,
-              undefined,
-              plugins?.markers(),
-            )
+          ? yield* worktreeRootForProject(fs, path, folder, projectRoot, undefined, guardMarkers())
           : folder;
       rootsByThread.set(thread.id, root);
     }
@@ -1829,7 +1824,7 @@ const make = Effect.gen(function* () {
               yield* gitWorkflow.removeWorktree({
                 cwd: project.workspaceRoot,
                 path: worktreePath,
-                force: true,
+                force: last.force,
               });
               entries.push({
                 ...entry,
