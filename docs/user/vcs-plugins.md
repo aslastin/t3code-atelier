@@ -135,7 +135,10 @@ relative to the repository root and use `/`.
 With `worktreeCreate`, `worktreeRemove` and `worktreeList`, **New worktree** is offered for the
 plugin's repositories. A new worktree starts on a temporary branch; with `branchRename`, T3 Code
 renames it after the thread's first message, as it does for Git, and without it the branch keeps
-its temporary name. **Start from remote** is offered with `fetchBase`: T3 Code runs it in the
+its temporary name. T3 Code checks `status` before removing a worktree that is not forced, and
+cleanup removes one only when it is clean. Commits are your VCS's to keep: if removing a worktree
+deletes its local branches, `worktreeRemove` should exit with an error while one holds commits
+that exist nowhere else. **Start from remote** is offered with `fetchBase`: T3 Code runs it in the
 repository, then passes the ref it printed to `worktreeCreate` as `{baseRef}`. Commit, push and
 pull are offered only when their commands exist. Without a typed message, T3 Code writes one as
 it does for Git, from the files `status` lists and, when the plugin has it, the patch `diff`
