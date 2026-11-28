@@ -5,18 +5,77 @@ import { userEvent } from "vite-plus/test/browser";
 
 const { state, updateSettings, checkOtlpEndpoint, checkOtlpEndpointCommand } = vi.hoisted(() => ({
   state: {
+    allEnvironments: false,
+    compareConnect: false,
+    duplicateLabels: false,
+    listeners: new Set<() => void>(),
     observability: {} as typeof DEFAULT_SERVER_SETTINGS.observability,
     serverConfig: { environment: { capabilities: {} } } as {
       environment: { capabilities: { otlpEndpointCheck?: boolean } };
       observability?: ServerObservability;
     },
   },
-  updateSettings: vi.fn(async () => ({ _tag: "Success" as const, value: undefined })),
+  updateSettings: vi.fn(async () => ({ _tag: "Success" as const, value: DEFAULT_SERVER_SETTINGS })),
   checkOtlpEndpoint: vi.fn(async (_request: unknown) => ({
     _tag: "Success" as const,
     value: { _tag: "Accepted" as const, latencyMs: 12 },
   })),
   checkOtlpEndpointCommand: { permissionAtom: () => null },
+}));
+
+function exportEnvironments() {
+  const serverConfig = {
+    ...state.serverConfig,
+    settings: { ...DEFAULT_SERVER_SETTINGS, observability: state.observability },
+    environment: { ...state.serverConfig.environment, platform: { machine: "server" } },
+  };
+  return [
+    {
+      environmentId: "ready",
+      label: "Ready",
+      displayUrl: "http://ready.example",
+      connected: true,
+      serverConfig,
+    },
+    ...(state.compareConnect
+      ? [
+          {
+            environmentId: "other",
+            label: state.duplicateLabels ? "Ready" : "Other",
+            displayUrl: "http://other.example",
+            connected: true,
+            serverConfig: {
+              ...serverConfig,
+              observability: activeExport,
+              settings: {
+                ...DEFAULT_SERVER_SETTINGS,
+                observability: {
+                  ...DEFAULT_SERVER_SETTINGS.observability,
+                  otlpTracesUrl: "http://other/v1/traces",
+                },
+              },
+            },
+          },
+        ]
+      : []),
+    { environmentId: "offline", label: "Offline", connected: false, serverConfig },
+    {
+      environmentId: "legacy",
+      label: "Legacy",
+      connected: true,
+      serverConfig: { ...serverConfig, observability: { ...activeExport, telemetry: undefined } },
+    },
+  ];
+}
+
+vi.mock(import("../../state/environments"), async (original) => ({
+  ...(await original()),
+  useEnvironments: (() => ({ environments: exportEnvironments() })) as never,
+  usePrimaryEnvironmentId: () => null,
+}));
+vi.mock(import("../../state/session"), async (original) => ({
+  ...(await original()),
+  useEnvironmentsWithScope: (environments) => new Set(environments.map((env) => env.environmentId)),
 }));
 
 vi.mock(import("@effect/atom-react"), async (original) => ({
@@ -43,31 +102,237 @@ vi.mock(import("../../state/server"), async (original) => {
     } as unknown as typeof actual.serverEnvironment,
   };
 });
-vi.mock(import("./SettingsScopeContext"), async (original) => ({
-  ...(await original()),
-  useSettingsScope: (() => ({
-    scope: { kind: "environment" },
-    environment: {
-      environmentId: "env",
-      label: "MAC1",
-      serverConfig: state.serverConfig,
-    },
-  })) as never,
-}));
-vi.mock(import("./useScopedSettings"), async (original) => ({
-  ...(await original()),
-  useScopedSettings: ((select: (settings: typeof state) => unknown) => select(state)) as never,
-}));
-
+vi.mock(import("./SettingsScopeContext"), async (original) => {
+  const { useSyncExternalStore } = await import("react");
+  const subscribe = (listener: () => void) => {
+    state.listeners.add(listener);
+    return () => {
+      state.listeners.delete(listener);
+    };
+  };
+  return {
+    ...(await original()),
+    useSettingsScope: (() => {
+      const running = useSyncExternalStore(subscribe, () => state.serverConfig.observability);
+      if (state.allEnvironments) {
+        const environments = exportEnvironments().map((env) => ({
+          ...env,
+          connection: { phase: env.connected ? "connected" : "disconnected" },
+        }));
+        return {
+          scope: { kind: "all", label: "All environments" },
+          groups: [],
+          search: {},
+          environments,
+          connectedEnvironments: environments.filter((env) => env.connected),
+        };
+      }
+      const environment = {
+        environmentId: "env",
+        label: "MAC1",
+        connection: { phase: "connected" },
+        serverConfig: {
+          ...state.serverConfig,
+          observability: running,
+          settings: { ...DEFAULT_SERVER_SETTINGS, observability: state.observability },
+        },
+      };
+      return {
+        scope: { kind: "environment", label: environment.label },
+        environment,
+        environments: [environment],
+        connectedEnvironments: [environment],
+      };
+    }) as never,
+  };
+});
 import { TelemetryExportSettings } from "./TelemetryExportSettings";
+import { TelemetrySettings } from "./TelemetrySettings";
+import { scrollToSettingsTarget } from "./settingsLayout";
 
+const activeExport: ServerObservability = {
+  localTracingEnabled: true,
+  logsDirectoryPath: "/tmp/logs",
+  otlpMetricsEnabled: false,
+  otlpLogsEnabled: false,
+  otlpTracesEnabled: true,
+  telemetry: {
+    preferences: { enabled: true, analytics: false, connect: false, otlp: true },
+    analytics: "off",
+    connect: "unavailable",
+    otlp: "on",
+  },
+};
 function setup() {
+  state.allEnvironments = false;
+  state.compareConnect = false;
+  state.duplicateLabels = false;
   updateSettings.mockClear();
   checkOtlpEndpoint.mockReset();
-  state.serverConfig = { environment: { capabilities: {} } };
+  state.observability = DEFAULT_SERVER_SETTINGS.observability;
+  state.serverConfig = { environment: { capabilities: {} }, observability: activeExport };
 }
 
 describe("TelemetryExportSettings", () => {
+  it("distinguishes same-named environments in Connect status and save results", async () => {
+    setup();
+    state.allEnvironments = true;
+    state.compareConnect = true;
+    state.duplicateLabels = true;
+    state.serverConfig.observability = {
+      ...activeExport,
+      telemetry: {
+        ...activeExport.telemetry!,
+        preferences: { ...activeExport.telemetry!.preferences, connect: true },
+        connect: "on",
+      },
+    };
+    await using screen = await render(<TelemetrySettings />, { router: "/settings/maintenance" });
+    await userEvent.click(screen.getByRole("button", { name: "What to send" }));
+    const connect = screen.getByRole("switch", { name: "T3 Connect tracing (Axiom)" });
+    const label = connect.element().closest("label");
+    expect(label?.textContent).toContain("Ready · ready.example · On");
+    expect(label?.textContent).toContain("Ready · other.example · Unavailable in this build");
+    updateSettings.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        ...DEFAULT_SERVER_SETTINGS,
+        observability: {
+          ...DEFAULT_SERVER_SETTINGS.observability,
+          telemetry: activeExport.telemetry!.preferences,
+        },
+      },
+    });
+    connect.element().focus();
+    await userEvent.keyboard(" ");
+    const report = screen.getByRole("status");
+    await expect
+      .element(report.getByText("Ready · ready.example · Telemetry choice saved", { exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(
+        report.getByText("Ready · other.example · Unavailable in this build", { exact: true }),
+      )
+      .toBeInTheDocument();
+  });
+  it("offers only connected environments that support telemetry exports", async () => {
+    setup();
+    state.allEnvironments = true;
+    state.serverConfig.observability = activeExport;
+    await using screen = await render(<TelemetryExportSettings />, { router: "/settings" });
+    await expect.element(screen.getByRole("button", { name: /Ready/ })).toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("button", { name: /Offline|Legacy/ }).first())
+      .not.toBeInTheDocument();
+
+    delete state.serverConfig.observability;
+    await screen.rerender(<TelemetryExportSettings />);
+    await expect.element(screen.getByRole("button").first()).not.toBeInTheDocument();
+    await expect
+      .element(screen.getByText(/Connect or update an environment to continue/))
+      .toBeInTheDocument();
+  });
+
+  it("keeps drafts, probes and saves local to each expanded environment", async () => {
+    setup();
+    state.allEnvironments = true;
+    state.compareConnect = true;
+    state.duplicateLabels = true;
+    state.serverConfig.environment.capabilities.otlpEndpointCheck = true;
+    state.observability = {
+      ...DEFAULT_SERVER_SETTINGS.observability,
+      otlpTracesUrl: "http://ready/v1/traces",
+    };
+    await using screen = await render(<TelemetrySettings />, {
+      router: "/settings/maintenance",
+    });
+    const disclosure = screen.getByRole("button", { name: "What to send" });
+    await userEvent.click(disclosure);
+    const readyName = /ready\.example/;
+    const otherName = /other\.example/;
+    const ready = screen.getByRole("button", { name: readyName });
+    const other = screen.getByRole("button", { name: otherName });
+    const readyForm = screen.getByRole("form", { name: readyName });
+    const otherForm = screen.getByRole("form", { name: otherName });
+    expect(checkOtlpEndpoint).not.toHaveBeenCalled();
+
+    await userEvent.click(ready);
+    const readyTraces = readyForm.getByRole("textbox", { name: "Traces endpoint" });
+    await expect.element(readyTraces).toHaveValue("http://ready/v1/traces");
+    await userEvent.fill(readyTraces, "http://draft/v1/traces");
+    await userEvent.click(ready);
+    await expect.element(readyForm).not.toBeInTheDocument();
+
+    await userEvent.click(other);
+    await expect
+      .element(otherForm.getByRole("textbox", { name: "Traces endpoint" }))
+      .toHaveValue("http://other/v1/traces");
+    expect(checkOtlpEndpoint.mock.calls.map(([request]) => request)).toEqual([
+      { environmentId: "ready", input: { signal: "traces", url: "http://ready/v1/traces" } },
+      { environmentId: "other", input: { signal: "traces", url: "http://other/v1/traces" } },
+    ]);
+    await userEvent.click(ready);
+    await expect.element(readyTraces).toHaveValue("http://draft/v1/traces");
+    await userEvent.fill(
+      otherForm.getByRole("textbox", { name: "Metrics endpoint" }),
+      "http://other/v1/metrics",
+    );
+    await userEvent.click(otherForm.getByRole("button", { name: "Save" }));
+    expect(updateSettings).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "other",
+      input: { patch: { observability: { otlpMetricsUrl: "http://other/v1/metrics" } } },
+    });
+    await userEvent.click(disclosure);
+    const probesBefore = checkOtlpEndpoint.mock.calls.length;
+    state.compareConnect = false;
+    state.serverConfig.observability = {
+      ...activeExport,
+      telemetry: { ...activeExport.telemetry!, revisions: { otlp: 1, connect: 0 } },
+    };
+    await screen.rerender(<TelemetrySettings />);
+    await expect.element(readyForm).not.toBeInTheDocument();
+    expect(checkOtlpEndpoint).toHaveBeenCalledTimes(probesBefore);
+    await userEvent.click(disclosure);
+    await expect.element(readyTraces).toHaveValue("http://draft/v1/traces");
+    await expect.element(other).not.toBeInTheDocument();
+    expect(checkOtlpEndpoint).toHaveBeenCalledTimes(probesBefore + 1);
+  });
+
+  it("scrolls the receiver heading into a short settings viewport", async () => {
+    setup();
+    await using screen = await render(
+      <div data-testid="viewport" style={{ width: 400, height: 260, overflow: "auto" }}>
+        <div style={{ height: 450 }} />
+        <TelemetryExportSettings />
+        <div style={{ height: 450 }} />
+      </div>,
+    );
+    const viewport = screen.getByTestId("viewport").element();
+    screen.getByRole("form").element().setAttribute("style", "min-height: 400px");
+    viewport.scrollTop = viewport.scrollHeight;
+    scrollToSettingsTarget("telemetry-endpoints");
+    await vi.waitFor(() => {
+      const heading = screen
+        .getByRole("heading", { name: "OpenTelemetry export" })
+        .element()
+        .getBoundingClientRect();
+      const bounds = viewport.getBoundingClientRect();
+      expect(heading.top).toBeGreaterThanOrEqual(bounds.top);
+      expect(heading.bottom).toBeLessThanOrEqual(bounds.bottom);
+    });
+  });
+
+  it("focuses the incompatibility message for an endpoint link to an older server", async () => {
+    setup();
+    const { telemetry: _telemetry, ...legacyObservability } = activeExport;
+    state.serverConfig.observability = legacyObservability;
+    await using screen = await render(<TelemetrySettings />);
+    const message = screen.getByRole("status").element();
+    expect(message.textContent).toContain("Incompatible server");
+    expect(scrollToSettingsTarget("telemetry-endpoints")).toBe(true);
+    expect(message).toHaveFocus();
+  });
+
   it("does not resend a field the user restored after another client changed it", async () => {
     setup();
     state.observability = {
@@ -77,16 +342,13 @@ describe("TelemetryExportSettings", () => {
     await using screen = await render(<TelemetryExportSettings />);
 
     const { container } = screen;
-    const field = (id: string) => container.querySelector<HTMLInputElement>(`#${id}`)!;
-    async function replace(id: string, value: string) {
-      await userEvent.clear(field(id));
-      await userEvent.type(field(id), value);
-    }
-    await replace("otlpTracesUrl", "http://draft/v1/traces");
-    await replace("otlpTracesUrl", "http://old/v1/traces");
+    const replace = (name: string, value: string) =>
+      userEvent.fill(screen.getByRole("textbox", { name }), value);
+    await replace("Traces endpoint", "http://draft/v1/traces");
+    await replace("Traces endpoint", "http://old/v1/traces");
     state.observability = { ...state.observability, otlpTracesUrl: "http://other/v1/traces" };
     await screen.rerender(<TelemetryExportSettings />);
-    await replace("otlpMetricsUrl", "http://new/v1/metrics");
+    await replace("Metrics endpoint", "http://new/v1/metrics");
     const save = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "Save",
     )!;
@@ -96,7 +358,7 @@ describe("TelemetryExportSettings", () => {
       environmentId: "env",
       input: { patch: { observability: { otlpMetricsUrl: "http://new/v1/metrics" } } },
     });
-    expect(container.textContent).toContain("Saved. Restart the server to apply.");
+    expect(container.textContent).toContain("Saved");
   });
 
   it("reports and tests the endpoint the environment set over an empty setting", async () => {
@@ -105,6 +367,7 @@ describe("TelemetryExportSettings", () => {
     state.serverConfig = {
       environment: { capabilities: { otlpEndpointCheck: true } },
       observability: {
+        ...activeExport,
         logsDirectoryPath: "/tmp/logs",
         localTracingEnabled: true,
         otlpTracesUrl: "http://collector/v1/traces",
@@ -120,16 +383,15 @@ describe("TelemetryExportSettings", () => {
     await expect
       .element(screen.getByText("Set by environment · Connected · 12 ms"))
       .toBeInTheDocument();
-    await expect
-      .element(
-        screen.getByText("Running: http://collector/v1/traces from OTEL_EXPORTER_OTLP_ENDPOINT"),
-      )
-      .toBeInTheDocument();
+    const address = screen.getByText(
+      "Configured endpoint: http://collector/v1/traces · OTEL_EXPORTER_OTLP_ENDPOINT",
+    );
+    await expect.element(address).toBeInTheDocument();
     expect(checkOtlpEndpoint).toHaveBeenCalledExactlyOnceWith({
       environmentId: "env",
       input: { signal: "traces", url: "http://collector/v1/traces" },
     });
-    expect(screen.container.querySelector<HTMLInputElement>("#otlpTracesUrl")!.value).toBe("");
+    await expect.element(screen.getByRole("textbox", { name: "Traces endpoint" })).toHaveValue("");
 
     await userEvent.click(screen.getByRole("button", { name: "Test" }).first());
 
@@ -138,12 +400,76 @@ describe("TelemetryExportSettings", () => {
       environmentId: "env",
       input: { signal: "traces", url: "http://collector/v1/traces" },
     });
+    const running = state.serverConfig.observability!;
+    state.serverConfig.observability = {
+      ...running,
+      otlpTracesEnabled: false,
+      telemetry: {
+        ...running.telemetry!,
+        preferences: { ...running.telemetry!.preferences, enabled: false },
+        otlp: "off",
+      },
+    };
+    for (const notify of state.listeners) notify();
+    await expect
+      .element(screen.getByRole("button", { name: "Test" }).first())
+      .not.toBeInTheDocument();
+    await expect.element(address).toBeInTheDocument();
+    expect(screen.container.textContent).not.toContain("Running:");
+    expect(checkOtlpEndpoint).toHaveBeenCalledTimes(2);
+  });
+
+  it("checks the current saved endpoint when permission returns and discards pending manual probes", async () => {
+    setup();
+    const oldUrl = "http://old/v1/traces";
+    const newUrl = "http://new/v1/traces";
+    const manualUrl = "http://draft/v1/traces";
+    state.observability = { ...DEFAULT_SERVER_SETTINGS.observability, otlpTracesUrl: oldUrl };
+    const disabled = {
+      ...activeExport,
+      telemetry: { ...activeExport.telemetry!, otlp: "off" as const },
+    };
+    state.serverConfig = {
+      environment: { capabilities: { otlpEndpointCheck: true } },
+      observability: disabled,
+    };
+    await using screen = await render(<TelemetryExportSettings />);
+    expect(checkOtlpEndpoint).not.toHaveBeenCalled();
+    state.observability = { ...state.observability, otlpTracesUrl: newUrl };
+    state.serverConfig.observability = activeExport;
+    for (const listener of state.listeners) listener();
+    await screen.rerender(<TelemetryExportSettings />);
+    await expect.element(screen.getByText("Connected · 12 ms")).toBeInTheDocument();
+    expect(checkOtlpEndpoint).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "env",
+      input: { signal: "traces", url: newUrl },
+    });
+    const pending = Promise.withResolvers<Awaited<ReturnType<typeof checkOtlpEndpoint>>>();
+    checkOtlpEndpoint.mockReturnValueOnce(pending.promise);
+    await userEvent.fill(screen.getByRole("textbox", { name: "Traces endpoint" }), manualUrl);
+    await userEvent.click(screen.getByRole("button", { name: "Test" }).first());
+    state.serverConfig.observability = disabled;
+    for (const listener of state.listeners) listener();
+    await screen.rerender(<TelemetryExportSettings />);
+    state.serverConfig.observability = activeExport;
+    for (const listener of state.listeners) listener();
+    await screen.rerender(<TelemetryExportSettings />);
+    pending.resolve({ _tag: "Success", value: { _tag: "Accepted", latencyMs: 800 } });
+    expect(checkOtlpEndpoint.mock.calls.map(([request]) => request)).toEqual(
+      [newUrl, manualUrl, newUrl].map((url) => ({
+        environmentId: "env",
+        input: { signal: "traces", url },
+      })),
+    );
   });
 
   it("can test a corrected URL and reports only the latest attempt when a URL is reused", async () => {
     setup();
     state.observability = { ...DEFAULT_SERVER_SETTINGS.observability, otlpTracesUrl: "" };
-    state.serverConfig = { environment: { capabilities: { otlpEndpointCheck: true } } };
+    state.serverConfig = {
+      environment: { capabilities: { otlpEndpointCheck: true } },
+      observability: activeExport,
+    };
     const first = Promise.withResolvers<Awaited<ReturnType<typeof checkOtlpEndpoint>>>();
     const corrected = Promise.withResolvers<Awaited<ReturnType<typeof checkOtlpEndpoint>>>();
     const latest = Promise.withResolvers<Awaited<ReturnType<typeof checkOtlpEndpoint>>>();
@@ -153,7 +479,7 @@ describe("TelemetryExportSettings", () => {
       .mockReturnValueOnce(latest.promise);
     await using screen = await render(<TelemetryExportSettings />);
 
-    const traces = screen.getByLabelText("Traces endpoint");
+    const traces = screen.getByRole("textbox", { name: "Traces endpoint" });
     const testTraces = screen.getByRole("button", { name: "Test" }).first();
     await userEvent.fill(traces, "http://first/v1/traces");
     await userEvent.click(testTraces);

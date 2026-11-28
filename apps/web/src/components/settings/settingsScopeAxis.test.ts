@@ -1,3 +1,4 @@
+import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
@@ -6,6 +7,7 @@ import {
   selectProjectAxis,
   settingsScopeCheckoutChoices,
   settingsScopeCheckoutLabel,
+  settingsScopeEnvironmentLabels,
 } from "./settingsScopeAxis";
 
 const member = (environmentId: string, physicalProjectKey: string, workspaceRoot = "") =>
@@ -18,6 +20,22 @@ const group = (...memberProjects: SidebarProjectSnapshot["memberProjects"]) =>
   ({ memberProjects }) as SidebarProjectSnapshot;
 
 describe("settings scope axes", () => {
+  it("distinguishes environments with identical names and addresses", () => {
+    const first = {
+      environmentId: EnvironmentId.make("first"),
+      label: "Ready",
+      displayUrl: "dev@gateway:22",
+    };
+    const second = { ...first, environmentId: EnvironmentId.make("second") };
+    const environments = [first, second];
+    expect(settingsScopeEnvironmentLabels(first, environments).secondary).toBe(
+      "dev@gateway:22 · first",
+    );
+    expect(settingsScopeEnvironmentLabels(second, environments).secondary).toBe(
+      "dev@gateway:22 · second",
+    );
+  });
+
   it("drops a checkout narrowing from older links when either axis changes", () => {
     const checkout = { project: "app", checkout: "app@first", machine: "first" };
     expect(selectEnvironmentAxis(checkout, "second")).toEqual({

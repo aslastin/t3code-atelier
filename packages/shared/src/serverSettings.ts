@@ -1,10 +1,14 @@
 import type { ModelPreferences } from "@t3tools/contracts/settings";
 import {
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_SERVER_SETTINGS,
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   globalIdleCompaction,
+  legacyTelemetryPreferences,
+  type TelemetryStatus,
+  canChangeTelemetryChannel,
   type IdleCompactionMode,
   isProviderAvailable,
   isUnconfiguredDefaultInstanceEnabled,
@@ -14,7 +18,9 @@ import {
   textGeneratorForSelection,
   isProviderTextGenerationCapable,
   type ModelSelection,
-  type ProjectId,
+  ProjectId,
+  keepUnknownOverrideKeys,
+  ResponseStreamingMode,
   type ProjectScopedServerSettingKey,
   ProjectSettingsOverrides,
   ProviderDriverKind,
@@ -24,7 +30,9 @@ import {
   type ServerSettingsPatch,
   withIdleCompaction,
 } from "@t3tools/contracts";
-import * as Option from "effect/Option";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { deepMerge } from "./Struct.ts";
@@ -37,13 +45,47 @@ import {
   resolveBackgroundActivitySettings,
 } from "./backgroundActivitySettings.ts";
 
-// Only observability: a value the server migrates on load elsewhere in the file must not drop it.
-const ServerObservabilitySettingsJson = fromLenientJson(
-  Schema.Struct({ observability: ServerSettings.fields.observability }),
+// Accept retired token delivery only on load so one old value cannot reset all settings.
+const PersistedResponseStreamingMode = Schema.Union([
+  ResponseStreamingMode,
+  Schema.Literal("token"),
+]).pipe(
+  Schema.decodeTo(
+    ResponseStreamingMode,
+    SchemaTransformation.transform({
+      decode: (mode) => (mode === "token" ? "paragraph" : mode),
+      encode: (mode) => mode,
+    }),
+  ),
 );
-const decodeServerObservabilitySettingsJson = Schema.decodeUnknownOption(
-  ServerObservabilitySettingsJson,
-);
+const LegacySettings = Schema.Struct({
+  providers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  bitbucket: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  github: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+});
+export const decodeLegacySettings = Schema.decodeUnknownOption(LegacySettings);
+const PersistedServerSettings = Schema.Struct({
+  ...LegacySettings.fields,
+  ...ServerSettings.fields,
+  responseStreamingMode: PersistedResponseStreamingMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("paragraph" as const)),
+  ),
+  projectSettingsOverrides: Schema.Record(
+    ProjectId,
+    keepUnknownOverrideKeys(
+      Schema.Struct({
+        ...ProjectSettingsOverrides.fields,
+        responseStreamingMode: Schema.optionalKey(PersistedResponseStreamingMode),
+      }),
+    ),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+});
+export const decodeSettingsFileJsonExit = Schema.decodeUnknownExit(fromLenientJson(Schema.Unknown));
+export const decodePersistedSettings = Schema.decodeUnknownExit(PersistedServerSettings);
+export const unreadableObservability = {
+  ...DEFAULT_SERVER_SETTINGS.observability,
+  telemetry: legacyTelemetryPreferences(false),
+};
 
 export function isModelSelectionProviderEnabled(
   settings: ServerSettings,
@@ -175,6 +217,8 @@ export function resolveSpeechPostProcessingModelSelection(
 }
 
 export interface PersistedServerObservabilitySettings {
+  readonly telemetry?: ServerSettings["observability"]["telemetry"];
+  readonly telemetryRevisions?: ServerSettings["observability"]["telemetryRevisions"];
   readonly otlpTracesUrl: string | undefined;
   readonly otlpMetricsUrl: string | undefined;
   readonly otlpLogsUrl: string | undefined;
@@ -187,28 +231,28 @@ function normalizePersistedServerSettingString(
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
-function extractPersistedServerObservabilitySettings(input: {
-  readonly observability?: {
-    readonly otlpTracesUrl?: string;
-    readonly otlpMetricsUrl?: string;
-    readonly otlpLogsUrl?: string;
-  };
-}): PersistedServerObservabilitySettings {
+function extractPersistedServerObservabilitySettings(
+  observability: ServerSettings["observability"],
+): PersistedServerObservabilitySettings {
   return {
-    otlpTracesUrl: normalizePersistedServerSettingString(input.observability?.otlpTracesUrl),
-    otlpMetricsUrl: normalizePersistedServerSettingString(input.observability?.otlpMetricsUrl),
-    otlpLogsUrl: normalizePersistedServerSettingString(input.observability?.otlpLogsUrl),
+    ...(observability.telemetry ? { telemetry: observability.telemetry } : {}),
+    ...(observability.telemetryRevisions
+      ? { telemetryRevisions: observability.telemetryRevisions }
+      : {}),
+    otlpTracesUrl: normalizePersistedServerSettingString(observability.otlpTracesUrl),
+    otlpMetricsUrl: normalizePersistedServerSettingString(observability.otlpMetricsUrl),
+    otlpLogsUrl: normalizePersistedServerSettingString(observability.otlpLogsUrl),
   };
 }
 
 export function parsePersistedServerObservabilitySettings(
   raw: string,
 ): PersistedServerObservabilitySettings {
-  const decoded = decodeServerObservabilitySettingsJson(raw);
-  if (Option.isSome(decoded)) {
-    return extractPersistedServerObservabilitySettings(decoded.value);
-  }
-  return { otlpTracesUrl: undefined, otlpMetricsUrl: undefined, otlpLogsUrl: undefined };
+  const parsed = decodeSettingsFileJsonExit(raw);
+  const stored = Exit.isFailure(parsed) ? parsed : decodePersistedSettings(parsed.value);
+  return extractPersistedServerObservabilitySettings(
+    Exit.isSuccess(stored) ? stored.value.observability : unreadableObservability,
+  );
 }
 
 function shouldReplaceTextGenerationModelSelection(
@@ -383,9 +427,57 @@ function patchedIdleCompaction(
   return globalIdleCompaction(current) === "off" ? "off" : "onReturn";
 }
 
+function patchObservability(
+  current: ServerSettings["observability"],
+  patch: NonNullable<ServerSettingsPatch["observability"]>,
+  status?: TelemetryStatus,
+): ServerSettings["observability"] {
+  const previous =
+    current.telemetry ??
+    status?.preferences ??
+    legacyTelemetryPreferences(
+      Boolean(current.otlpTracesUrl || current.otlpMetricsUrl || current.otlpLogsUrl),
+    );
+  const telemetry = { ...previous, ...patch.telemetry };
+  if (status && patch.telemetry) {
+    // A renderer-only Connect build can select the channel on its primary server.
+    const channels = {
+      analytics: status.analytics,
+      connect: status.connect === "unavailable" ? status.rendererConnect : status.connect,
+      otlp: status.otlp,
+    };
+    for (const key of ["analytics", "connect", "otlp"] as const) {
+      if (!canChangeTelemetryChannel(channels[key])) telemetry[key] = previous[key];
+    }
+    if (telemetry.enabled && !Object.values(channels).some(canChangeTelemetryChannel)) {
+      telemetry.enabled = previous.enabled;
+    }
+  }
+  const next = { ...current, ...patch, telemetry };
+  const revisions = current.telemetryRevisions ?? { connect: 0, otlp: 0 };
+  const masterChanged = previous.enabled !== telemetry.enabled;
+  // Separate processes can miss an entire off/on cycle between file notifications.
+  return {
+    ...next,
+    telemetryRevisions: {
+      connect: revisions.connect + Number(masterChanged || previous.connect !== telemetry.connect),
+      otlp:
+        revisions.otlp +
+        Number(
+          masterChanged ||
+            previous.otlp !== telemetry.otlp ||
+            current.otlpTracesUrl !== next.otlpTracesUrl ||
+            current.otlpLogsUrl !== next.otlpLogsUrl ||
+            current.otlpMetricsUrl !== next.otlpMetricsUrl,
+        ),
+    },
+  };
+}
+
 export function applyServerSettingsPatch(
   current: ServerSettings,
   rawPatch: ServerSettingsPatch,
+  telemetryStatus?: TelemetryStatus,
 ): ServerSettings {
   const patch = translateLegacyProjectOverridePatch(current, rawPatch);
   const selectionPatch = patch.textGenerationModelSelection;
@@ -399,6 +491,7 @@ export function applyServerSettingsPatch(
     providerHealthRefreshInterval,
     backgroundActivityProfile,
     backgroundActivity,
+    observability: observabilityPatch,
     worktreeCleanup: worktreeCleanupPatch,
     // Merged per entry below; its `null` removals must not reach deepMerge.
     usageLimitSources: usageLimitSourcesPatch,
@@ -504,6 +597,9 @@ export function applyServerSettingsPatch(
   const next = deepMerge(current, patchForMerge);
   const nextWithReplacementsBase = {
     ...next,
+    ...(observabilityPatch && {
+      observability: patchObservability(current.observability, observabilityPatch, telemetryStatus),
+    }),
     favorites,
     providerModelPreferences: nextModelPreferences,
     ...(worktreeCleanupPatch === undefined

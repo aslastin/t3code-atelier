@@ -2,16 +2,18 @@ import {
   resolveProviderSkillSourceKind,
   type ProviderSkillSourceKind,
 } from "@t3tools/client-runtime/providerSkills";
+import type { ComposerModelMentionEffort } from "@t3tools/client-runtime/composer-model-mentions";
 import type {
   EnvironmentId,
   EnvironmentMachineKind,
+  ModelSelection,
   PullRequestContextMetadata,
   ScopedThreadRef,
   ServerProviderSkill,
   ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 import type { ComposerTriggerKind } from "@t3tools/shared/composerTrigger";
-import { msg, useMessages } from "gt-react-native";
+import { msg, useGT, useMessages } from "gt-react-native";
 import { memo } from "react";
 import { Pressable, ScrollView, StyleSheet, View, type ViewStyle } from "react-native";
 
@@ -83,6 +85,20 @@ export type ComposerCommandItem =
       readonly option: ModelOption;
       readonly label: string;
       readonly description: string;
+      /** The reasoning select a mention can set, with the levels offered after the model. */
+      readonly effort: {
+        readonly optionId: string;
+        readonly choices: ReadonlyArray<{ readonly id: string; readonly label: string }>;
+      } | null;
+    }
+  | {
+      readonly id: string;
+      readonly type: "model-effort";
+      readonly selection: Pick<ModelSelection, "instanceId" | "model">;
+      /** Null is Default: the mention sets no effort. */
+      readonly effort: ComposerModelMentionEffort | null;
+      readonly label: string;
+      readonly description: string;
     };
 
 interface ComposerCommandPopoverProps {
@@ -90,6 +106,11 @@ interface ComposerCommandPopoverProps {
   readonly triggerKind: ComposerTriggerKind | null;
   readonly isLoading: boolean;
   readonly error?: string | null;
+  /** The model whose effort levels are listed; Back returns to the matches. */
+  readonly effortStep?: {
+    readonly model: Extract<ComposerCommandItem, { type: "model" }>;
+    readonly onBack: () => void;
+  } | null;
   readonly onSelect: (item: ComposerCommandItem) => void;
 }
 
@@ -131,6 +152,7 @@ function itemIcon(item: ComposerCommandItem): AppSymbolName | null {
       return SKILL_SOURCE_SYMBOL_BY_KIND[resolveProviderSkillSourceKind(item.skill)];
     case "path":
     case "model":
+    case "model-effort":
       return null;
     case "thread":
       return "text.bubble";
@@ -242,14 +264,46 @@ const CommandRow = memo(function CommandRow(props: {
   );
 });
 
+function ModelEffortHeader(props: {
+  readonly model: Extract<ComposerCommandItem, { type: "model" }>;
+  readonly onBack: () => void;
+}) {
+  const gt = useGT();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={gt("Back to models")}
+      onPress={props.onBack}
+      className="flex-row items-center gap-2 border-border px-3.5 pt-2.5 pb-2 active:opacity-60"
+      style={{ borderBottomWidth: StyleSheet.hairlineWidth }}
+    >
+      <SymbolView name="chevron.left" size={12} tintColorClassName="accent-icon-subtle" />
+      <ProviderIcon
+        iconUrl={props.model.option.providerIconUrl}
+        provider={props.model.option.providerDriver}
+        size={16}
+      />
+      <Text className="shrink text-base font-t3-medium text-foreground" numberOfLines={1}>
+        {props.model.label}
+      </Text>
+      <Text className="ml-auto text-xs text-foreground-muted" numberOfLines={1}>
+        {gt("Reasoning effort")}
+      </Text>
+    </Pressable>
+  );
+}
+
 export const ComposerCommandPopover = memo(function ComposerCommandPopover(
   props: ComposerCommandPopoverProps,
 ) {
   const m = useMessages();
-  const label = groupLabel(props.triggerKind, props.items, m);
+  const label = props.effortStep ? null : groupLabel(props.triggerKind, props.items, m);
 
   return (
     <PopoverSurface>
+      {props.effortStep ? (
+        <ModelEffortHeader model={props.effortStep.model} onBack={props.effortStep.onBack} />
+      ) : null}
       {label ? (
         <View className="px-3.5 pt-2.5 pb-1">
           <Text className="text-3xs font-t3-bold tracking-[0.8px] uppercase text-foreground-muted">

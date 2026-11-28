@@ -1,3 +1,5 @@
+import { TelemetryControl } from "./telemetry/TelemetryControl.ts";
+import type { TelemetrySettings } from "@t3tools/shared/telemetryConsent";
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -8,7 +10,7 @@ import * as Path from "effect/Path";
 import type * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
-import type { OtlpEndpointSource } from "@t3tools/contracts";
+import type { DesktopBackendBootstrap, OtlpEndpointSource } from "@t3tools/contracts";
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
 import { markNoCopyOnWrite } from "./noCopyOnWrite.ts";
 import {
@@ -66,6 +68,8 @@ export interface DeriveServerPathsOptions {
 export class ServerConfig extends Context.Service<
   ServerConfig,
   ServerDerivedPaths & {
+    readonly telemetry: TelemetryControl;
+    readonly legacyWindowsOtlp?: DesktopBackendBootstrap["legacyWindowsOtlp"];
     readonly logLevel: LogLevel.LogLevel;
     readonly traceMinLevel: LogLevel.LogLevel;
     readonly traceTimingEnabled: boolean;
@@ -119,7 +123,17 @@ export class ServerConfig extends Context.Service<
   ) => layerTest(cwd, baseDirOrPrefix);
 }
 
-export const make = (config: ServerConfig["Service"]) => ServerConfig.of(config);
+export const make = (
+  config: Omit<ServerConfig["Service"], "telemetry">,
+  settings: TelemetrySettings = {
+    otlpTracesUrl: config.otlpTracesUrl,
+    otlpMetricsUrl: config.otlpMetricsUrl,
+    otlpLogsUrl: config.otlpLogsUrl,
+  },
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  allowT3 = true,
+) =>
+  ServerConfig.of({ ...config, telemetry: new TelemetryControl(config, settings, env, allowT3) });
 
 export const otlpResource = (
   config: Pick<ServerConfig["Service"], "mode" | "otelEnvironment">,
@@ -138,7 +152,7 @@ export const otlpResource = (
   },
 });
 
-export const layer = (config: ServerConfig["Service"]) => Layer.succeed(ServerConfig, make(config));
+export const layer = (config: ServerConfig["Service"]) => Layer.succeed(ServerConfig, config);
 
 export const deriveServerPaths = Effect.fn(function* (
   baseDir: ServerConfig["Service"]["baseDir"],
@@ -236,7 +250,7 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
   const derivedPaths = yield* deriveServerPaths(baseDir, devUrl);
   yield* ensureServerDirectories(derivedPaths);
 
-  return ServerConfig.of({
+  return make({
     logLevel: "Error",
     traceMinLevel: "Info",
     traceTimingEnabled: true,

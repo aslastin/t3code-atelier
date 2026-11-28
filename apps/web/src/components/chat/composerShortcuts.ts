@@ -34,5 +34,7 @@ export function composerShortcutCommands(
     "composer.previousWorktree": ({ event }) => {
       if (!event.repeat) branchToolbarRef.current?.usePreviousWorktree();
     },
+    "composer.insertLink": ({ event }) =>
+      event.repeat || composerRef.current?.insertLink() === true,
   } satisfies ChatShortcutCommands;
 }

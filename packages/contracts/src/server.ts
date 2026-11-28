@@ -28,7 +28,7 @@ import { ModelCapabilities, ProviderOptionDescriptor } from "./model.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
-import { ServerSettings } from "./settings.ts";
+import { ServerSettings, TelemetryPreferences, TelemetryRevisions } from "./settings.ts";
 import { DesktopUpdateChannelSchema } from "./ipc.ts";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
@@ -381,7 +381,36 @@ export const isProviderTextGenerationCapable = (snapshot: ServerProvider): boole
 export const OtlpEndpointSource = Schema.Literals(["environment", "bootstrap", "settings"]);
 export type OtlpEndpointSource = typeof OtlpEndpointSource.Type;
 
+const TelemetryChannelState = Schema.Literals([
+  "on",
+  "off",
+  "environment",
+  "policy",
+  "sdk",
+  "pending",
+  "unavailable",
+  "noEndpoint",
+  "exporters",
+]);
+export const TelemetryStatus = Schema.Struct({
+  preferences: TelemetryPreferences,
+  analytics: TelemetryChannelState,
+  connect: TelemetryChannelState,
+  otlp: TelemetryChannelState,
+  revisions: Schema.optionalKey(TelemetryRevisions),
+  sdkDisabledBy: Schema.optionalKey(
+    Schema.Literals(["T3CODE_OTEL_SDK_DISABLED", "OTEL_SDK_DISABLED"]),
+  ),
+  rendererConnect: Schema.optionalKey(TelemetryChannelState),
+});
+export type TelemetryStatus = typeof TelemetryStatus.Type;
+
+export function canChangeTelemetryChannel(state: TelemetryStatus["otlp"] | undefined) {
+  return state === "on" || state === "off" || state === "noEndpoint";
+}
+
 export const ServerObservability = Schema.Struct({
+  telemetry: Schema.optionalKey(TelemetryStatus),
   logsDirectoryPath: TrimmedNonEmptyString,
   localTracingEnabled: Schema.Boolean,
   otlpTracesUrl: Schema.optional(TrimmedNonEmptyString),
@@ -409,6 +438,7 @@ export const OtlpEndpointCheckInput = Schema.Struct({
 export type OtlpEndpointCheckInput = typeof OtlpEndpointCheckInput.Type;
 
 export const OtlpEndpointCheckResult = Schema.Union([
+  Schema.TaggedStruct("Disabled", {}),
   Schema.TaggedStruct("Accepted", { latencyMs: Schema.Number }),
   Schema.TaggedStruct("Rejected", { status: Schema.Number }),
   Schema.TaggedStruct("Unreachable", { timedOut: Schema.Boolean }),
@@ -843,6 +873,7 @@ export type ServerConfigProviderStatusDeltasPayload =
   typeof ServerConfigProviderStatusDeltasPayload.Type;
 
 export const ServerConfigSettingsUpdatedPayload = Schema.Struct({
+  observability: Schema.optionalKey(ServerObservability),
   settings: ServerSettings,
 });
 export type ServerConfigSettingsUpdatedPayload = typeof ServerConfigSettingsUpdatedPayload.Type;

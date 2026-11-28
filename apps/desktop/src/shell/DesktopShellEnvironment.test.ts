@@ -825,6 +825,7 @@ describe("DesktopShellEnvironment", () => {
             assert.equal(env.PATH, "/usr/bin");
             // The user's shell may still opt out of telemetry, so discovery has not settled.
             assert.isFalse(yield* service.discoveryFinished);
+            assert.isFalse(Option.getOrThrow(yield* Stream.runHead(service.updates)).discovered);
             // The Linux probe checks the D-Bus socket on the real filesystem, which the clock does not await.
             const published = yield* service.updates.pipe(
               Stream.filter((snapshot) => snapshot.environment.PATH === "/fish/bin:/usr/bin"),
@@ -992,6 +993,7 @@ describe("DesktopShellEnvironment", () => {
           return loadProfile
             ? envOutput({
                 PATH: "C:\\Profile\\Node;C:\\Windows\\System32",
+                T3CODE_TELEMETRY_ENABLED: "false",
                 FNM_DIR: "C:\\Users\\testuser\\AppData\\Roaming\\fnm",
                 FNM_MULTISHELL_PATH: "C:\\Users\\testuser\\AppData\\Local\\fnm_multishells\\123",
               })
@@ -1000,6 +1002,7 @@ describe("DesktopShellEnvironment", () => {
       });
 
       assert.isTrue(prepared);
+      assert.equal(env.T3CODE_TELEMETRY_ENABLED, "false");
       assert.equal(
         env.PATH,
         [
@@ -1046,6 +1049,66 @@ describe("DesktopShellEnvironment", () => {
         assert.include(env.PATH, "C:\\Working");
         assert.include(env.PATH, "C:\\Windows\\System32");
       }),
+  );
+
+  it.effect(
+    "keeps Windows telemetry pending when a different PowerShell answers the profile probe",
+    () =>
+      Effect.gen(function* () {
+        let profileReady = false;
+        const env: NodeJS.ProcessEnv = { PATH: "C:\\Windows" };
+        yield* runShellEnvironment({
+          env,
+          platform: "win32",
+          handler: (command) => {
+            if (command._tag !== "StandardCommand") return "";
+            if (command.command === "pwsh.exe" && !command.args.includes("-NoProfile")) {
+              return profileReady
+                ? envOutput({ PATH: "C:\\Windows", T3CODE_TELEMETRY_ENABLED: "false" })
+                : { output: "", exitCode: 1 };
+            }
+            return envOutput({ PATH: "C:\\Windows" });
+          },
+          use: (service) =>
+            Effect.gen(function* () {
+              yield* service.awaitDiscovery;
+              assert.isFalse(yield* service.discoveryFinished);
+              profileReady = true;
+              yield* TestClock.adjust("30 seconds");
+              yield* service.awaitSettledDiscovery;
+              assert.isTrue(yield* service.discoveryFinished);
+              assert.equal(env.T3CODE_TELEMETRY_ENABLED, "false");
+              return true;
+            }),
+        });
+      }),
+  );
+
+  it.effect("trusts the Windows PowerShell profile when pwsh is not installed", () =>
+    Effect.gen(function* () {
+      const env: NodeJS.ProcessEnv = {};
+      const confirmed = yield* runShellEnvironment({
+        env,
+        platform: "win32",
+        handler: () => "",
+        processSpawner: ChildProcessSpawner.make((command) =>
+          command._tag === "StandardCommand" && command.command === "powershell.exe"
+            ? Effect.succeed(
+                makeProcess(envOutput({ PATH: "C:\\Windows", T3CODE_TELEMETRY_ENABLED: "false" })),
+              )
+            : Effect.fail(
+                PlatformError.systemError({
+                  _tag: "NotFound",
+                  module: "ChildProcess",
+                  method: "spawn",
+                }),
+              ),
+        ),
+        use: (service) => service.awaitDiscovery.pipe(Effect.andThen(service.discoveryFinished)),
+      });
+      assert.isTrue(confirmed);
+      assert.equal(env.T3CODE_TELEMETRY_ENABLED, "false");
+    }),
   );
 
   it.effect("gives up on a Windows shell that survives the kill", () =>

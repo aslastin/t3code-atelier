@@ -26,6 +26,18 @@ appears in the app version as `+atelier.<N>`.
    under each project. The ungrouped sidebar and the chat header name a thread's topic next to
    its project.
 3. **[Plan mode](#plan-mode).** Refine a proposal, then implement it in the current thread or a new thread in the same checkout.
+4. **Reasoning effort in model mentions.** Picking a model in the composer's `@` menu lists its
+   reasoning levels in the same menu, and the chip reads **Model · Level**. Click the level to
+   change it. The agent reads the exact model and level from each mention.
+5. **Markdown links in the composer.** Typing `[label](https://…)` shows the label as a link with
+   the site's icon, and its Markdown returns while the caret is inside it. Select text and use
+   **Insert Link** (⌃⌘K on macOS, set in **Settings → Keybindings**) to link it.
+6. **Line comments in read-only files.** Read-only file previews, including large paged and
+   truncated ones, take line comments like the editor: select lines or drag the `+` over a range
+   to attach a comment and its source to the next message. Added comments on files, diffs, and
+   pending pull request reviews have **Edit** next to Delete, and saving keeps the comment's place
+   in the composer.
+7. **[Telemetry controls](./docs/user/telemetry.md).** Choose product analytics, T3 Connect tracing, or your own OpenTelemetry receiver per environment and pause all exports with one switch.
 
 ### Plan mode
 
@@ -205,6 +217,9 @@ Fork-only fixes, docs, and upstream syncs need no issue and no label.
 Problems that also happen in the official app are fixed here first and offered upstream later.
 Their issues live in this repository too and carry `upstream-candidate`. When upstream ships an
 equivalent change, the issue gets `upstream-merged`, and the next sync drops the fork's copy.
+An `upstream-candidate` that adds behavior users see is also a fork feature: it carries
+`atelier-feature` too and gets a number and an entry in "Differences from upstream". When it
+is `upstream-merged`, its entry leaves the list and its number stays used.
 
 `label:atelier-feature` lists every fork feature, and `label:upstream-candidate` lists what is
 waiting to go upstream.

@@ -91,6 +91,14 @@
       "types": "./src/observability.ts",
       "import": "./src/observability.ts"
     },
+    "./telemetryConsent": {
+      "types": "./src/telemetryConsent.ts",
+      "import": "./src/telemetryConsent.ts"
+    },
+    "./telemetrySettingsFile": {
+      "types": "./src/telemetrySettingsFile.ts",
+      "import": "./src/telemetrySettingsFile.ts"
+    },
     "./otelEnvironment": {
       "types": "./src/otelEnvironment.ts",
       "import": "./src/otelEnvironment.ts"

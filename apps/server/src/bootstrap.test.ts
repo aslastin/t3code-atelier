@@ -1,11 +1,13 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
+import * as NodeStream from "node:stream";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
-import { vi } from "vite-plus/test";
+import * as Deferred from "effect/Deferred";
+import { expect, vi } from "vite-plus/test";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import { readBootstrapEnvelope } from "./bootstrap.ts";
@@ -110,6 +112,32 @@ it.layer(NodeServices.layer)("readBootstrapEnvelope", (it) => {
         openSyncInterceptor.failPath = null;
       }
     }),
+  );
+
+  it.effect.each(["false", "true", null])(
+    "reads a late host decision or EOF (%s) after returning the envelope",
+    (line) =>
+      Effect.gen(function* () {
+        const stream = new NodeStream.PassThrough();
+        using _reader = vi
+          .spyOn(NodeFS, "createReadStream")
+          .mockReturnValueOnce(stream as unknown as NodeFS.ReadStream);
+        const fd = NodeFS.openSync(nullDevice, "r");
+        const decision = yield* Deferred.make<string | null>();
+        try {
+          stream.write('{"mode":"desktop"}\n');
+          const envelope = yield* readBootstrapEnvelope(TestEnvelopeSchema, fd, {
+            nextLine: () => (value) => Deferred.doneUnsafe(decision, Effect.succeed(value)),
+          }).pipe(Effect.provideService(HostProcess.Platform, "win32"));
+          assertSome(envelope, { mode: "desktop" });
+          expect(yield* Deferred.isDone(decision)).toBe(false);
+          stream.end(line === null ? "" : `${line}\n`);
+          expect(yield* Deferred.await(decision)).toBe(line);
+        } finally {
+          stream.destroy();
+          closeIfOpen(fd);
+        }
+      }),
   );
 
   it.effect("returns none when the fd is unavailable", () =>

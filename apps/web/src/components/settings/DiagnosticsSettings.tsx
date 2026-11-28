@@ -49,8 +49,8 @@ import { ResourceTelemetryDiagnostics } from "./ResourceTelemetryDiagnostics";
 import { formatCpuTime } from "./ResourceTelemetryDiagnostics.logic";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { settingsScopeEnvironmentLabel } from "./settingsScopeAxis";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { TelemetryExportSettings } from "./TelemetryExportSettings";
 
 const NUMBER_FORMAT = new Intl.NumberFormat();
 
@@ -783,7 +783,7 @@ export function DiagnosticsSettingsPanel() {
 function DiagnosticsSettingsBody() {
   const gt = useGT();
   const m = useMessages();
-  const { environment } = useSettingsScope();
+  const { environment, environments, scope } = useSettingsScope();
   const environmentId = environment?.environmentId ?? null;
   const canMaintainEnvironment = useEnvironmentScope(environmentId, AuthEnvironmentMaintainScope);
   const observability = environment?.serverConfig?.observability;
@@ -879,18 +879,6 @@ function DiagnosticsSettingsBody() {
   const isInitialLoading = isPending && data === null;
   const isProcessInitialLoading = isProcessPending && processData === null;
   const isResourceInitialLoading = isResourcePending && resourceData === null;
-  // Wait for initial tables to stabilize search targets; later loads must preserve export drafts.
-  const [exportFormEnvironmentId, setExportFormEnvironmentId] =
-    useState<typeof environmentId>(null);
-  if (
-    exportFormEnvironmentId !== environmentId &&
-    canReadDiagnostics &&
-    !isInitialLoading &&
-    !isProcessInitialLoading &&
-    !isResourceInitialLoading
-  ) {
-    setExportFormEnvironmentId(environmentId);
-  }
   const signalProcess = async (pid: number, signal: ServerProcessSignal) => {
     const targetEnvironmentId = environmentId;
     const process = processData?.processes.find((entry) => entry.pid === pid);
@@ -988,9 +976,21 @@ function DiagnosticsSettingsBody() {
     ? Option.getOrElse(data.partialFailure, () => false)
     : false;
 
+  const source = environment &&
+    (scope.kind === "all" || (scope.kind === "project" && !scope.environmentId)) && (
+      <p className="px-3 text-sm text-muted-foreground sm:px-4">
+        {gt(
+          "Showing diagnostics for {environment}. The first connected environment in this selection is used, with priority given to the primary environment.",
+          {
+            environment: settingsScopeEnvironmentLabel(environment, environments),
+          },
+        )}
+      </p>
+    );
   if (!canReadDiagnostics) {
     return (
       <SettingsPageContainer>
+        {source}
         <p className="text-sm text-muted-foreground">
           {environmentId === null
             ? gt("Connect an environment to see diagnostics.")
@@ -1004,6 +1004,7 @@ function DiagnosticsSettingsBody() {
 
   return (
     <SettingsPageContainer width="expanded" className="gap-10">
+      {source}
       <ResourceTelemetryDiagnostics environmentId={environmentId} />
 
       <SettingsSection
@@ -1247,7 +1248,7 @@ function DiagnosticsSettingsBody() {
           <DiagnosticsTable headers={[gt("Span"), gt("Cause"), gt("Duration"), gt("Ended")]}>
             {data.latestFailures.map((failure) => (
               <tr key={`${failure.traceId}:${failure.spanId}`}>
-                <td className="px-4 py-3 align-top text-xs font-medium text-foreground first:sm:pl-5">
+                <td className="px-4 py-3 align-top text-xs font-medium wrap-anywhere text-foreground first:sm:pl-5">
                   {failure.name}
                 </td>
                 <td className="max-w-[360px] px-4 py-3 align-top text-muted-foreground">
@@ -1277,7 +1278,7 @@ function DiagnosticsSettingsBody() {
           >
             {data.commonFailures.map((failure) => (
               <tr key={`${failure.name}:${failure.cause}`}>
-                <td className="px-4 py-3 align-top text-xs font-medium text-foreground first:sm:pl-5">
+                <td className="px-4 py-3 align-top text-xs font-medium wrap-anywhere text-foreground first:sm:pl-5">
                   {failure.name}
                 </td>
                 <td className="px-4 py-3 align-top font-mono tabular-nums">
@@ -1310,7 +1311,7 @@ function DiagnosticsSettingsBody() {
           >
             {data.slowestSpans.map((span) => (
               <tr key={`${span.traceId}:${span.spanId}`}>
-                <td className="px-4 py-3 align-top text-xs font-medium text-foreground first:sm:pl-5">
+                <td className="px-4 py-3 align-top text-xs font-medium wrap-anywhere text-foreground first:sm:pl-5">
                   {span.name}
                 </td>
                 <td className="px-4 py-3 align-top font-mono tabular-nums">
@@ -1418,7 +1419,7 @@ function DiagnosticsSettingsBody() {
           >
             {data.topSpansByCount.map((span) => (
               <tr key={span.name}>
-                <td className="px-4 py-3 align-top text-xs font-medium text-foreground first:sm:pl-5">
+                <td className="px-4 py-3 align-top text-xs font-medium wrap-anywhere text-foreground first:sm:pl-5">
                   {span.name}
                 </td>
                 <td className="whitespace-nowrap px-4 py-3 align-top font-mono tabular-nums">
@@ -1442,7 +1443,6 @@ function DiagnosticsSettingsBody() {
           />
         )}
       </SettingsSection>
-      {exportFormEnvironmentId === environmentId && <TelemetryExportSettings />}
     </SettingsPageContainer>
   );
 }

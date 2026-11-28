@@ -1,10 +1,8 @@
 import {
   DEFAULT_SERVER_SETTINGS,
   ModelSelection,
-  ProjectId,
   ProjectScript,
-  keepUnknownOverrideKeys,
-  ProjectSettingsOverrides,
+  type ProjectSettingsOverrides,
   type ProviderInstanceConfig,
   type ProviderInstanceMutation,
   defaultInstanceIdForDriver,
@@ -12,12 +10,12 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
-  ResponseStreamingMode,
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
   type ManagedPolicySummary,
   globalIdleCompaction,
+  legacyTelemetryPreferences,
   isSecretReference,
   type SecretReference,
   withIdleCompaction,
@@ -38,18 +36,22 @@ import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { resolveSymlinkTarget } from "@t3tools/shared/symlink";
+import * as TelemetrySettingsFile from "@t3tools/shared/telemetrySettingsFile";
 import * as ServerConfig from "./config.ts";
 import { type DeepPartial, deepMerge } from "@t3tools/shared/Struct";
-import { fromJsonStringPretty, fromLenientJson } from "@t3tools/shared/schemaJson";
+import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import {
   applyServerSettingsPatch,
+  decodeSettingsFileJsonExit,
+  decodePersistedSettings,
+  decodeLegacySettings,
+  unreadableObservability,
   deriveLegacyProjectOverrides,
   fallbackTextGenerationModelSelection,
   isModelSelectionProviderEnabled,
@@ -351,46 +353,6 @@ export const layerTest = (
   managedPolicy?: ManagedPolicySummary,
 ) => Layer.effect(ServerSettingsService, makeTest(overrides, managedPolicy));
 
-// Accept retired token delivery only on load so one old value cannot reset all settings.
-const PersistedResponseStreamingMode = Schema.Union([
-  ResponseStreamingMode,
-  Schema.Literal("token"),
-]).pipe(
-  Schema.decodeTo(
-    ResponseStreamingMode,
-    SchemaTransformation.transform({
-      decode: (mode) => (mode === "token" ? "paragraph" : mode),
-      encode: (mode) => mode,
-    }),
-  ),
-);
-const PersistedServerSettings = Schema.Struct({
-  ...ServerSettings.fields,
-  responseStreamingMode: PersistedResponseStreamingMode.pipe(
-    Schema.withDecodingDefault(Effect.succeed("paragraph" as const)),
-  ),
-  projectSettingsOverrides: Schema.Record(
-    ProjectId,
-    keepUnknownOverrideKeys(
-      Schema.Struct({
-        ...ProjectSettingsOverrides.fields,
-        responseStreamingMode: Schema.optionalKey(PersistedResponseStreamingMode),
-      }),
-    ),
-  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-});
-// Parse first and decode second, so a managed policy can fill its defaults in between.
-const decodeSettingsFileJsonExit = Schema.decodeUnknownExit(fromLenientJson(Schema.Unknown));
-const decodePersistedServerSettingsExit = Schema.decodeUnknownExit(PersistedServerSettings);
-const LegacyProviderSettingsJson = fromLenientJson(
-  Schema.Struct({
-    providers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
-    bitbucket: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
-    github: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
-  }),
-);
-const decodeLegacyProviderSettingsJsonExit = Schema.decodeUnknownExit(LegacyProviderSettingsJson);
-
 const LEGACY_BITBUCKET_SECRET_NAMES: Readonly<Record<string, string>> = {
   accessToken: "bitbucket-access-token",
   apiToken: "bitbucket-api-token",
@@ -670,7 +632,8 @@ function foldLegacyProjectSettings(
 }
 
 const make = Effect.gen(function* () {
-  const { settingsPath } = yield* ServerConfig.ServerConfig;
+  const { settingsPath, telemetry, legacyWindowsOtlp } = yield* ServerConfig.ServerConfig;
+  const telemetryFile = yield* TelemetrySettingsFile.reader;
   const fs = yield* FileSystem.FileSystem;
   const pathService = yield* Path.Path;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
@@ -694,8 +657,17 @@ const make = Effect.gen(function* () {
   const watcherScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
 
-  const emitChange = (settings: ServerSettings) =>
-    PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
+  let lastSettings: ServerSettings | undefined;
+  let settingsReadFailed = false;
+  const applyTelemetry = (settings: ServerSettings) => {
+    lastSettings = settings;
+    settingsReadFailed = false;
+    telemetry.update(managed.applyLocks(settings).observability);
+  };
+  const emitChange = (settings: ServerSettings) => {
+    applyTelemetry(settings);
+    return PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
+  };
 
   const readConfigExists = fs.exists(settingsPath).pipe(
     Effect.mapError(
@@ -790,40 +762,49 @@ const make = Effect.gen(function* () {
     let legacyProviders: Readonly<Record<string, unknown>> | undefined;
     let legacySourceControl: Parameters<typeof migrateLegacySourceControlSettings>[1] = {};
     let parseFailure = Option.none<unknown>();
+    let settingsUnavailable = false;
 
     if (yield* readConfigExists) {
       const raw = yield* readRawConfig;
       const parsed = decodeSettingsFileJsonExit(raw);
-      const decoded = Exit.isFailure(parsed)
-        ? parsed
-        : decodePersistedServerSettingsExit(managed.withDefaults(parsed.value));
-      const legacySettings = decodeLegacyProviderSettingsJsonExit(raw);
-      if (legacySettings._tag === "Success") {
-        legacyProviders = legacySettings.value.providers;
-        legacySourceControl = {
-          bitbucket: legacySettings.value.bitbucket,
-          github: legacySettings.value.github,
-        };
-      }
-      if (decoded._tag === "Failure" || legacySettings._tag === "Failure") {
-        const failure = decoded._tag === "Failure" ? decoded : legacySettings;
+      const stored = Exit.isFailure(parsed) ? parsed : decodePersistedSettings(parsed.value);
+      const withDefaults = Exit.isSuccess(parsed) ? managed.withDefaults(parsed.value) : undefined;
+      const decoded =
+        Exit.isSuccess(parsed) && withDefaults !== parsed.value
+          ? decodePersistedSettings(withDefaults)
+          : stored;
+      if (Exit.isFailure(decoded)) {
+        if (Exit.isSuccess(parsed)) {
+          legacyProviders = Option.getOrUndefined(decodeLegacySettings(parsed.value))?.providers;
+        }
         // The file may hold an opt-out we can no longer read; never resume threads on a guess.
         settings = {
           ...managed.defaults,
           continueThreadsAfterServerUpdate: false,
           usageHistoryRetentionDays: "unlimited",
         };
-        if (failure._tag === "Failure") {
-          parseFailure = Option.some(Cause.squash(failure.cause));
-          yield* Effect.logWarning("failed to parse settings.json, using defaults", {
-            path: settingsPath,
-            issues: Cause.pretty(failure.cause),
-            cause: failure.cause,
-          });
-        }
+        parseFailure = Option.some(Cause.squash(decoded.cause));
+        yield* Effect.logWarning("failed to parse settings.json, using defaults", {
+          path: settingsPath,
+          issues: Cause.pretty(decoded.cause),
+          cause: decoded.cause,
+        });
       } else {
-        settings = decoded.value;
+        const { providers, bitbucket, github, ...current } = decoded.value;
+        legacyProviders = providers;
+        legacySourceControl = { bitbucket, github };
+        settings = current;
       }
+      // Standalone exporters see the stored file before managed defaults are available.
+      settings = {
+        ...settings,
+        observability: Exit.isSuccess(stored)
+          ? stored.value.observability
+          : unreadableObservability,
+      };
+    } else if (!(yield* telemetryFile.isAbsent(settingsPath))) {
+      settingsUnavailable = true;
+      settings = { ...settings, observability: unreadableObservability };
     }
     // Settings saved by a server that kept the mode in `compactIdleThreads` move
     // it to `idleCompaction`, so that switch goes to clients as a boolean. The
@@ -831,7 +812,7 @@ const make = Effect.gen(function* () {
     settings = withIdleCompaction(settings, globalIdleCompaction(settings));
 
     // A file that failed to decode must stay on disk for the user to repair.
-    const settingsFileTrusted = Option.isNone(parseFailure);
+    const settingsFileTrusted = !settingsUnavailable && Option.isNone(parseFailure);
     const providerHistory = yield* sql<{
       readonly providerName: string;
       readonly providerInstanceId: string | null;
@@ -888,8 +869,29 @@ const make = Effect.gen(function* () {
         ? settings
         : migrateLegacyProviderSettings(settings, legacyProviders, providerHistory),
     );
+    const { observability } = loaded;
+    const migrateWindowsOtlp =
+      settingsFileTrusted &&
+      legacyWindowsOtlp &&
+      (legacyWindowsOtlp.otlpTracesUrl ||
+        legacyWindowsOtlp.otlpMetricsUrl ||
+        legacyWindowsOtlp.otlpLogsUrl) &&
+      !observability.telemetry &&
+      !observability.otlpLogsUrl &&
+      !observability.otlpMetricsUrl &&
+      !observability.otlpTracesUrl;
+    const withWindowsOtlp = migrateWindowsOtlp
+      ? {
+          ...loaded,
+          observability: {
+            ...observability,
+            ...legacyWindowsOtlp,
+            telemetry: legacyTelemetryPreferences(true),
+          },
+        }
+      : loaded;
     const folded = settingsFileTrusted
-      ? foldLegacyProjectSettings(loaded, legacyProjectRows)
+      ? foldLegacyProjectSettings(withWindowsOtlp, legacyProjectRows)
       : loaded;
     // Remove retired keys only after copying secrets and writing the new file; failures retry on next load.
     const legacySecretsCopied = yield* Effect.forEach(
@@ -930,7 +932,16 @@ const make = Effect.gen(function* () {
       }
     }
     return { settings: migrated, parseFailure };
-  });
+  }).pipe(
+    Effect.tapError((error) => {
+      if (error.operation !== "check-exists" && error.operation !== "read-file") return Effect.void;
+      settingsReadFailed = true;
+      telemetry.update(unreadableObservability);
+      return lastSettings
+        ? PubSub.publish(changesPubSub, { ...lastSettings, observability: unreadableObservability })
+        : Effect.void;
+    }),
+  );
 
   const settingsCache = yield* Cache.makeWith((_key: typeof cacheKey) => loadSettingsFromDisk, {
     capacity: 1,
@@ -939,6 +950,7 @@ const make = Effect.gen(function* () {
 
   const getSettingsFromCache = Cache.get(settingsCache, cacheKey).pipe(
     Effect.map((loaded) => loaded.settings),
+    Effect.tap((settings) => (settingsReadFailed ? emitChange(settings) : Effect.void)),
   );
   const reloadSettings = Cache.invalidate(settingsCache, cacheKey).pipe(
     Effect.andThen(Cache.get(settingsCache, cacheKey)),
@@ -1197,6 +1209,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const { settings: current, parseFailure } = yield* reloadSettings;
         if (Option.isSome(parseFailure)) {
+          yield* emitChange(current);
           return yield* new ServerSettingsError({
             settingsPath,
             operation: "read-file",
@@ -1397,7 +1410,7 @@ const make = Effect.gen(function* () {
 
     const startup = Effect.gen(function* () {
       yield* startWatcher;
-      yield* reloadSettings;
+      applyTelemetry((yield* reloadSettings).settings);
     });
 
     const startupExit = yield* Effect.exit(startup);
@@ -1417,7 +1430,13 @@ const make = Effect.gen(function* () {
     updateSettings: (patch) =>
       updateAndPersistSettings(patch, (current) =>
         ensureSecretProviderWritesAllowed(patch, settingsPath).pipe(
-          Effect.as(applyServerSettingsPatch(current, patch)),
+          Effect.map(() =>
+            applyServerSettingsPatch(
+              current,
+              patch,
+              telemetry.describe(current.observability).telemetry,
+            ),
+          ),
         ),
       ),
     updateProviderInstance: (mutation, patch = {}) =>
@@ -1425,7 +1444,11 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           yield* ensureSecretProviderWritesAllowed(patch, settingsPath);
           yield* ensureProviderInstanceMutationAllowed(current, mutation, settingsPath);
-          const patched = applyServerSettingsPatch(current, patch);
+          const patched = applyServerSettingsPatch(
+            current,
+            patch,
+            telemetry.describe(current.observability).telemetry,
+          );
           return applyProviderInstanceMutation(patched, mutation);
         }),
       ),

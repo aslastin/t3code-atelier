@@ -243,12 +243,25 @@ describe("searchSettings", () => {
 });
 
 describe("settings search targets", () => {
-  it("requires an environment for the resolved telemetry export destination", () => {
+  it("finds telemetry controls for a single environment or all environments", () => {
+    expect(SETTINGS_NAV_GROUPS.flatMap((group) => group.paths)).not.toContain(
+      "/settings/diagnostics",
+    );
+    const translate = (message: string) => (message === "Diagnostics" ? "診断" : message);
+    expect(searchSettings("診断", SETTINGS_SEARCH_ITEMS, translate)[0]).toMatchObject({
+      id: "diagnostics",
+      to: "/settings/maintenance",
+    });
+    for (const query of ["Grafana", "OTel", "endpoints"]) {
+      expect(searchSettings(query).map((item) => item.id)).toContain("telemetry-export");
+    }
     const result = searchSettings("OpenTelemetry export").find(
       (item) => item.id === "telemetry-export",
     )!;
+    expect(result.to).toBe("/settings/maintenance");
     const target = getSettingsSearchTargetScope(result.targetId ?? result.id)!;
-    expect(isSettingsSearchScopeAvailable(target.scope, "all")).toBe(false);
+    expect(getSettingsSearchTargetScope("telemetry-endpoints")).toEqual(target);
+    expect(isSettingsSearchScopeAvailable(target.scope, "all")).toBe(true);
     expect(isSettingsSearchScopeAvailable(target.scope, "project")).toBe(false);
     expect(isSettingsSearchScopeAvailable(target.scope, "environment")).toBe(true);
   });
@@ -377,6 +390,9 @@ describe("source control host search items", () => {
 
 describe("movedSettingsPath", () => {
   it("sends old links to the page their row moved to", () => {
+    for (const target of ["telemetry-export", "telemetry-endpoints"]) {
+      expect(movedSettingsPath("/settings/diagnostics", target)).toBe("/settings/maintenance");
+    }
     expect(movedSettingsPath("/settings/general", "text-generation-model")).toBe(
       "/settings/threads",
     );

@@ -2536,6 +2536,23 @@ code {
   display: none;
 }
 
+/* Links read as they do in a sent message. A click places the caret; it does not follow. */
+.composer-tiptap a.composer-link,
+.composer-link-source {
+  color: var(--info-foreground);
+  text-decoration: none;
+}
+
+.composer-tiptap a.composer-link {
+  cursor: text;
+}
+
+/* The text Insert Link will turn into a link, kept visible while focus is in the URL field. */
+.composer-link-pending {
+  background-color: color-mix(in oklab, var(--ring) 28%, transparent);
+  border-radius: 0.2em;
+}
+
 /* Selected chips (node selection from arrowing into or clicking a chip). */
 .composer-tiptap .ProseMirror-selectednode {
   outline: 2px solid var(--ring);

@@ -5,6 +5,7 @@ export const browserApiCorsAllowedHeaders = [
   "authorization",
   "b3",
   "traceparent",
+  "x-t3-telemetry-revision",
   "content-type",
   "dpop",
   ORCHESTRATION_PROTOCOL_HEADER,

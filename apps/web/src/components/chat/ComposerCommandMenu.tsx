@@ -17,6 +17,8 @@ import {
 } from "@t3tools/contracts";
 import {
   BlocksIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   FolderIcon,
   MessagesSquareIcon,
   PackageIcon,
@@ -25,7 +27,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { msg, useGT, useMessages } from "gt-react";
-import { memo, useLayoutEffect, useRef, useState } from "react";
+import { memo, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
 import { cn } from "~/lib/utils";
@@ -35,6 +37,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
+import { modelMentionAccent } from "./ModelMentionChip";
 import { ComposerBanner } from "./ComposerBanner";
 import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation";
 
@@ -104,6 +107,19 @@ export type ComposerCommandItem =
       acpRegistryIconUrl: string | undefined;
       label: string;
       description: string;
+      /** The reasoning select a mention can set, with the levels the `@` menu offers next. */
+      effort: {
+        readonly optionId: string;
+        readonly choices: ReadonlyArray<{ readonly id: string; readonly label: string }>;
+      } | null;
+    }
+  | {
+      id: string;
+      type: "model-effort";
+      /** Null is Default: the mention sets no effort. */
+      value: string | null;
+      label: string;
+      description: string;
     };
 
 export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
@@ -112,6 +128,8 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
   resolvedTheme: "light" | "dark";
   isLoading: boolean;
   triggerKind: ComposerTriggerKind | null;
+  /** Shown above the list; replaces the trigger's listbox label when set. */
+  header?: { readonly node: ReactNode; readonly label: string } | undefined;
   emptyStateText?: string;
   activeItemId: string | null;
   onHighlightedItemChange: (itemId: string | null) => void;
@@ -145,11 +163,13 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
         className="flex min-h-0 w-full flex-col overflow-hidden pb-(--chat-composer-attachment-overlap) **:data-[slot=command-item]:rounded-lg **:data-[slot=scroll-area-scrollbar]:data-[orientation=vertical]:my-4"
         data-composer-command-drawer="true"
       >
+        {props.header?.node}
         {props.items.length > 0 ? (
           <CommandList
             id={props.listId}
             aria-label={
-              props.triggerKind ? m(LISTBOX_LABEL_BY_TRIGGER[props.triggerKind]) : undefined
+              props.header?.label ??
+              (props.triggerKind ? m(LISTBOX_LABEL_BY_TRIGGER[props.triggerKind]) : undefined)
             }
             className="max-h-72 min-h-0 scroll-pb-6"
           >
@@ -299,10 +319,54 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
             showSkillSuffix={props.triggerKind === "skill"}
           />
         ) : null}
+        {props.item.type === "model" && props.item.effort ? (
+          <ChevronRightIcon aria-hidden="true" className="size-3.5 shrink-0 text-secondary-label" />
+        ) : null}
       </span>
     </CommandItem>
   );
 });
+
+/** Heads the `@` menu's effort step with the chosen model; Back returns to the model list. */
+export function ComposerModelEffortHeader(props: {
+  model: Extract<ComposerCommandItem, { type: "model" }>;
+  onBack: (() => void) | undefined;
+}) {
+  const gt = useGT();
+  const accent = modelMentionAccent(props.model.driverKind);
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 border-b border-border/60 px-3 py-2">
+      {props.onBack ? (
+        <button
+          type="button"
+          className="-ms-1 inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-secondary-label hover:text-foreground"
+          aria-label={gt("Back to models")}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={props.onBack}
+        >
+          <ChevronLeftIcon aria-hidden="true" className="size-3.5" />
+        </button>
+      ) : null}
+      <ProviderInstanceIcon
+        driverKind={props.model.driverKind}
+        displayName={props.model.providerDisplayName}
+        acpRegistryAgentId={props.model.acpRegistryAgentId}
+        acpRegistryIconUrl={props.model.acpRegistryIconUrl}
+        className="size-4 shrink-0"
+        iconClassName="size-4"
+      />
+      <span
+        className="min-w-0 truncate font-sans text-xs font-medium"
+        style={accent ? { color: accent } : undefined}
+      >
+        {props.model.label}
+      </span>
+      <span className="ms-auto shrink-0 text-secondary-label text-xs">
+        {gt("Reasoning effort")}
+      </span>
+    </div>
+  );
+}
 
 export function composerSuggestionOptionId(listId: string, itemId: string): string {
   // JSON escapes lone UTF-16 surrogates before URI encoding without losing identity.
