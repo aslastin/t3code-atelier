@@ -232,6 +232,21 @@ describe("PluginService", () => {
       );
       assert.deepStrictEqual(offlineBroken.installedMarkers(), [".kite/HEAD"]);
       NodeFS.writeFileSync(script, kept, { mode: 0o755 });
+      // Nor does one whose manifest no longer parses: its last valid markers are remembered.
+      const manifestPath = `${home}/plugins/kite/plugin.json`;
+      const manifestText = NodeFS.readFileSync(manifestPath, "utf8");
+      NodeFS.writeFileSync(manifestPath, "{");
+      yield* plugins.recheck("kite");
+      assert.deepStrictEqual(drivers.installedMarkers(), [".kite/HEAD"]);
+      const offlineUnparsed = yield* VcsPluginDrivers.pipe(
+        Effect.provide(
+          PluginService.layerInstalledMarkers.pipe(
+            Layer.provide(ServerConfig.layerTest(home, home)),
+          ),
+        ),
+      );
+      assert.deepStrictEqual(offlineUnparsed.installedMarkers(), [".kite/HEAD"]);
+      NodeFS.writeFileSync(manifestPath, manifestText);
       yield* plugins.recheck("kite");
 
       // Disable and Remove are the way back out.

@@ -51,6 +51,9 @@ import {
 } from "./pluginManifest.ts";
 
 const STATE_FILE_NAME = ".state.json";
+// Atelier fork: each installed plugin's markers from its last valid manifest, so its checkouts
+// stay guarded while its copy is unreadable, even across restarts. Cleared on Remove.
+const MARKERS_FILE_NAME = ".markers.json";
 const IMPORT_MAX_FILES = 2_000;
 const IMPORT_MAX_BYTES = 50_000_000;
 const CHECK_TIMEOUT_MS = 30_000;
@@ -88,6 +91,14 @@ interface PluginEntry {
   readonly checkedAt: string | null;
   readonly driver: VcsDriver.VcsDriver["Service"] | null;
 }
+
+const KnownMarkers = Schema.Record(Schema.String, Schema.Array(Schema.String));
+const decodeKnownMarkers = Schema.decodeUnknownEffect(Schema.fromJsonString(KnownMarkers));
+const readKnownMarkersFile = (fs: FileSystem.FileSystem, file: string) =>
+  fs.readFileString(file).pipe(
+    Effect.flatMap(decodeKnownMarkers),
+    Effect.orElseSucceed((): Readonly<Record<string, ReadonlyArray<string>>> => ({})),
+  );
 
 const PluginState = Schema.Struct({ disabled: Schema.Array(Schema.String) });
 const decodeState = Schema.decodeUnknownEffect(Schema.fromJsonString(PluginState));
@@ -138,6 +149,18 @@ const make = Effect.gen(function* () {
 
   const failure = (operation: string, detail: string, pluginId?: string) =>
     new PluginError({ operation, detail, ...(pluginId === undefined ? {} : { pluginId }) });
+
+  const markersPath = path.join(directory, MARKERS_FILE_NAME);
+  const readKnownMarkers = readKnownMarkersFile(fs, markersPath);
+  const writeKnownMarkers = Effect.fn("PluginService.writeKnownMarkers")(function* (
+    known: Readonly<Record<string, ReadonlyArray<string>>>,
+  ) {
+    const staged = `${markersPath}.${NodeCrypto.randomUUID()}.tmp`;
+    yield* fs.writeFileString(staged, JSON.stringify(known));
+    yield* fs
+      .rename(staged, markersPath)
+      .pipe(Effect.tapError(() => fs.remove(staged, { force: true }).pipe(Effect.ignore)));
+  }, Effect.ignore);
 
   const readDisabled = fs.readFileString(statePath).pipe(
     Effect.flatMap(decodeState),
@@ -191,7 +214,12 @@ const make = Effect.gen(function* () {
     enabled: boolean,
     pluginDirectory = path.join(directory, folder),
   ) {
-    const { manifest, markers, errors, notes } = yield* readManifest(fs, path, pluginDirectory);
+    const {
+      manifest,
+      markers: named,
+      errors,
+      notes,
+    } = yield* readManifest(fs, path, pluginDirectory);
     const fileErrors = manifest ? yield* checkPluginFiles(fs, path, pluginDirectory, manifest) : [];
     const idErrors =
       manifest && manifest.id !== folder && pluginDirectory === path.join(directory, folder)
@@ -199,6 +227,16 @@ const make = Effect.gen(function* () {
         : [];
     const manifestErrors = [...errors, ...fileErrors, ...idErrors];
     const valid = manifestErrors.length === 0 ? manifest : null;
+    // An installed copy remembers its markers; a folder being imported is not installed yet.
+    const installed = pluginDirectory === path.join(directory, folder);
+    const known = installed ? yield* readKnownMarkers : {};
+    const markers = [...new Set([...named, ...(known[folder] ?? [])])];
+    if (installed && valid !== null) {
+      const current = valid.detect.markers;
+      const stored = known[folder] ?? [];
+      if (current.length !== stored.length || current.some((marker, i) => marker !== stored[i]))
+        yield* writeKnownMarkers({ ...known, [folder]: current });
+    }
     return {
       folder,
       directory: pluginDirectory,
@@ -558,6 +596,11 @@ const make = Effect.gen(function* () {
           entries.delete(folder);
           const disabled = yield* readDisabled;
           if (disabled.delete(folder)) yield* writeDisabled(disabled);
+          const known = yield* readKnownMarkers;
+          if (folder in known) {
+            const { [folder]: _removed, ...rest } = known;
+            yield* writeKnownMarkers(rest);
+          }
           return snapshot();
         }),
       );
@@ -726,12 +769,15 @@ export const layerInstalledMarkers = Layer.effect(
     // Set-aside copies and imports in progress start with a dot.
     for (const name of names.filter((entry) => !entry.startsWith(".")).toSorted()) {
       markers.push(...(yield* readManifest(fs, path, path.join(directory, name))).markers);
+      markers.push(
+        ...((yield* readKnownMarkersFile(fs, path.join(directory, MARKERS_FILE_NAME)))[name] ?? []),
+      );
     }
     return VcsPluginDrivers.of({
       current: Effect.succeed(new Map()),
       hasAny: () => false,
       markers: () => [],
-      installedMarkers: () => markers,
+      installedMarkers: () => [...new Set(markers)],
       available: () => [],
       describe: () => undefined,
       changes: Stream.empty,

@@ -260,10 +260,13 @@ function namedMarkers(text: string): ReadonlyArray<string> {
   }
   const markers = (parsed as { detect?: { markers?: unknown } } | null)?.detect?.markers;
   if (!Array.isArray(markers)) return [];
-  return markers.filter(
-    (marker): marker is string =>
-      typeof marker === "string" && isSafeRelativePath(marker) && !marker.includes("\\"),
-  );
+  // As many as a valid manifest may hold: every walk probes each one.
+  return markers
+    .slice(0, 8)
+    .filter(
+      (marker): marker is string =>
+        typeof marker === "string" && isSafeRelativePath(marker) && !marker.includes("\\"),
+    );
 }
 
 /** Resolves `./` inside the real plugin folder, so a symlink cannot reach outside it. */
