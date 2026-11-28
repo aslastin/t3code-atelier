@@ -137,7 +137,7 @@ With `worktreeCreate`, `worktreeRemove` and `worktreeList`, **New worktree** is 
 plugin's repositories. A new worktree starts on a temporary branch; with `branchRename`, T3 Code
 renames it after the thread's first message, as it does for Git, and without it the branch keeps
 its temporary name. T3 Code checks `status` before removing a worktree that is not forced, and
-cleanup removes one only when it is clean. Commits are your VCS's to keep: if removing a worktree
+cleanup removes one only when it is clean; a clean one is removed with `{force}` `false`. Commits are your VCS's to keep: if removing a worktree
 deletes its local branches, `worktreeRemove` should exit with an error while one holds commits
 that exist nowhere else. **Start from remote** is offered with `fetchBase`: T3 Code runs it in the
 repository, then passes the ref it printed to `worktreeCreate` as `{baseRef}`. Commit, push and
@@ -162,6 +162,8 @@ worktree stays when:
 
 - `status` lists a file, except one marked `"untracked": true` when cleanup keeps worktrees only
   for tracked changes.
+- Cleanup is set to keep worktrees with any local files: `status` lists no ignored files, so
+  cleanup cannot tell whether one, such as `.env`, is there.
 - `status` reports an `aheadCount` above 0. If your VCS keeps a worktree's branch inside the
   worktree, report unpushed commits there, counted from the branch's base when it has no
   upstream, or they are lost with the worktree.
