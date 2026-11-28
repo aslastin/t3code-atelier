@@ -639,17 +639,16 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     for (const entry of walked) {
       if (entry.kind === "mount") nested.push(`${prefix}${entry.path}`);
       if (entry.kind !== "repository") continue;
-      // In the same folder a plugin's marker wins over `.git`, as everywhere else.
+      // Only a Git checkout is left to Git, which stages it as its commit. In the same folder a
+      // plugin's marker wins over `.git`, as everywhere else; a bare repository has no `.git`.
+      const exists = (marker: string) =>
+        fs.exists(path.join(scope, entry.path, marker)).pipe(Effect.orElseSucceed(() => true));
+      let gitCheckout = yield* exists(".git");
       for (const marker of pluginMarkers) {
-        if (
-          yield* fs
-            .exists(path.join(scope, entry.path, marker))
-            .pipe(Effect.orElseSucceed(() => true))
-        ) {
-          nested.push(`${prefix}${entry.path}`);
-          break;
-        }
+        if (!gitCheckout) break;
+        if (yield* exists(marker)) gitCheckout = false;
       }
+      if (!gitCheckout) nested.push(`${prefix}${entry.path}`);
     }
     yield* git(
       location,

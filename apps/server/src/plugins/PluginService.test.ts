@@ -268,6 +268,14 @@ describe("PluginService", () => {
       );
       assert.include(drivers.installedMarkers(), ".ctor/HEAD");
       yield* plugins.remove("constructor");
+      // A valid manifest that changes its markers guards only the new ones.
+      const changed = JSON.parse(manifestText) as { detect: { markers: Array<string> } };
+      changed.detect.markers = [".kite/STORE"];
+      NodeFS.writeFileSync(manifestPath, JSON.stringify(changed));
+      yield* plugins.recheck("kite");
+      assert.deepStrictEqual(drivers.installedMarkers(), [".kite/STORE"]);
+      NodeFS.writeFileSync(manifestPath, manifestText);
+      yield* plugins.recheck("kite");
 
       // Disable and Remove are the way back out.
       const disabled = yield* plugins.setEnabled("kite", false);
@@ -1572,6 +1580,13 @@ describe("ManifestVcsDriver", () => {
       NodeFS.mkdirSync(`${repository}/vendor/.git`);
       NodeFS.writeFileSync(`${repository}/vendor/theirs.txt`, "theirs\n");
       NodeFS.writeFileSync(`${repository}/mine.txt`, "mine\n");
+      // Nor a bare Git repository: Git would copy it as plain files.
+      NodeChildProcess.execFileSync("git", [
+        "init",
+        "--bare",
+        "--quiet",
+        `${repository}/mirror.git`,
+      ]);
       yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("v") });
       const withNested = yield* checkpoints.diffCheckpoints({
         cwd: repository,
@@ -1581,8 +1596,10 @@ describe("ManifestVcsDriver", () => {
       });
       assert.include(withNested, "b/mine.txt");
       assert.notInclude(withNested, "vendor/");
+      assert.notInclude(withNested, "mirror.git/");
       yield* checkpoints.deleteCheckpointRefs({ cwd: repository, checkpointRefs: [ref("v")] });
       NodeFS.rmSync(`${repository}/vendor`, { recursive: true });
+      NodeFS.rmSync(`${repository}/mirror.git`, { recursive: true });
       NodeFS.rmSync(`${repository}/mine.txt`);
 
       // A project two folders down is saved, and restored, whole: Git stages nothing when an

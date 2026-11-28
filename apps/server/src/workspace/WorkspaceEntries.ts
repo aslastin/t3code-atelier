@@ -214,16 +214,21 @@ export function hasMountBelow(
   path: Path.Path,
   platform: string,
 ): boolean {
-  const spelled = platform === "darwin" ? withoutDataVolume : (target: string) => target;
-  return points.some((point) => {
-    const relative = path.relative(spelled(root), spelled(point));
+  const below = (from: string, to: string) => {
+    const relative = path.relative(from, to);
     return (
       relative !== "" &&
       relative !== ".." &&
       !relative.startsWith(`..${path.sep}`) &&
       !path.isAbsolute(relative)
     );
-  });
+  };
+  // As spelled, and on macOS with the Data volume's prefix taken off both.
+  return points.some(
+    (point) =>
+      below(root, point) ||
+      (platform === "darwin" && below(withoutDataVolume(root), withoutDataVolume(point))),
+  );
 }
 
 /** @public */

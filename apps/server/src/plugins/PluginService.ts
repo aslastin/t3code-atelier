@@ -232,14 +232,18 @@ const make = Effect.gen(function* () {
     const installed = pluginDirectory === path.join(directory, folder);
     const known = installed ? yield* readKnownMarkers : {};
     const remembered = Object.hasOwn(known, folder) ? known[folder]! : [];
-    // What this server already guarded counts too, should the file above not have been written.
-    const markers = [
-      ...new Set([
-        ...named,
-        ...remembered,
-        ...(installed ? (entries.get(folder)?.markers ?? []) : []),
-      ]),
-    ];
+    // A valid manifest says which markers are its own. Otherwise what it names, what was
+    // remembered, and what this server already guarded (should that file not have been written).
+    const markers =
+      valid !== null
+        ? valid.detect.markers
+        : [
+            ...new Set([
+              ...named,
+              ...remembered,
+              ...(installed ? (entries.get(folder)?.markers ?? []) : []),
+            ]),
+          ];
     if (installed && valid !== null) {
       const current = valid.detect.markers;
       const stored = remembered;
