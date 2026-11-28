@@ -29,7 +29,8 @@ one closer to the project folder wins; in the same folder, the plugin wins. Avoi
 plugins whose markers can sit in the same folder: only one of them owns it.
 
 In a plugin's repository, even while the plugin is off, and in a project folder that holds one
-a level or two down, T3 Code does not walk or index the project's files: a large repository or a network mount could make that slow or download every
+a level or two down, or another file system mounted at any depth, T3 Code does not walk or index
+the project's files: a large repository or a network mount could make that slow or download every
 file. File mentions (`@`), the file tree's filter, and text search (`Ctrl+Shift+F` / `⌘⇧F`) say
 file search is not available, though `@` still finds threads and models by name. Opening a link by
 file name finds nothing. Browsing the file tree one folder at a time still works, though not
@@ -187,7 +188,8 @@ a new thread starts from the top of the list again.
   live thread's worktree that holds native snapshots, since the plugin may store them inside it.
 - `changed-files` asks `changedFiles` for the changed paths and keeps a copy of them in a Git
   repository under T3 home. Only modified and added files are read, and deletions are recorded
-  without reading anything. A new folder reported as one entry is read in full. Unchanged files
+  without reading anything. A new folder reported as one entry is read in full, except repositories and mounts
+  inside it. Unchanged files
   are never read; when a diff needs their committed version, it comes from `readFile`. Two
   snapshots can be compared only when `changedFiles` reported the same `revision` for both.
 - `full` copies the whole thread folder into that Git repository. It reads every file, so on a
