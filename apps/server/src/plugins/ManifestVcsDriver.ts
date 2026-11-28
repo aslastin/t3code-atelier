@@ -569,10 +569,16 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
         });
         // A listed path names that checkout itself, never one around it that a stale entry's
         // folder happens to sit in.
-        // A `.git` nearer than the marker makes the path that repository's, not the checkout's.
+        // A `.git` or another plugin's marker nearer than this one's makes the path that
+        // repository's, not the checkout's.
         const owned =
           marked !== null &&
-          (yield* pluginMarksBeforeGit(fs, path, requested, manifest.detect.markers));
+          (yield* pluginMarksBeforeGit(fs, path, requested, manifest.detect.markers, [
+            ".git",
+            ...(input.installedMarkers?.() ?? []).filter(
+              (marker) => !manifest.detect.markers.includes(marker),
+            ),
+          ]));
         const target =
           (yield* isListed(requested)) || !owned ? requested : (marked?.root ?? requested);
         const refuse = (detail: string) =>

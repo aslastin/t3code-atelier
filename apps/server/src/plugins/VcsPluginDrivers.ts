@@ -52,6 +52,8 @@ export const pluginMarksBeforeGit = Effect.fnUntraced(function* (
   path: Path.Path,
   cwd: string,
   markers: ReadonlyArray<string>,
+  // What else ends the search, nearer than a marker: `.git` unless told otherwise.
+  others: ReadonlyArray<string> = [".git"],
 ) {
   if (markers.length === 0) return false;
   const exists = (target: string) =>
@@ -59,7 +61,7 @@ export const pluginMarksBeforeGit = Effect.fnUntraced(function* (
   let folder = yield* fileSystem.realPath(cwd).pipe(Effect.orElseSucceed(() => path.resolve(cwd)));
   while (true) {
     for (const marker of markers) if (yield* exists(path.join(folder, marker))) return true;
-    if (yield* exists(path.join(folder, ".git"))) return false;
+    for (const other of others) if (yield* exists(path.join(folder, other))) return false;
     const parent = path.dirname(folder);
     if (parent === folder) return false;
     folder = parent;

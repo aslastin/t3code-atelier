@@ -513,7 +513,7 @@ describe("ManifestVcsDriver", () => {
 
   it.live("creates a worktree where T3 puts it, keeps the project subfolder, and removes it", () =>
     Effect.gen(function* () {
-      const { driver, repository, home } = yield* setup();
+      const { driver, repository, home, plugins } = yield* setup();
       const workflow = driver!.workflow!;
       const created = yield* workflow.createWorktree!({
         cwd: `${repository}/sub`,
@@ -583,6 +583,23 @@ describe("ManifestVcsDriver", () => {
       assert.include(nested.message, "is not a Kite checkout");
       assert.isTrue(NodeFS.existsSync(`${worktree.path}/a.txt`));
       NodeFS.rmSync(`${worktree.path}/inner`, { recursive: true });
+      // So does another installed plugin's checkout.
+      yield* plugins.importFolder(
+        writeFakeVcsPlugin(NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-other-plugin-`), {
+          id: "other",
+          extraManifest: { detect: { markers: [".other/HEAD"] } },
+        }),
+      );
+      NodeFS.mkdirSync(`${worktree.path}/theirs/.other`, { recursive: true });
+      NodeFS.writeFileSync(`${worktree.path}/theirs/.other/HEAD`, "main\n");
+      const theirs = yield* workflow.removeWorktree!({
+        cwd: `${repository}/sub`,
+        path: `${worktree.path}/theirs`,
+        force: true,
+      }).pipe(Effect.flip);
+      assert.include(theirs.message, "is not a Kite checkout");
+      assert.isTrue(NodeFS.existsSync(`${worktree.path}/a.txt`));
+      NodeFS.rmSync(`${worktree.path}/theirs`, { recursive: true });
 
       // Callers pass the thread's folder, the subfolder; the whole checkout goes, as with Git.
       yield* workflow.removeWorktree!({ cwd: `${repository}/sub`, path: worktree.projectPath! });
