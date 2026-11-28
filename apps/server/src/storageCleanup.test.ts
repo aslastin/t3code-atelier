@@ -2919,6 +2919,37 @@ describe("orphan worktree reports", () => {
       ),
   );
 
+  it.live("reports a mount directly in the worktrees folder as one folder", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        let mount = "";
+        const onMount = (target: string) =>
+          mount !== "" && (target === mount || target.startsWith(`${mount}/`));
+        const fixture = yield* cleanupFixture().pipe(
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            stat: (target) =>
+              fs
+                .stat(target)
+                .pipe(
+                  Effect.map((info) => (onMount(target) ? { ...info, dev: info.dev + 1n } : info)),
+                ),
+          }),
+        );
+        fixture.setThreads([]);
+        mount = `${fixture.config.worktreesDir}/mounted`;
+        for (const child of ["one", "two"])
+          yield* fs.makeDirectory(`${mount}/${child}`, { recursive: true });
+        for (const folder of [mount, `${mount}/one`, `${mount}/two`])
+          yield* fs.utimes(folder, 1, 1);
+        expect((yield* fixture.service.runNow).entries).toEqual([
+          expect.objectContaining({ path: mount, outcome: "kept" }),
+        ]);
+      }),
+    ),
+  );
+
   it.live("continues reporting when a project root cannot be probed", () =>
     runCleanupTest(
       Effect.gen(function* () {

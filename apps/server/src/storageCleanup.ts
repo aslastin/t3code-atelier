@@ -984,6 +984,15 @@ const make = Effect.gen(function* () {
           }).pipe(Effect.orElseSucceed(() => false)),
       );
     });
+    const checkoutOrMount = Effect.fnUntraced(
+      function* (folder: string, parent: string) {
+        if ((yield* fs.stat(folder)).dev !== (yield* fs.stat(parent)).dev) return true;
+        for (const marker of plugins?.installedMarkers() ?? [])
+          if (yield* fs.exists(path.join(folder, marker))) return true;
+        return false;
+      },
+      Effect.orElseSucceed(() => true),
+    );
     for (const root of roots) {
       // Worktrees can be <root>/<repository>/<branch> or explicitly <root>/<name>.
       for (const projectDirectory of yield* directories(root, root)) {
@@ -992,6 +1001,12 @@ const make = Effect.gen(function* () {
           const gitPath = path.join(projectDirectory, ".git");
           if (yield* fs.exists(gitPath)) {
             if (yield* isLinkedWorktree(projectDirectory)) yield* report(projectDirectory);
+            return;
+          }
+          // Atelier fork: a plugin's checkout or a mount named <root>/<name> is one folder, never
+          // a folder of worktrees to list.
+          if (yield* checkoutOrMount(projectDirectory, root)) {
+            yield* report(projectDirectory);
             return;
           }
           for (const worktreePath of yield* directories(projectDirectory, root)) {
