@@ -38,6 +38,11 @@ appears in the app version as `+atelier.<N>`.
    pending pull request reviews have **Edit** next to Delete, and saving keeps the comment's place
    in the composer.
 7. **[Telemetry controls](./docs/user/telemetry.md).** Choose product analytics, T3 Connect tracing, or your own OpenTelemetry receiver per environment and pause all exports with one switch.
+8. **[VCS plugins](./docs/user/vcs-plugins.md).** Import a plugin folder in **Settings → Source
+   control & issues** to work with a version control system T3 Code does not ship: branches,
+   commits, push and pull, worktrees, and each turn's diff and rollback. File search stays off in
+   its repositories and in folders with a mount below, so a large or mounted checkout is never
+   read in full.
 
 ### Plan mode
 
