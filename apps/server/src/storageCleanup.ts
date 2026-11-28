@@ -465,12 +465,22 @@ const make = Effect.gen(function* () {
     const projectRoot = yield* fs
       .realPath(projectCwd)
       .pipe(Effect.orElseSucceed(() => path.resolve(projectCwd)));
+    // The nearest repository decides: a `.git` or another plugin's marker below this one's
+    // makes the target that repository's, not a folder of the checkout around it.
+    const others = [
+      ".git",
+      ...(plugins?.installedMarkers() ?? []).filter((marker) => !markers.includes(marker)),
+    ];
     while (true) {
       for (const marker of markers) {
         if (yield* fs.exists(path.join(folder, marker)).pipe(Effect.orElseSucceed(() => false)))
           return inside(folder, projectRoot) || pathKey(folder) === pathKey(projectRoot)
             ? null
             : folder;
+      }
+      for (const other of others) {
+        if (yield* fs.exists(path.join(folder, other)).pipe(Effect.orElseSucceed(() => true)))
+          return null;
       }
       const parent = path.dirname(folder);
       if (parent === folder) return null;
