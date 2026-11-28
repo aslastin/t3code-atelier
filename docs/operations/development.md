@@ -112,6 +112,13 @@ To add a scenario, point a `SCENARIOS` entry at a generic ACP replay fixture
 The agent replays session updates, permission requests, and questions. It drops session setup
 and vendor frames, so Grok and fx recordings lose their vendor-only behavior.
 
+### Kite VCS plugin
+
+`vp run --filter t3 kite-plugin <folder>` writes Kite, the made-up VCS the plugin tests use, to
+`<folder>/plugin` and a Kite repository to `<folder>/repo`. Import the plugin in Settings → Source
+control and add the repository as a project to try VCS plugin features without a real VCS. Kite
+keeps its state in plain files under `.kite/` and logs every command to `.kite/calls.log`.
+
 ### Profiling dev startup
 
 Run `vp run profile:startup` to capture the first 20 seconds of inherited Node processes under
