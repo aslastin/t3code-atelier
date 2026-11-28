@@ -1662,7 +1662,8 @@ describe("ManifestVcsDriver", () => {
         .split("\n")
         .find(Boolean)!;
       const objects = `${home}/${shadows[0]}/objects`;
-      const weeksAgo = new Date(Date.UTC(2000, 0, 1));
+      // 2000-01-01, in seconds: long past any grace period.
+      const weeksAgo = 946_684_800;
       for (const entry of NodeFS.readdirSync(objects, { recursive: true }).map(String))
         if (/^[0-9a-f]{2}[\\/][0-9a-f]{38}$/.test(entry))
           NodeFS.utimesSync(`${objects}/${entry}`, weeksAgo, weeksAgo);

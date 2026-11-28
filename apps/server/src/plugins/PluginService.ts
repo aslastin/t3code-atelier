@@ -94,6 +94,7 @@ interface PluginEntry {
 
 const KnownMarkers = Schema.Record(Schema.String, Schema.Array(Schema.String));
 const decodeKnownMarkers = Schema.decodeUnknownEffect(Schema.fromJsonString(KnownMarkers));
+const encodeKnownMarkers = Schema.encodeEffect(Schema.fromJsonString(KnownMarkers));
 const readKnownMarkersFile = (fs: FileSystem.FileSystem, file: string) =>
   fs.readFileString(file).pipe(
     Effect.flatMap(decodeKnownMarkers),
@@ -156,7 +157,7 @@ const make = Effect.gen(function* () {
     known: Readonly<Record<string, ReadonlyArray<string>>>,
   ) {
     const staged = `${markersPath}.${NodeCrypto.randomUUID()}.tmp`;
-    yield* fs.writeFileString(staged, JSON.stringify(known));
+    yield* fs.writeFileString(staged, yield* encodeKnownMarkers(known));
     yield* fs
       .rename(staged, markersPath)
       .pipe(Effect.tapError(() => fs.remove(staged, { force: true }).pipe(Effect.ignore)));
