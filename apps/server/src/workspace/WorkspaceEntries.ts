@@ -197,14 +197,22 @@ export function parseMountPoints(output: string, platform: string): ReadonlyArra
   });
 }
 
+// macOS firmlinks: `/System/Volumes/Data/Users/…` and `/Users/…` are one folder, and `realpath`
+// keeps whichever spelling it was given.
+const DARWIN_DATA_VOLUME = "/System/Volumes/Data";
+const withoutDataVolume = (target: string) =>
+  target.startsWith(`${DARWIN_DATA_VOLUME}/`) ? target.slice(DARWIN_DATA_VOLUME.length) : target;
+
 /** Atelier fork: whether a mount point lies strictly inside `root`. */
 export function hasMountBelow(
   root: string,
   points: ReadonlyArray<string>,
   path: Path.Path,
+  platform: string,
 ): boolean {
+  const spelled = platform === "darwin" ? withoutDataVolume : (target: string) => target;
   return points.some((point) => {
-    const relative = path.relative(root, point);
+    const relative = path.relative(spelled(root), spelled(point));
     return (
       relative !== "" &&
       relative !== ".." &&
@@ -359,7 +367,7 @@ export const make = Effect.gen(function* () {
       return false;
     });
     const points = yield* mountPoints(now);
-    const holds = probed || found || points === null || hasMountBelow(root, points, path);
+    const holds = probed || found || points === null || hasMountBelow(root, points, path, platform);
     holdsPluginCheckout.set(cwd, { at: now, holds });
     return holds;
   });

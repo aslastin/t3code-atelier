@@ -1342,12 +1342,23 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
         expect(linux).toContain("/home/me/work/wt\ttab\\x");
         const path = yield* Path.Path;
         // A mount at any depth below the project counts; the project's own and those above do not.
-        expect(WorkspaceEntries.hasMountBelow("/home/me", linux, path)).toBe(true);
-        expect(WorkspaceEntries.hasMountBelow("/home/me/work", linux, path)).toBe(true);
-        expect(WorkspaceEntries.hasMountBelow("/home/me/mono", linux, path)).toBe(false);
-        expect(WorkspaceEntries.hasMountBelow("/home/me/mono/src", linux, path)).toBe(false);
-        expect(WorkspaceEntries.hasMountBelow("/home/me/monorepo", linux, path)).toBe(false);
-        expect(WorkspaceEntries.hasMountBelow("/srv/project", linux, path)).toBe(false);
+        expect(WorkspaceEntries.hasMountBelow("/home/me", linux, path, "linux")).toBe(true);
+        expect(WorkspaceEntries.hasMountBelow("/home/me/work", linux, path, "linux")).toBe(true);
+        expect(WorkspaceEntries.hasMountBelow("/home/me/mono", linux, path, "linux")).toBe(false);
+        expect(WorkspaceEntries.hasMountBelow("/home/me/mono/src", linux, path, "linux")).toBe(
+          false,
+        );
+        expect(WorkspaceEntries.hasMountBelow("/home/me/monorepo", linux, path, "linux")).toBe(
+          false,
+        );
+        expect(WorkspaceEntries.hasMountBelow("/srv/project", linux, path, "linux")).toBe(false);
+        // On macOS a firmlinked folder has two spellings; either finds a mount under the other.
+        const darwin = ["/", "/System/Volumes/Data", "/Users/me/mono"];
+        for (const root of ["/Users/me", "/System/Volumes/Data/Users/me"])
+          expect(WorkspaceEntries.hasMountBelow(root, darwin, path, "darwin")).toBe(true);
+        expect(WorkspaceEntries.hasMountBelow("/Users/me/mono", darwin, path, "darwin")).toBe(
+          false,
+        );
       }),
     );
 
