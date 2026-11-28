@@ -75,6 +75,8 @@ interface PluginEntry {
   readonly folder: string;
   readonly directory: string;
   readonly manifest: VcsPluginManifest | null;
+  /** Its markers, kept from an invalid manifest too: they guard its checkouts either way. */
+  readonly markers: ReadonlyArray<string>;
   readonly manifestErrors: ReadonlyArray<string>;
   readonly manifestNotes: ReadonlyArray<string>;
   readonly iconSvg: string | null;
@@ -189,7 +191,7 @@ const make = Effect.gen(function* () {
     enabled: boolean,
     pluginDirectory = path.join(directory, folder),
   ) {
-    const { manifest, errors, notes } = yield* readManifest(fs, path, pluginDirectory);
+    const { manifest, markers, errors, notes } = yield* readManifest(fs, path, pluginDirectory);
     const fileErrors = manifest ? yield* checkPluginFiles(fs, path, pluginDirectory, manifest) : [];
     const idErrors =
       manifest && manifest.id !== folder && pluginDirectory === path.join(directory, folder)
@@ -201,6 +203,7 @@ const make = Effect.gen(function* () {
       folder,
       directory: pluginDirectory,
       manifest: valid,
+      markers,
       manifestErrors,
       manifestNotes: notes,
       iconSvg: valid ? yield* readIcon(fs, path, pluginDirectory, valid) : null,
@@ -305,8 +308,7 @@ const make = Effect.gen(function* () {
       manifest,
       reportError: reportError(entry.folder),
       worktreesDirectory: worktreesDirectory.pipe(Effect.provideService(Path.Path, path)),
-      installedMarkers: () =>
-        [...entries.values()].flatMap((other) => other.manifest?.detect.markers ?? []),
+      installedMarkers: () => [...entries.values()].flatMap((other) => other.markers),
       locks: yield* locksFor(manifest.id),
     });
     return {
@@ -625,8 +627,7 @@ const make = Effect.gen(function* () {
       [...entries.values()].flatMap((entry) =>
         entry.driver && entry.manifest ? entry.manifest.detect.markers : [],
       ),
-    installedMarkers: () =>
-      [...entries.values()].flatMap((entry) => entry.manifest?.detect.markers ?? []),
+    installedMarkers: () => [...entries.values()].flatMap((entry) => entry.markers),
     available: () =>
       [...entries.values()].flatMap((entry) =>
         entry.driver && entry.manifest
@@ -724,8 +725,7 @@ export const layerInstalledMarkers = Layer.effect(
     const markers: string[] = [];
     // Set-aside copies and imports in progress start with a dot.
     for (const name of names.filter((entry) => !entry.startsWith(".")).toSorted()) {
-      const { manifest } = yield* readManifest(fs, path, path.join(directory, name));
-      if (manifest !== null) markers.push(...manifest.detect.markers);
+      markers.push(...(yield* readManifest(fs, path, path.join(directory, name))).markers);
     }
     return VcsPluginDrivers.of({
       current: Effect.succeed(new Map()),

@@ -18,7 +18,7 @@ installed copy. Edits to the original folder have no effect until you import it 
 
 Each plugin shows whether it works. A plugin whose `check` fails, or reports a problem, is marked
 **Unavailable**, with the failure or the problems under its name, and its repositories are not
-detected. Fix the problem, then use the refresh button on its row to check it again. The switch
+detected. Fix the problem, then use the **Re-check** button on its row to check it again. The switch
 turns a plugin off without removing it, and **Remove** deletes the installed copy. Importing a
 plugin, turning it on or off, and removing it need permission to maintain the environment. The
 mobile app shows the list and status only.
@@ -28,7 +28,8 @@ marker in the project folder and every folder above it. When a Git repository is
 one closer to the project folder wins; in the same folder, the plugin wins. Avoid installing two
 plugins whose markers can sit in the same folder: only one of them owns it.
 
-In a plugin's repository, even while the plugin is off, and in a project folder that holds one
+In a plugin's repository, even while the plugin is off or its installed copy is invalid (until it
+is removed), and in a project folder that holds one
 a level or two down, or another file system mounted at any depth, T3 Code does not walk or index
 the project's files: a large repository or a network mount could make that slow or download every
 file. File mentions (`@`), the file tree's filter, and text search (`Ctrl+Shift+F` / `⌘⇧F`) say

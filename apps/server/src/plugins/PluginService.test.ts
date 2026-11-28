@@ -196,7 +196,7 @@ it.live("keeps a plugin turned off while its startup check was still running", (
 describe("PluginService", () => {
   it.live("imports a plugin, checks it, and serves its driver", () =>
     Effect.gen(function* () {
-      const { imported, driver, home, plugins, source, path } = yield* setup();
+      const { imported, driver, drivers, home, plugins, source, path } = yield* setup();
       const [summary] = imported.plugins;
       assert.strictEqual(summary?.status, "available");
       assert.strictEqual(summary?.version, "1.2.3");
@@ -215,6 +215,23 @@ describe("PluginService", () => {
       );
       assert.deepStrictEqual(offline.installedMarkers(), [".kite/HEAD"]);
       assert.deepStrictEqual(offline.available(), []);
+      // An installed copy that stops validating still guards its checkouts from walks and Git.
+      const script = `${home}/plugins/kite/bin/kite.mjs`;
+      const kept = NodeFS.readFileSync(script);
+      NodeFS.rmSync(script);
+      const broken = yield* plugins.recheck("kite");
+      assert.strictEqual(broken.plugins[0]?.status, "invalid");
+      assert.deepStrictEqual(drivers.installedMarkers(), [".kite/HEAD"]);
+      const offlineBroken = yield* VcsPluginDrivers.pipe(
+        Effect.provide(
+          PluginService.layerInstalledMarkers.pipe(
+            Layer.provide(ServerConfig.layerTest(home, home)),
+          ),
+        ),
+      );
+      assert.deepStrictEqual(offlineBroken.installedMarkers(), [".kite/HEAD"]);
+      NodeFS.writeFileSync(script, kept, { mode: 0o755 });
+      yield* plugins.recheck("kite");
 
       // Disable and Remove are the way back out.
       const disabled = yield* plugins.setEnabled("kite", false);

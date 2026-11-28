@@ -207,6 +207,11 @@ const ignoredParts = Effect.fnUntraced(function* (text: string, manifest: VcsPlu
 
 export interface ReadManifestResult {
   readonly manifest: VcsPluginManifest | null;
+  /**
+   * Atelier fork: the safe markers the file names, even when it is invalid, so the plugin's
+   * checkouts stay guarded from walks and from Git while it cannot run.
+   */
+  readonly markers: ReadonlyArray<string>;
   readonly errors: ReadonlyArray<string>;
   /** What the server ignored, such as an unknown command; the plugin still works. */
   readonly notes: ReadonlyArray<string>;
@@ -224,23 +229,42 @@ export const readManifest = Effect.fn("pluginManifest.readManifest")(function* (
   if (text._tag === "None")
     return {
       manifest: null,
+      markers: [],
       errors: [`${PLUGIN_MANIFEST_FILE_NAME} is missing or unreadable.`],
       notes: [],
     } satisfies ReadManifestResult;
+  const markers = namedMarkers(text.value);
   const decoded = yield* decodeManifest(text.value).pipe(Effect.result);
   if (decoded._tag === "Failure")
     return {
       manifest: null,
+      markers,
       errors: [`${PLUGIN_MANIFEST_FILE_NAME}: ${decoded.failure.message}`],
       notes: [],
     } satisfies ReadManifestResult;
   const errors = validateManifest(decoded.success);
   return {
     manifest: errors.length === 0 ? decoded.success : null,
+    markers,
     errors,
     notes: yield* ignoredParts(text.value, decoded.success),
   } satisfies ReadManifestResult;
 });
+
+function namedMarkers(text: string): ReadonlyArray<string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  const markers = (parsed as { detect?: { markers?: unknown } } | null)?.detect?.markers;
+  if (!Array.isArray(markers)) return [];
+  return markers.filter(
+    (marker): marker is string =>
+      typeof marker === "string" && isSafeRelativePath(marker) && !marker.includes("\\"),
+  );
+}
 
 /** Resolves `./` inside the real plugin folder, so a symlink cannot reach outside it. */
 export const resolvePluginFile = Effect.fn("pluginManifest.resolvePluginFile")(
