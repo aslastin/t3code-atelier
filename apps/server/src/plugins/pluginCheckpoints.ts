@@ -1389,6 +1389,13 @@ function diffHeaderPaths(section: string): readonly [string, string] | null {
   const to = patchLinePath(section, "+++");
   if (from !== undefined && to !== undefined && (from !== null || to !== null))
     return [from ?? to!, to ?? from!];
+  // A pure rename or copy has no `---`/`+++` lines; its extended header names both paths whole.
+  const moved = /^(?:rename|copy) from (.+)\n(?:rename|copy) to (.+)$/m.exec(section);
+  if (moved !== null) {
+    const unquote = (name: string) =>
+      name.startsWith('"') && name.endsWith('"') ? unquoteGitPath(name.slice(1, -1)) : name;
+    return [unquote(moved[1]!), unquote(moved[2]!)];
+  }
   // Without them, as Git reads it: one path named twice.
   const same = /^diff --git a\/(.+) b\/(.+)$/m.exec(section);
   if (same !== null) {
