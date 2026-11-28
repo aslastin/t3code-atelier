@@ -12,6 +12,7 @@ import {
   type VcsPluginChangedFileStatus,
   type VcsPluginCheckpointStrategy,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -1218,6 +1219,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
   const restoreCheckpoint: VcsCheckpointOps["restoreCheckpoint"] = Effect.fn(
     "pluginCheckpoints.restoreCheckpoint",
   )(function* (input) {
+    restorable.clear();
     const location = yield* locate(input.cwd);
     const target = yield* readRecord(location, input.checkpointRef);
     if (target === null) return false;
@@ -1364,8 +1366,25 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
   });
 
   // What a restore would need, checked before a rollback rewinds the provider's conversation.
+  // A rewind checks before the conversation is rewound and again before files change, each run
+  // reading every base file through the plugin. A yes holds briefly: the restore plans and
+  // refuses on its own, so the second check only fails earlier. A restore clears it.
+  const restorable = new Map<string, number>();
+  const RESTORABLE_TTL_MS = 30_000;
   const verifyRestorable: NonNullable<VcsCheckpointOps["verifyRestorable"]> = Effect.fn(
     "pluginCheckpoints.verifyRestorable",
+  )(function* (input) {
+    const key = [input.cwd, input.checkpointRef, ...(input.excludePaths ?? [])].join("\0");
+    const now = yield* Clock.currentTimeMillis;
+    const at = restorable.get(key);
+    if (at !== undefined && now - at < RESTORABLE_TTL_MS) return true;
+    const result = yield* checkRestorable(input);
+    if (result) restorable.set(key, now);
+    else restorable.delete(key);
+    return result;
+  });
+  const checkRestorable: NonNullable<VcsCheckpointOps["verifyRestorable"]> = Effect.fn(
+    "pluginCheckpoints.checkRestorable",
   )(function* (input) {
     const location = yield* locate(input.cwd);
     const record = yield* readRecord(location, input.checkpointRef);

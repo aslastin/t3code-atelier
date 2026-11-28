@@ -1302,6 +1302,28 @@ describe("ManifestVcsDriver", () => {
       }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
+  it.live("changed-files asks the plugin once when a rewind checks twice", () =>
+    Effect.gen(function* () {
+      const { driver, repository } = yield* setup({ checkpoints: ["changed-files"] });
+      const checkpoints = driver!.checkpoints;
+      NodeFS.writeFileSync(`${repository}/a.txt`, "edited\n");
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
+      NodeFS.writeFileSync(`${repository}/a.txt`, "edited again\n");
+      const asked = () => fakeCalls(repository).filter((line) => line === "changed");
+      const before = asked().length;
+      const restore = { cwd: repository, checkpointRef: ref("0") };
+      assert.isTrue(yield* checkpoints.verifyRestorable!(restore));
+      assert.isTrue(yield* checkpoints.verifyRestorable!(restore));
+      assert.lengthOf(asked(), before + 1);
+      // A restore starts the next check afresh.
+      assert.isTrue(yield* checkpoints.restoreCheckpoint(restore));
+      assert.strictEqual(NodeFS.readFileSync(`${repository}/a.txt`, "utf8"), "edited\n");
+      const afterRestore = asked().length;
+      assert.isTrue(yield* checkpoints.verifyRestorable!(restore));
+      assert.lengthOf(asked(), afterRestore + 1);
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   it.live("changed-files restores nothing through a linked folder or into a nested scope", () =>
     Effect.gen(function* () {
       const { driver, repository, plugins } = yield* setup({ checkpoints: ["changed-files"] });
