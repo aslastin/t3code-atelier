@@ -238,14 +238,17 @@ export const make = Effect.gen(function* () {
   const holdsPluginCheckout = new Map<string, { readonly at: number; readonly holds: boolean }>();
   // A checkout can be another file system, such as a FUSE mount, at any depth: none is walked.
   const platform = yield* HostProcess.Platform;
-  let mounts: { readonly at: number; readonly points: ReadonlyArray<string> } | undefined;
+  // Null when the table cannot be read, which counts as a mount anywhere.
+  let mounts: { readonly at: number; readonly points: ReadonlyArray<string> | null } | undefined;
   const mountPoints = Effect.fnUntraced(function* (now: number) {
     if (mounts !== undefined && now - mounts.at < PLUGIN_CHECKOUT_MISS_TTL_MS) return mounts.points;
     const output =
       platform === "linux"
-        ? yield* Effect.promise(() => NodeFSP.readFile("/proc/self/mounts", "utf8").catch(() => ""))
+        ? yield* Effect.promise(() =>
+            NodeFSP.readFile("/proc/self/mounts", "utf8").catch(() => null),
+          )
         : platform === "darwin"
-          ? ((yield* vcsProcess
+          ? yield* vcsProcess
               .run({
                 operation: "WorkspaceEntries.mountPoints",
                 command: "/sbin/mount",
@@ -255,11 +258,18 @@ export const make = Effect.gen(function* () {
                 timeoutMs: 5_000,
                 maxOutputBytes: 1024 * 1024,
               })
-              .pipe(Effect.orElseSucceed(() => undefined)))?.stdout ?? "")
+              .pipe(
+                Effect.map((result) =>
+                  result.exitCode === 0 && !result.stdoutTruncated ? result.stdout : null,
+                ),
+                Effect.orElseSucceed(() => null),
+              )
           : "";
-    mounts = { at: now, points: parseMountPoints(output, platform) };
+    mounts = { at: now, points: output === null ? null : parseMountPoints(output, platform) };
     return mounts.points;
   });
+  // Checkouts a folder listing found deeper than the probe reaches, asked again on each probe.
+  const foundCheckouts = new Map<string, Set<string>>();
   const containsPluginCheckout = Effect.fnUntraced(function* (cwd: string) {
     const current = Option.isSome(constructedPlugins)
       ? constructedPlugins
@@ -301,10 +311,27 @@ export const make = Effect.gen(function* () {
       }
       return false;
     });
+    const found = yield* Effect.promise(async () => {
+      for (const folder of foundCheckouts.get(cwd) ?? []) {
+        for (const marker of markers) {
+          if (
+            await NodeFSP.access(path.join(folder, marker)).then(
+              () => true,
+              () => false,
+            )
+          )
+            return true;
+        }
+      }
+      return false;
+    });
     const root = yield* Effect.promise(() => NodeFSP.realpath(cwd).catch(() => path.resolve(cwd)));
+    const points = yield* mountPoints(now);
     const holds =
       probed ||
-      (yield* mountPoints(now)).some((point) => {
+      found ||
+      points === null ||
+      points.some((point) => {
         const relative = path.relative(root, point);
         return (
           relative !== "" &&
@@ -325,7 +352,8 @@ export const make = Effect.gen(function* () {
       : yield* Effect.serviceOption(VcsPluginDrivers);
     const markers = Option.isSome(current) ? current.value.installedMarkers() : [];
     if (markers.length === 0) return false;
-    return yield* Effect.promise(async () => {
+    const marked = yield* Effect.promise(async () => {
+      const folders: string[] = [];
       for (const entry of entries) {
         if (entry.kind !== "directory") continue;
         for (const marker of markers) {
@@ -334,12 +362,21 @@ export const make = Effect.gen(function* () {
               () => true,
               () => false,
             )
-          )
-            return true;
+          ) {
+            folders.push(path.join(cwd, entry.path));
+            break;
+          }
         }
       }
-      return false;
+      return folders;
     });
+    if (marked.length === 0) return false;
+    // The probe asks about these from now on, so search stops indexing the folder too.
+    const known = foundCheckouts.get(cwd) ?? new Set<string>();
+    for (const folder of marked) known.add(folder);
+    foundCheckouts.set(cwd, known);
+    holdsPluginCheckout.set(cwd, { at: yield* Clock.currentTimeMillis, holds: true });
+    return true;
   });
   const walksPluginRepository = (cwd: string) =>
     inPluginRepository(cwd).pipe(

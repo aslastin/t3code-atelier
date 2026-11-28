@@ -1278,6 +1278,12 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
             workspaceEntries.list({ cwd, directoryPath }).pipe(inPlugin);
           expect((yield* list("one")).treeWalkUnavailable).toBeUndefined();
           expect((yield* list("one/two")).treeWalkUnavailable).toBe(true);
+          // Found once, it stops search from indexing the project as well.
+          const create = vi.spyOn(FileFinder, "create");
+          expect(
+            yield* searchWorkspaceEntries({ cwd, query: "HEAD", limit: 10 }).pipe(inPlugin),
+          ).toEqual({ entries: [], truncated: false, unavailable: true });
+          expect(create).not.toHaveBeenCalled();
         }),
     );
 
