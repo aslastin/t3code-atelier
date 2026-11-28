@@ -319,7 +319,14 @@ function ImportForm({ environmentId }: { readonly environmentId: EnvironmentId }
   return (
     <form className="space-y-1.5 px-3 py-3 sm:px-4" onSubmit={(event) => void submit(event)}>
       <label htmlFor={inputId} className="text-xs font-medium text-foreground">
-        <T>Import a plugin folder from this machine</T>
+        {/* The folder is read where the server runs: this machine only for the desktop's own. */}
+        {environmentId === primaryEnvironmentId &&
+        typeof window !== "undefined" &&
+        window.desktopBridge !== undefined ? (
+          <T>Import a plugin folder from this machine</T>
+        ) : (
+          <T>Import a plugin folder from the server</T>
+        )}
       </label>
       <div className="flex items-center gap-2">
         <Input
@@ -352,7 +359,7 @@ function ImportForm({ environmentId }: { readonly environmentId: EnvironmentId }
 
 const EMPTY: PluginListResult = { plugins: [], directory: "" };
 
-/** Settings → Version control: VCS plugins on one environment. */
+/** Settings → Source control: VCS plugins on one environment. */
 export function VcsPluginSettings({
   environmentId,
   titleSuffix,

@@ -11573,6 +11573,7 @@
   ],
   "a731cd5884db1089": "A cópia instalada é excluída, e os repositórios dele deixam de ser detectados até você importar o plugin novamente. Até lá, eles são pastas comuns, então a busca de arquivos e a árvore de arquivos podem ler todos os arquivos deles, o que pode ser lento em um repositório grande ou montado. Desative-o em vez disso para mantê-lo instalado e os repositórios dele sem leitura.",
   "3ddf3f96e052bfab": "Importar uma pasta de plugin desta máquina",
+  "2d05b6a0c436fae4": "Importar uma pasta de plugin do servidor",
   "1f190833cb8cefd1": "Escolher pasta…",
   "e30b840393c5dc4c": "Importar",
   "3c29d619c9072db5": "Recarregar a lista",

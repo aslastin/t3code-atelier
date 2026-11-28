@@ -11567,6 +11567,7 @@
   ],
   "a731cd5884db1089": "Se elimina su copia instalada y sus repositorios dejan de detectarse hasta que vuelvas a importar el plugin. Hasta entonces son carpetas normales, así que la búsqueda de archivos y el árbol de archivos pueden leer todos sus archivos, lo que en un repositorio grande o montado puede ser lento. Desactívalo en su lugar para mantenerlo instalado y sus repositorios sin leer.",
   "3ddf3f96e052bfab": "Importar una carpeta de plugin desde esta máquina",
+  "2d05b6a0c436fae4": "Importar una carpeta de plugin del servidor",
   "1f190833cb8cefd1": "Elegir carpeta…",
   "e30b840393c5dc4c": "Importar",
   "3c29d619c9072db5": "Volver a cargar la lista",

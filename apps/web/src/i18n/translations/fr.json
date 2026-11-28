@@ -11572,6 +11572,7 @@
   ],
   "a731cd5884db1089": "Sa copie installée est supprimée, et ses dépôts ne sont plus détectés tant que vous n’importez pas à nouveau le plugin. D’ici là, ce sont des dossiers ordinaires : la recherche de fichiers et l’arborescence peuvent lire tous leurs fichiers, ce qui peut être lent sur un dépôt volumineux ou monté. Désactivez-le plutôt pour le garder installé et ne pas lire ses dépôts.",
   "3ddf3f96e052bfab": "Importer un dossier de plugin depuis cette machine",
+  "2d05b6a0c436fae4": "Importer un dossier de plugin depuis le serveur",
   "1f190833cb8cefd1": "Choisir un dossier…",
   "e30b840393c5dc4c": "Importer",
   "3c29d619c9072db5": "Recharger la liste",

@@ -11581,6 +11581,7 @@
   ],
   "a731cd5884db1089": "Den installerade kopian tas bort, och dess repositoryn identifieras inte längre förrän du importerar pluginet igen. Fram till dess är de vanliga mappar, så filsökningen och filträdet kan läsa varje fil i dem, vilket kan gå långsamt i ett stort eller monterat repository. Stäng av det i stället för att behålla det installerat och låta dess repositoryn vara olästa.",
   "3ddf3f96e052bfab": "Importera en pluginmapp från den här datorn",
+  "2d05b6a0c436fae4": "Importera en pluginmapp från servern",
   "1f190833cb8cefd1": "Välj mapp…",
   "e30b840393c5dc4c": "Importera",
   "3c29d619c9072db5": "Läs in listan igen",

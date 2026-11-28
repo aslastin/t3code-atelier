@@ -90,6 +90,9 @@ The first start in any checkout also builds the native resource monitor with Car
 `native/resource-monitor/target` has no binary. Without Rust, dev starts with a warning
 and no process telemetry; install Rust and run `vp run build:resource-monitor`.
 Never run a development server against the live `~/.t3/userdata`.
+A linked worktree's own state puts the worktrees its threads create in
+`~/.t3-dev-worktrees/<repository>/<worktree>`, outside the checkout, so tools that walk the
+repository never reach them; `T3CODE_WORKTREES_DIR` overrides the folder.
 See [test data](../../AGENTS.md#test-data) for copying a consistent database snapshot.
 
 Read ports from the `[dev-runner]` output. Worktrees derive stable preferences from their paths,

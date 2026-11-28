@@ -11583,6 +11583,7 @@
   ],
   "a731cd5884db1089": "Its installed copy is deleted, and its repositories are no longer detected until you import the plugin again. Until then they are plain folders, so file search and the file tree may read every file in them, which on a large or mounted repository can be slow. Turn it off instead to keep it installed and its repositories unread.",
   "3ddf3f96e052bfab": "Import a plugin folder from this machine",
+  "2d05b6a0c436fae4": "Import a plugin folder from the server",
   "1f190833cb8cefd1": "Choose folder…",
   "e30b840393c5dc4c": "Import",
   "3c29d619c9072db5": "Reload the list",

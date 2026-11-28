@@ -11573,6 +11573,7 @@
   ],
   "a731cd5884db1089": "Die installierte Kopie wird gelöscht, und seine Repositorys werden erst wieder erkannt, wenn du das Plugin erneut importierst. Bis dahin sind sie gewöhnliche Ordner, sodass die Dateisuche und der Dateibaum jede Datei darin lesen können, was bei einem großen oder eingehängten Repository langsam sein kann. Schalte es stattdessen aus, um es installiert und seine Repositorys ungelesen zu lassen.",
   "3ddf3f96e052bfab": "Plugin-Ordner von diesem Rechner importieren",
+  "2d05b6a0c436fae4": "Plugin-Ordner vom Server importieren",
   "1f190833cb8cefd1": "Ordner auswählen…",
   "e30b840393c5dc4c": "Importieren",
   "3c29d619c9072db5": "Liste neu laden",
