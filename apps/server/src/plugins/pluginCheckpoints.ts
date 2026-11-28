@@ -607,6 +607,27 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     }),
   };
 
+  // Whether `folder` is a Git checkout with a commit to stage as a gitlink: Git refuses to add one
+  // without, and fails the whole capture. A gitfile (a worktree or submodule) is taken as having
+  // one; Git reports otherwise if it does not.
+  const hasCommit = Effect.fnUntraced(function* (folder: string) {
+    const dotGit = path.join(folder, ".git");
+    const info = yield* fs.stat(dotGit).pipe(Effect.option);
+    if (Option.isNone(info)) return false;
+    if (info.value.type !== "Directory") return true;
+    const head = (yield* fs
+      .readFileString(path.join(dotGit, "HEAD"))
+      .pipe(Effect.orElseSucceed(() => ""))).trim();
+    const ref = /^ref: (refs\/\S+)$/.exec(head)?.[1];
+    if (ref === undefined) return /^[0-9a-f]{40,64}$/.test(head);
+    if (yield* fs.exists(path.join(dotGit, ref)).pipe(Effect.orElseSucceed(() => false)))
+      return true;
+    const packed = yield* fs
+      .readFileString(path.join(dotGit, "packed-refs"))
+      .pipe(Effect.orElseSucceed(() => ""));
+    return packed.split("\n").some((line) => line.endsWith(` ${ref}`));
+  });
+
   // A mount or another plugin's checkout inside is left out: Git would read all of it. A Git
   // repository inside is staged as its commit alone, as Git does.
   const stageFull = Effect.fnUntraced(function* (
@@ -643,7 +664,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       // plugin's marker wins over `.git`, as everywhere else; a bare repository has no `.git`.
       const exists = (marker: string) =>
         fs.exists(path.join(scope, entry.path, marker)).pipe(Effect.orElseSucceed(() => true));
-      let gitCheckout = yield* exists(".git");
+      let gitCheckout = yield* hasCommit(path.join(scope, entry.path));
       for (const marker of pluginMarkers) {
         if (!gitCheckout) break;
         if (yield* exists(marker)) gitCheckout = false;

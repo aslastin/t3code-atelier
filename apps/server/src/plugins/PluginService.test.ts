@@ -274,6 +274,14 @@ describe("PluginService", () => {
       NodeFS.writeFileSync(manifestPath, JSON.stringify(changed));
       yield* plugins.recheck("kite");
       assert.deepStrictEqual(drivers.installedMarkers(), [".kite/STORE"]);
+      const offlineChanged = yield* VcsPluginDrivers.pipe(
+        Effect.provide(
+          PluginService.layerInstalledMarkers.pipe(
+            Layer.provide(ServerConfig.layerTest(home, home)),
+          ),
+        ),
+      );
+      assert.deepStrictEqual(offlineChanged.installedMarkers(), [".kite/STORE"]);
       NodeFS.writeFileSync(manifestPath, manifestText);
       yield* plugins.recheck("kite");
 
@@ -1580,6 +1588,9 @@ describe("ManifestVcsDriver", () => {
       NodeFS.mkdirSync(`${repository}/vendor/.git`);
       NodeFS.writeFileSync(`${repository}/vendor/theirs.txt`, "theirs\n");
       NodeFS.writeFileSync(`${repository}/mine.txt`, "mine\n");
+      // A Git repository without a first commit has nothing to stage; it does not fail the copy.
+      NodeChildProcess.execFileSync("git", ["init", "--quiet", `${repository}/fresh`]);
+      NodeFS.writeFileSync(`${repository}/fresh/draft.txt`, "draft\n");
       // Nor a bare Git repository: Git would copy it as plain files.
       NodeChildProcess.execFileSync("git", [
         "init",
@@ -1597,9 +1608,11 @@ describe("ManifestVcsDriver", () => {
       assert.include(withNested, "b/mine.txt");
       assert.notInclude(withNested, "vendor/");
       assert.notInclude(withNested, "mirror.git/");
+      assert.notInclude(withNested, "fresh/");
       yield* checkpoints.deleteCheckpointRefs({ cwd: repository, checkpointRefs: [ref("v")] });
       NodeFS.rmSync(`${repository}/vendor`, { recursive: true });
       NodeFS.rmSync(`${repository}/mirror.git`, { recursive: true });
+      NodeFS.rmSync(`${repository}/fresh`, { recursive: true });
       NodeFS.rmSync(`${repository}/mine.txt`);
 
       // A project two folders down is saved, and restored, whole: Git stages nothing when an

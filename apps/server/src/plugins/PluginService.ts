@@ -781,7 +781,13 @@ export const layerInstalledMarkers = Layer.effect(
     const markers: string[] = [];
     // Set-aside copies and imports in progress start with a dot.
     for (const name of names.filter((entry) => !entry.startsWith(".")).toSorted()) {
-      markers.push(...(yield* readManifest(fs, path, path.join(directory, name))).markers);
+      const read = yield* readManifest(fs, path, path.join(directory, name));
+      // A valid manifest names its own markers; remembered ones guard only while it is invalid.
+      if (read.manifest !== null) {
+        markers.push(...read.manifest.detect.markers);
+        continue;
+      }
+      markers.push(...read.markers);
       const known = yield* readKnownMarkersFile(fs, path.join(directory, MARKERS_FILE_NAME));
       if (Object.hasOwn(known, name)) markers.push(...known[name]!);
     }
