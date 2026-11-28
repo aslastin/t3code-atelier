@@ -568,7 +568,8 @@ const make = Effect.gen(function* () {
             target,
             projectCwd,
             undefined,
-            plugins?.markers(),
+            // Installed ones too: an off plugin's checkout is still the nearest repository.
+            [...new Set([...(plugins?.markers() ?? []), ...(plugins?.installedMarkers() ?? [])])],
           ))
     );
   });

@@ -348,6 +348,8 @@ const cleanupFixture = (
     readonly listsGitWorktree?: boolean;
     /** The checkout is a file system mounted of its own, as a virtual checkout is. */
     readonly mounted?: boolean;
+    /** The second plugin is installed but off. */
+    readonly otherOff?: boolean;
     /** A folder inside the checkout, relative to it, is a file system mounted there. */
     readonly innerMount?: string;
     /** The Git worktree is a file system mounted of its own. */
@@ -557,7 +559,7 @@ const cleanupFixture = (
       Effect.provideService(VcsPluginDrivers, {
         hasAny: () => plugin !== undefined,
         // A second plugin's marker is installed too; the project belongs to Kite.
-        markers: () => [".kite/HEAD", ".other/HEAD"],
+        markers: () => (plugin?.otherOff ? [".kite/HEAD"] : [".kite/HEAD", ".other/HEAD"]),
         installedMarkers: () => (plugin === undefined ? [] : [".kite/HEAD", ".other/HEAD"]),
         available: () =>
           (plugin === undefined ? [] : [".kite/HEAD", ".other/HEAD"]).map((marker) => ({
@@ -2714,34 +2716,41 @@ describe("VCS plugin worktrees", () => {
 });
 
 describe("orphan worktree reports", () => {
-  it.live("never takes a plugin checkout around another repository as the thread's worktree", () =>
-    runCleanupTest(
-      Effect.gen(function* () {
-        const fixture = yield* cleanupFixture(undefined, undefined, { recreates: true });
-        const pluginRepo = `${fixture.repo}/kite-repo`;
-        const worktree = `${fixture.config.worktreesDir}/kite-around`;
-        for (const root of [pluginRepo, worktree]) {
-          yield* fixture.fs.makeDirectory(`${root}/.kite`, { recursive: true });
-          yield* fixture.fs.writeFileString(`${root}/.kite/HEAD`, "main\n");
-          yield* fixture.fs.makeDirectory(`${root}/sub`);
-        }
-        const around = (yield* fixture.service.worktreeThreadIds(
-          `${worktree}/sub`,
-          `${pluginRepo}/sub`,
-        )).worktreeRoot;
-        expect(around).toBe(worktree);
-        // sub/ is now another installed plugin's checkout, or Git's: its own repository.
-        for (const marker of [".other/HEAD", ".git/HEAD"]) {
-          yield* fixture.fs.makeDirectory(`${worktree}/sub/${marker.split("/")[0]}`);
-          yield* fixture.fs.writeFileString(`${worktree}/sub/${marker}`, "main\n");
-          expect(
-            (yield* fixture.service.worktreeThreadIds(`${worktree}/sub`, `${pluginRepo}/sub`))
-              .worktreeRoot,
-          ).not.toBe(worktree);
-          yield* fixture.fs.remove(`${worktree}/sub/${marker.split("/")[0]}`, { recursive: true });
-        }
-      }),
-    ),
+  it.live.each([false, true])(
+    "never takes a plugin checkout around another repository as the thread's worktree (other plugin off: %s)",
+    (otherOff) =>
+      runCleanupTest(
+        Effect.gen(function* () {
+          const fixture = yield* cleanupFixture(undefined, undefined, {
+            recreates: true,
+            otherOff,
+          });
+          const pluginRepo = `${fixture.repo}/kite-repo`;
+          const worktree = `${fixture.config.worktreesDir}/kite-around`;
+          for (const root of [pluginRepo, worktree]) {
+            yield* fixture.fs.makeDirectory(`${root}/.kite`, { recursive: true });
+            yield* fixture.fs.writeFileString(`${root}/.kite/HEAD`, "main\n");
+            yield* fixture.fs.makeDirectory(`${root}/sub`);
+          }
+          const around = (yield* fixture.service.worktreeThreadIds(
+            `${worktree}/sub`,
+            `${pluginRepo}/sub`,
+          )).worktreeRoot;
+          expect(around).toBe(worktree);
+          // sub/ is now another installed plugin's checkout, or Git's: its own repository.
+          for (const marker of [".other/HEAD", ".git/HEAD"]) {
+            yield* fixture.fs.makeDirectory(`${worktree}/sub/${marker.split("/")[0]}`);
+            yield* fixture.fs.writeFileString(`${worktree}/sub/${marker}`, "main\n");
+            expect(
+              (yield* fixture.service.worktreeThreadIds(`${worktree}/sub`, `${pluginRepo}/sub`))
+                .worktreeRoot,
+            ).not.toBe(worktree);
+            yield* fixture.fs.remove(`${worktree}/sub/${marker.split("/")[0]}`, {
+              recursive: true,
+            });
+          }
+        }),
+      ),
   );
 
   it.live("keeps a checkout shared by a root thread and a subfolder thread", () =>
