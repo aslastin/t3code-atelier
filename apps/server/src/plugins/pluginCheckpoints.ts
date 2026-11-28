@@ -1367,16 +1367,25 @@ function unquoteGitPath(quoted: string): string {
 
 const GITLINK_MODE = "160000";
 
+// Lines are split on "\n" alone, and matched whole: a name can hold U+2028 or U+2029, which `.`
+// and multiline anchors treat as line breaks.
 const DIFF_HEADER =
-  /^diff --git (?:"a\/((?:[^"\\]|\\.)*)"|a\/(.+?)) (?:"b\/((?:[^"\\]|\\.)*)"|b\/(.+?))$/m;
+  /^diff --git (?:"a\/((?:[^"\\]|\\[\s\S])*)"|a\/([\s\S]+?)) (?:"b\/((?:[^"\\]|\\[\s\S])*)"|b\/([\s\S]+?))$/;
+
+/** The lines of a section before its first hunk. */
+function headerLines(section: string): ReadonlyArray<string> {
+  const hunk = section.indexOf("\n@@");
+  return (hunk === -1 ? section : section.slice(0, hunk)).split("\n");
+}
 
 /** A `--- a/x` or `+++ b/x` line's path, quoted or not; null for `/dev/null` or none. */
-function patchLinePath(section: string, marker: "---" | "+++"): string | null | undefined {
+function patchLinePath(
+  lines: ReadonlyArray<string>,
+  marker: "---" | "+++",
+): string | null | undefined {
   const side = marker === "---" ? "a" : "b";
-  const line = new RegExp(`^${marker === "---" ? "---" : "\\+\\+\\+"} (.+)$`, "m").exec(
-    section.split(/^@@/m)[0]!,
-  )?.[1];
-  if (line === undefined) return undefined;
+  const line = lines.find((entry) => entry.startsWith(`${marker} `))?.slice(4);
+  if (line === undefined || line === "") return undefined;
   if (line === "/dev/null") return null;
   if (line.startsWith(`"${side}/`) && line.endsWith('"')) return unquoteGitPath(line.slice(3, -1));
   return line.startsWith(`${side}/`) ? line.slice(2).replace(/\t$/, "") : undefined;
@@ -1384,20 +1393,24 @@ function patchLinePath(section: string, marker: "---" | "+++"): string | null | 
 
 /** The old and new paths of a patch section, quoted or not. */
 function diffHeaderPaths(section: string): readonly [string, string] | null {
+  const lines = headerLines(section);
   // The `---` and `+++` lines name each path whole; the header splits ambiguously on " b/".
-  const from = patchLinePath(section, "---");
-  const to = patchLinePath(section, "+++");
+  const from = patchLinePath(lines, "---");
+  const to = patchLinePath(lines, "+++");
   if (from !== undefined && to !== undefined && (from !== null || to !== null))
     return [from ?? to!, to ?? from!];
   // A pure rename or copy has no `---`/`+++` lines; its extended header names both paths whole.
-  const moved = /^(?:rename|copy) from (.+)\n(?:rename|copy) to (.+)$/m.exec(section);
-  if (moved !== null) {
+  const moved = lines.findIndex((line) => /^(?:rename|copy) from ./.test(line));
+  const movedTo =
+    moved === -1 ? undefined : /^(?:rename|copy) to ([\s\S]+)$/.exec(lines[moved + 1] ?? "");
+  if (moved !== -1 && movedTo) {
     const unquote = (name: string) =>
       name.startsWith('"') && name.endsWith('"') ? unquoteGitPath(name.slice(1, -1)) : name;
-    return [unquote(moved[1]!), unquote(moved[2]!)];
+    return [unquote(lines[moved]!.replace(/^(?:rename|copy) from /, "")), unquote(movedTo[1]!)];
   }
+  const first = lines.find((line) => line.startsWith("diff --git ")) ?? "";
   // Without them, as Git reads it: one path named twice.
-  const same = /^diff --git a\/(.+) b\/(.+)$/m.exec(section);
+  const same = /^diff --git a\/([\s\S]+) b\/([\s\S]+)$/.exec(first);
   if (same !== null) {
     const rest = `${same[1]} b/${same[2]}`;
     const half = (rest.length - 3) / 2;
@@ -1406,10 +1419,10 @@ function diffHeaderPaths(section: string): readonly [string, string] | null {
       if (rest.slice(half + 3) === path) return [path, path];
     }
   }
-  const header = DIFF_HEADER.exec(section);
+  const header = DIFF_HEADER.exec(first);
   if (header === null) {
     // Without prefixes (`diff.noprefix`), as Git reads it: one path named twice.
-    const rest = /^diff --git (.+)$/m.exec(section)?.[1];
+    const rest = /^diff --git ([\s\S]+)$/.exec(first)?.[1];
     if (rest === undefined || rest.length % 2 === 0) return null;
     const half = (rest.length - 1) / 2;
     const from = rest.slice(0, half);
@@ -1434,7 +1447,7 @@ function diffPathspecs(files: ReadonlyArray<string>, excludes: ReadonlyArray<str
 function excludePatch(patch: string, excludes: ReadonlyArray<string>): string {
   if (excludes.length === 0) return patch;
   return patch
-    .split(/(?=^diff --git )/m)
+    .split(/(?<![^\n])(?=diff --git )/)
     .filter((section) => {
       const header = diffHeaderPaths(section);
       return header === null || header.some((file) => inScope(file, "", excludes));
@@ -1444,7 +1457,7 @@ function excludePatch(patch: string, excludes: ReadonlyArray<string>): string {
 
 /** Keeps the sections of a Git patch whose old or new path is in `paths`. */
 export function filterPatch(patch: string, paths: ReadonlySet<string>): string {
-  const sections = patch.split(/(?=^diff --git )/m);
+  const sections = patch.split(/(?<![^\n])(?=diff --git )/);
   return sections
     .filter((section) => {
       const header = diffHeaderPaths(section);
@@ -1456,7 +1469,7 @@ export function filterPatch(patch: string, paths: ReadonlySet<string>): string {
 /** `git diff --numstat -z` records for a Git patch, for plugins that only print patches. */
 function patchToNumstat(patch: string): string {
   const records: string[] = [];
-  for (const section of patch.split(/(?=^diff --git )/m)) {
+  for (const section of patch.split(/(?<![^\n])(?=diff --git )/)) {
     const header = diffHeaderPaths(section);
     if (header === null) continue;
     const binary = /^Binary files .* differ$/m.test(section) || /^GIT binary patch$/m.test(section);
