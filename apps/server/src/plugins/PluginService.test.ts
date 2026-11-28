@@ -1089,6 +1089,62 @@ describe("ManifestVcsDriver", () => {
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
+  it.live("changed-files snapshots never read a repository or mount inside the checkout", () =>
+    Effect.gen(function* () {
+      const realFs = yield* FileSystem.FileSystem;
+      const reads: string[] = [];
+      let mount: string | null = null;
+      const onMount = (target: string) =>
+        mount !== null && (target === mount || target.startsWith(`${mount}/`));
+      const tracked = FileSystem.FileSystem.of({
+        ...realFs,
+        readDirectory: (target, options) => {
+          reads.push(target);
+          return realFs.readDirectory(target, options);
+        },
+        stat: (target) =>
+          realFs
+            .stat(target)
+            .pipe(Effect.map((info) => (onMount(target) ? { ...info, dev: info.dev + 1n } : info))),
+      });
+      yield* Effect.gen(function* () {
+        const { driver, repository, plugins } = yield* setup({ checkpoints: ["changed-files"] });
+        const checkpoints = driver!.checkpoints;
+        yield* plugins.importFolder(
+          writeFakeVcsPlugin(NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-other-plugin-`), {
+            id: "other",
+            extraManifest: { detect: { markers: [".other/HEAD"] } },
+          }),
+        );
+        yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
+        // A new folder holding another plugin's checkout: the checkout is never walked.
+        NodeFS.mkdirSync(`${repository}/new/pkg/.other`, { recursive: true });
+        NodeFS.writeFileSync(`${repository}/new/pkg/.other/HEAD`, "main\n");
+        NodeFS.mkdirSync(`${repository}/new/pkg/deep`);
+        NodeFS.writeFileSync(`${repository}/new/pkg/deep/theirs.txt`, "theirs\n");
+        NodeFS.writeFileSync(`${repository}/new/own.txt`, "own\n");
+        // A changed file listed inside a mount is not read either.
+        NodeFS.writeFileSync(`${repository}/sub/b.txt`, "changed on the mount\n");
+        mount = `${repository}/sub`;
+        reads.length = 0;
+        yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("1") });
+        assert.deepStrictEqual(
+          reads.filter((target) => target.includes("new/pkg/")),
+          [],
+        );
+        const saved = yield* checkpoints.diffCheckpoints({
+          cwd: repository,
+          fromCheckpointRef: ref("0"),
+          toCheckpointRef: ref("1"),
+          ignoreWhitespace: false,
+        });
+        assert.include(saved, "new/own.txt");
+        assert.notInclude(saved, "theirs");
+        assert.notInclude(saved, "changed on the mount");
+      }).pipe(Effect.provideService(FileSystem.FileSystem, tracked));
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   it.live("changed-files restores nothing through a linked folder or into a nested scope", () =>
     Effect.gen(function* () {
       const { driver, repository, plugins } = yield* setup({ checkpoints: ["changed-files"] });

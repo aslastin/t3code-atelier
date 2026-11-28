@@ -509,10 +509,37 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           ));
         files.push(present || file.status === "deleted" ? file : { ...file, status: "deleted" });
       }
-      // A folder listed as one entry is read in full, but never a repository or mount inside it.
+      // A folder listed as one entry is read in full, but never a repository or mount inside it,
+      // nor a listed file inside one.
       const inside: string[] = [];
+      const rootDevice = (yield* fs.stat(location.root)).dev;
+      const nestedFolder = new Map<string, boolean>();
+      const isNestedFolder = Effect.fnUntraced(function* (folder: string) {
+        const known = nestedFolder.get(folder);
+        if (known !== undefined) return known;
+        const absolute = path.join(location.root, folder);
+        const nested =
+          Option.isSome(yield* fs.readLink(absolute).pipe(Effect.option)) ||
+          (yield* fs.stat(absolute).pipe(
+            Effect.map((info) => info.dev !== rootDevice),
+            Effect.orElseSucceed(() => false),
+          )) ||
+          (yield* isRepositoryRoot(absolute));
+        nestedFolder.set(folder, nested);
+        return nested;
+      });
       for (const file of files) {
         if (file.status === "deleted") continue;
+        const parts = file.path.split("/");
+        let enclosed = false;
+        for (let index = 1; index < parts.length && !enclosed; index++) {
+          const folder = parts.slice(0, index).join("/");
+          if (yield* isNestedFolder(folder)) {
+            inside.push(folder);
+            enclosed = true;
+          }
+        }
+        if (enclosed) continue;
         const nested = yield* nestedRepositories(location, file.path);
         if (nested === null)
           return yield* unsupported("captureCheckpoint", `${file.path} could not be looked at.`);
@@ -780,10 +807,10 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
    * Every entry below `absolute`, `/`-separated, links listed but never followed: a recursive
    * directory read can descend into a linked folder. Null when a folder cannot be read.
    */
-  const walk = Effect.fnUntraced(function* (absolute: string) {
+  const walk = Effect.fnUntraced(function* (absolute: string, stopAtRepositories = false) {
     const found: Array<{
       readonly path: string;
-      readonly kind: "link" | "folder" | "file" | "mount";
+      readonly kind: "link" | "folder" | "file" | "mount" | "repository";
     }> = [];
     const device = Option.getOrUndefined(
       (yield* fs.stat(absolute).pipe(Effect.option)).pipe(Option.map((info) => info.dev)),
@@ -791,6 +818,14 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     const pending = [""];
     while (pending.length > 0) {
       const relative = pending.pop()!;
+      // A repository's files are its own: never read, however large.
+      if (
+        stopAtRepositories &&
+        (yield* isRepositoryRoot(relative === "" ? absolute : path.join(absolute, relative)))
+      ) {
+        found.push({ path: relative, kind: "repository" });
+        continue;
+      }
       const names = yield* fs
         .readDirectory(relative === "" ? absolute : path.join(absolute, relative))
         .pipe(Effect.orElseSucceed(() => null));
@@ -819,12 +854,14 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
   const nestedRepositories = Effect.fnUntraced(function* (location: Location, folder: string) {
     const absolute = path.join(location.root, folder);
     if (Option.isSome(yield* fs.readLink(absolute).pipe(Effect.option))) return [];
+    // Reached through a linked parent, the folder is elsewhere: kept whole, never walked.
+    if (yield* throughLinkedParent(location, folder)) return [folder];
     const info = yield* fs.stat(absolute).pipe(Effect.option);
     if (Option.isNone(info) || info.value.type !== "Directory") return [];
     // A mount, like a repository, holds files no snapshot saved: it is kept as one.
     const rootDevice = yield* fs.stat(location.root).pipe(Effect.option);
     if (Option.isSome(rootDevice) && rootDevice.value.dev !== info.value.dev) return [folder];
-    const walked = yield* walk(absolute);
+    const walked = yield* walk(absolute, true);
     if (walked === null) return null;
     const entries = walked.map((entry) => entry.path);
     // Compared without case: on a case-insensitive disk `.KITE/HEAD` is the plugin's marker too.
@@ -832,7 +869,8 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     const markers = context.repositoryMarkers().map((marker) => marker.toLowerCase());
     const roots = new Set<string>();
     const add = (relative: string) => roots.add(relative === "" ? folder : `${folder}/${relative}`);
-    for (const entry of walked) if (entry.kind === "mount") add(entry.path);
+    for (const entry of walked)
+      if (entry.kind === "mount" || entry.kind === "repository") add(entry.path);
     for (const entry of entries) {
       const parts = entry.split("/");
       const lower = entry.toLowerCase();
@@ -1184,6 +1222,16 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     return true;
   });
 
+  /** Whether a folder of `entry`'s path below the root, not `entry` itself, is a link. */
+  const throughLinkedParent = Effect.fnUntraced(function* (location: Location, entry: string) {
+    const parts = entry.split("/");
+    for (let index = 1; index < parts.length; index++) {
+      const parent = path.join(location.root, ...parts.slice(0, index));
+      if (Option.isSome(yield* fs.readLink(parent).pipe(Effect.option))) return true;
+    }
+    return false;
+  });
+
   /** Files below `folder` (repository-relative), or the folder itself when it is a file. */
   const listFiles = Effect.fn("pluginCheckpoints.listFiles")(function* (
     location: Location,
@@ -1199,11 +1247,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     const root = yield* fs.stat(location.root).pipe(Effect.orElseSucceed(() => null));
     if (root !== null && root.dev !== info.dev) return [];
     // Nor a folder reached through a linked parent, which a restore refuses: it is elsewhere.
-    const parts = folder.split("/");
-    for (let index = 1; index < parts.length; index++) {
-      const parent = path.join(location.root, ...parts.slice(0, index));
-      if (Option.isSome(yield* fs.readLink(parent).pipe(Effect.option))) return [];
-    }
+    if (yield* throughLinkedParent(location, folder)) return [];
     // A link is removed itself; its target, maybe outside the checkout, is never visited.
     return ((yield* walk(absolute)) ?? [])
       .filter((entry) => entry.kind === "file" || entry.kind === "link")
