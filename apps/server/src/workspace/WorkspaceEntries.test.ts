@@ -1380,6 +1380,14 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
         const darwin = ["/", "/System/Volumes/Data", "/Users/me/mono"];
         for (const root of ["/Users/me", "/System/Volumes/Data/Users/me"])
           expect(WorkspaceEntries.hasMountBelow(root, darwin, path, "darwin")).toBe(true);
+        expect(
+          WorkspaceEntries.hasMountBelow(
+            "/System/Volumes/Data",
+            ["/System/Volumes/Data/Users/a/mount"],
+            path,
+            "darwin",
+          ),
+        ).toBe(true);
         expect(WorkspaceEntries.hasMountBelow("/Users/me/mono", darwin, path, "darwin")).toBe(
           false,
         );

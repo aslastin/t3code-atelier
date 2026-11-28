@@ -201,7 +201,11 @@ export function parseMountPoints(output: string, platform: string): ReadonlyArra
 // keeps whichever spelling it was given.
 const DARWIN_DATA_VOLUME = "/System/Volumes/Data";
 const withoutDataVolume = (target: string) =>
-  target.startsWith(`${DARWIN_DATA_VOLUME}/`) ? target.slice(DARWIN_DATA_VOLUME.length) : target;
+  target === DARWIN_DATA_VOLUME
+    ? "/"
+    : target.startsWith(`${DARWIN_DATA_VOLUME}/`)
+      ? target.slice(DARWIN_DATA_VOLUME.length)
+      : target;
 
 /** Atelier fork: whether a mount point lies strictly inside `root`. */
 export function hasMountBelow(
