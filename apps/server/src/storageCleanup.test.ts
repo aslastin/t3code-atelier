@@ -2966,7 +2966,7 @@ describe("orphan worktree reports", () => {
             yield* fixture.fs.utimes(folder, 1, 1);
           expect(
             (yield* fixture.service.runNow).entries.filter((entry) =>
-              entry.path.startsWith(checkout),
+              entry.path?.startsWith(checkout),
             ),
           ).toEqual([expect.objectContaining({ path: checkout, outcome: "kept" })]);
         }),
