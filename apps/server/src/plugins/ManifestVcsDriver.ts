@@ -636,7 +636,12 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
         yield* runner
           .run("worktreeRemove", {
             cwd: request.cwd,
-            values: { repositoryRoot: root, worktreePath: target },
+            // `true` only when local changes may go, as with `git worktree remove --force`.
+            values: {
+              repositoryRoot: root,
+              worktreePath: target,
+              force: request.force === true ? "true" : "false",
+            },
             timeoutMs: null,
           })
           .pipe(Effect.mapError(toCommandError("worktreeRemove", request.cwd)));

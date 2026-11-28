@@ -622,8 +622,10 @@ describe("ManifestVcsDriver", () => {
       NodeFS.rmSync(`${worktree.path}/theirs`, { recursive: true });
 
       // Callers pass the thread's folder, the subfolder; the whole checkout goes, as with Git.
+      // Not forced, the plugin is told local changes must not go.
       yield* workflow.removeWorktree!({ cwd: `${repository}/sub`, path: worktree.projectPath! });
       assert.isFalse(NodeFS.existsSync(worktree.path));
+      assert.include(fakeCalls(repository), `worktree-remove ${worktree.path} false`);
       assert.deepStrictEqual(yield* workflow.listWorktrees!({ cwd: repository }), []);
 
       // Never into a folder that holds files: the plugin's command could write over them.

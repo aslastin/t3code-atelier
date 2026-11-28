@@ -25,7 +25,7 @@ export const COMMAND_PLACEHOLDERS: Readonly<Record<ManifestCommandName, Readonly
   push: ["repositoryRoot"],
   pull: ["repositoryRoot"],
   worktreeCreate: ["repositoryRoot", "worktreePath", "newRef", "baseRef"],
-  worktreeRemove: ["repositoryRoot", "worktreePath"],
+  worktreeRemove: ["repositoryRoot", "worktreePath", "force"],
   worktreeAttach: ["repositoryRoot", "worktreePath", "ref"],
   worktreeList: ["repositoryRoot"],
   checkpointCapture: ["repositoryRoot"],

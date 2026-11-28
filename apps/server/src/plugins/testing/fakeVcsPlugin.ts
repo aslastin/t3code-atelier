@@ -367,7 +367,7 @@ export function writeFakeVcsPlugin(directory: string, options: FakeVcsPluginOpti
           branchRename: [kite, "branch-rename", "{oldRef}", "{newRef}"],
           fetchBase: [kite, "fetch-base", "{ref}"],
           worktreeCreate: [kite, "worktree-add", "{worktreePath}", "{newRef}", "{baseRef}"],
-          worktreeRemove: [kite, "worktree-remove", "{worktreePath}"],
+          worktreeRemove: [kite, "worktree-remove", "{worktreePath}", "{force}"],
           worktreeAttach: [kite, "worktree-attach", "{worktreePath}", "{ref}"],
           worktreeList: [kite, "worktree-list"],
           checkpointCapture: [kite, "snapshot"],
