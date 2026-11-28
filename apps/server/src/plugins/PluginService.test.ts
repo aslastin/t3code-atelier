@@ -1145,6 +1145,56 @@ describe("ManifestVcsDriver", () => {
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
+  it.live(
+    "changed-files restores leave another plugin's checkout unread and its files in place",
+    () =>
+      Effect.gen(function* () {
+        const realFs = yield* FileSystem.FileSystem;
+        const reads: string[] = [];
+        const tracked = FileSystem.FileSystem.of({
+          ...realFs,
+          readDirectory: (target, options) => {
+            reads.push(target);
+            return realFs.readDirectory(target, options);
+          },
+        });
+        yield* Effect.gen(function* () {
+          const { driver, repository, plugins } = yield* setup({ checkpoints: ["changed-files"] });
+          const checkpoints = driver!.checkpoints;
+          yield* plugins.importFolder(
+            writeFakeVcsPlugin(NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-other-plugin-`), {
+              id: "other",
+              extraManifest: { detect: { markers: [".other/HEAD"] } },
+            }),
+          );
+          // A new folder holding another plugin's checkout: restoring it never reads the checkout.
+          NodeFS.mkdirSync(`${repository}/gen/pkg/.other`, { recursive: true });
+          NodeFS.writeFileSync(`${repository}/gen/pkg/.other/HEAD`, "main\n");
+          NodeFS.mkdirSync(`${repository}/gen/pkg/deep`);
+          NodeFS.writeFileSync(`${repository}/gen/pkg/deep/theirs.txt`, "theirs\n");
+          yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
+          reads.length = 0;
+          assert.isTrue(
+            yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("0") }),
+          );
+          assert.isTrue(NodeFS.existsSync(`${repository}/gen/pkg/deep/theirs.txt`));
+          assert.deepStrictEqual(
+            reads.filter((target) => target.includes("gen/pkg")),
+            [],
+          );
+          // sub/ is now another plugin's checkout, and the plugin lists a new file in it.
+          NodeFS.mkdirSync(`${repository}/sub/.other`);
+          NodeFS.writeFileSync(`${repository}/sub/.other/HEAD`, "main\n");
+          NodeFS.writeFileSync(`${repository}/sub/new.txt`, "mine\n");
+          yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("1") });
+          yield* checkpoints
+            .restoreCheckpoint({ cwd: repository, checkpointRef: ref("1") })
+            .pipe(Effect.ignore);
+          assert.strictEqual(NodeFS.readFileSync(`${repository}/sub/new.txt`, "utf8"), "mine\n");
+        }).pipe(Effect.provideService(FileSystem.FileSystem, tracked));
+      }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   it.live("changed-files restores nothing through a linked folder or into a nested scope", () =>
     Effect.gen(function* () {
       const { driver, repository, plugins } = yield* setup({ checkpoints: ["changed-files"] });

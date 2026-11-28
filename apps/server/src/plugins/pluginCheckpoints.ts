@@ -345,6 +345,42 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     };
   });
 
+  // A file inside a repository, a mount or a linked folder is not this checkout's to save,
+  // whatever the plugin lists. A restore still sees it, and refuses to change it.
+  const ownFiles = Effect.fnUntraced(function* (
+    location: Location,
+    files: ReadonlyArray<ChangedFile>,
+  ) {
+    const rootDevice = (yield* fs.stat(location.root).pipe(Effect.option)).pipe(
+      Option.map((info) => info.dev),
+      Option.getOrUndefined,
+    );
+    const nestedFolder = new Map<string, boolean>();
+    const isNestedFolder = Effect.fnUntraced(function* (folder: string) {
+      const known = nestedFolder.get(folder);
+      if (known !== undefined) return known;
+      const absolute = path.join(location.root, folder);
+      const nested =
+        Option.isSome(yield* fs.readLink(absolute).pipe(Effect.option)) ||
+        (yield* fs.stat(absolute).pipe(
+          Effect.map((info) => rootDevice !== undefined && info.dev !== rootDevice),
+          Effect.orElseSucceed(() => false),
+        )) ||
+        (yield* isRepositoryRoot(absolute));
+      nestedFolder.set(folder, nested);
+      return nested;
+    });
+    const own: ChangedFile[] = [];
+    for (const file of files) {
+      const parts = file.path.split("/");
+      let enclosed = false;
+      for (let index = 1; index < parts.length && !enclosed; index++)
+        enclosed = yield* isNestedFolder(parts.slice(0, index).join("/"));
+      if (!enclosed) own.push(file);
+    }
+    return own;
+  });
+
   /** Bytes of `file` at `revision`, or null when the plugin says it does not exist there. */
   const readBaseFile = Effect.fn("pluginCheckpoints.readBaseFile")(function* (
     location: Location,
@@ -488,7 +524,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
       const changes = yield* changedFiles(location, cwd, excludes);
       // Deletions are recorded, never read; a listed file that is gone counts as one.
       const files: ChangedFile[] = [];
-      for (const file of changes.files) {
+      for (const file of yield* ownFiles(location, changes.files)) {
         const absolute = path.join(location.root, file.path);
         // A symbolic link counts even when its target is gone. Only a path known to be absent is
         // a deletion: one that cannot be looked at fails the capture.
@@ -509,37 +545,10 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           ));
         files.push(present || file.status === "deleted" ? file : { ...file, status: "deleted" });
       }
-      // A folder listed as one entry is read in full, but never a repository or mount inside it,
-      // nor a listed file inside one.
+      // A folder listed as one entry is read in full, but never a repository or mount inside it.
       const inside: string[] = [];
-      const rootDevice = (yield* fs.stat(location.root)).dev;
-      const nestedFolder = new Map<string, boolean>();
-      const isNestedFolder = Effect.fnUntraced(function* (folder: string) {
-        const known = nestedFolder.get(folder);
-        if (known !== undefined) return known;
-        const absolute = path.join(location.root, folder);
-        const nested =
-          Option.isSome(yield* fs.readLink(absolute).pipe(Effect.option)) ||
-          (yield* fs.stat(absolute).pipe(
-            Effect.map((info) => info.dev !== rootDevice),
-            Effect.orElseSucceed(() => false),
-          )) ||
-          (yield* isRepositoryRoot(absolute));
-        nestedFolder.set(folder, nested);
-        return nested;
-      });
       for (const file of files) {
         if (file.status === "deleted") continue;
-        const parts = file.path.split("/");
-        let enclosed = false;
-        for (let index = 1; index < parts.length && !enclosed; index++) {
-          const folder = parts.slice(0, index).join("/");
-          if (yield* isNestedFolder(folder)) {
-            inside.push(folder);
-            enclosed = true;
-          }
-        }
-        if (enclosed) continue;
         const nested = yield* nestedRepositories(location, file.path);
         if (nested === null)
           return yield* unsupported("captureCheckpoint", `${file.path} could not be looked at.`);
@@ -1248,8 +1257,9 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     if (root !== null && root.dev !== info.dev) return [];
     // Nor a folder reached through a linked parent, which a restore refuses: it is elsewhere.
     if (yield* throughLinkedParent(location, folder)) return [];
-    // A link is removed itself; its target, maybe outside the checkout, is never visited.
-    return ((yield* walk(absolute)) ?? [])
+    // A link is removed itself; its target, maybe outside the checkout, is never visited. A
+    // repository inside is never read: its files are its own.
+    return ((yield* walk(absolute, true)) ?? [])
       .filter((entry) => entry.kind === "file" || entry.kind === "link")
       .map((entry) => `${folder}/${entry.path}`);
   });
