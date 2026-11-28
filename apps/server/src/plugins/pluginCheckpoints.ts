@@ -1454,7 +1454,7 @@ function diffHeaderPaths(section: string): readonly [string, string] | null {
   if (from !== undefined && to !== undefined && (from !== null || to !== null))
     return [from ?? to!, to ?? from!];
   // A pure rename or copy has no `---`/`+++` lines; its extended header names both paths whole.
-  const moved = lines.findIndex((line) => /^(?:rename|copy) from ./.test(line));
+  const moved = lines.findIndex((line) => /^(?:rename|copy) from [\s\S]/.test(line));
   const movedTo =
     moved === -1 ? undefined : /^(?:rename|copy) to ([\s\S]+)$/.exec(lines[moved + 1] ?? "");
   if (moved !== -1 && movedTo) {
@@ -1521,12 +1521,14 @@ export function filterPatch(patch: string, paths: ReadonlySet<string>): string {
 }
 
 /** `git diff --numstat -z` records for a Git patch, for plugins that only print patches. */
-function patchToNumstat(patch: string): string {
+export function patchToNumstat(patch: string): string {
   const records: string[] = [];
   for (const section of patch.split(/(?<![^\n])(?=diff --git )/)) {
     const header = diffHeaderPaths(section);
     if (header === null) continue;
-    const binary = /^Binary files .* differ$/m.test(section) || /^GIT binary patch$/m.test(section);
+    const binary = section
+      .split("\n")
+      .some((line) => line === "GIT binary patch" || /^Binary files [\s\S]* differ$/.test(line));
     let added = 0;
     let deleted = 0;
     // Header lines come before the first hunk; inside one, "+++i;" is an added "++i;".
