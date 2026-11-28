@@ -1,6 +1,7 @@
 import type { VcsDriverKind } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 import type * as Stream from "effect/Stream";
@@ -66,4 +67,30 @@ export const pluginMarksBeforeGit = Effect.fnUntraced(function* (
     if (parent === folder) return false;
     folder = parent;
   }
+});
+
+const DATA_VOLUME = "/System/Volumes/Data";
+
+/**
+ * Atelier fork: `resolved` without macOS's `/System/Volumes/Data` prefix when that names the
+ * same folder on disk, as firmlinked `/Users/…` does; `realPath` keeps whichever spelling it was
+ * given. Unchanged elsewhere, and for prefixed paths that are not firmlinked.
+ */
+export const withoutFirmlink = Effect.fnUntraced(function* (
+  fileSystem: FileSystem.FileSystem,
+  resolved: string,
+) {
+  if (resolved !== DATA_VOLUME && !resolved.startsWith(`${DATA_VOLUME}/`)) return resolved;
+  const stripped = resolved === DATA_VOLUME ? "/" : resolved.slice(DATA_VOLUME.length);
+  const same = yield* Effect.all([fileSystem.stat(resolved), fileSystem.stat(stripped)]).pipe(
+    Effect.map(
+      ([prefixed, plain]) =>
+        prefixed.dev === plain.dev &&
+        Option.isSome(prefixed.ino) &&
+        Option.isSome(plain.ino) &&
+        prefixed.ino.value === plain.ino.value,
+    ),
+    Effect.orElseSucceed(() => false),
+  );
+  return same ? stripped : resolved;
 });

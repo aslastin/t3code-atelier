@@ -29,12 +29,15 @@ const fail = (message) => {
   process.stderr.write(message + "\n");
   process.exit(1);
 };
-const walk = (dir, prefix = "") => {
+// Never into another file system mounted below, as a real VCS would not either.
+const walk = (dir, prefix = "", device = fs.existsSync(dir) ? fs.statSync(dir).dev : 0) => {
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     if (prefix === "" && entry.name === ".kite") return [];
     const rel = prefix ? prefix + "/" + entry.name : entry.name;
-    return entry.isDirectory() ? walk(path.join(dir, entry.name), rel) : [rel];
+    if (!entry.isDirectory()) return [rel];
+    const child = path.join(dir, entry.name);
+    return fs.statSync(child).dev === device ? walk(child, rel, device) : [];
   });
 };
 // A real VCS knows a file is unchanged from its own index; an unreadable one counts as unchanged.
@@ -219,7 +222,9 @@ switch (command) {
   case "snapshot": {
     const dir = path.join(kite, "snapshots");
     fs.mkdirSync(dir, { recursive: true });
-    const revision = "snap-" + fs.readdirSync(dir).length;
+    // One past the highest, so a dropped snapshot's name is never given to a new one.
+    const taken = fs.readdirSync(dir).map((name) => Number(/^snap-(\d+)$/.exec(name)?.[1] ?? -1));
+    const revision = "snap-" + (Math.max(-1, ...taken) + 1);
     copyTree(root, snapshotDir(revision));
     process.stdout.write(revision + "\n");
     break;

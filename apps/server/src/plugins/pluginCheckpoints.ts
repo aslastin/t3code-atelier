@@ -619,6 +619,8 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         command: "git",
         args: ["rev-parse", "--verify", "--quiet", "HEAD"],
         cwd: folder,
+        // The child alone: a `.git` Git cannot read must not find a repository around it.
+        env: { GIT_CEILING_DIRECTORIES: path.dirname(folder) },
         allowNonZeroExit: true,
         timeoutMs: CHECKPOINT_TIMEOUT_MS,
       })

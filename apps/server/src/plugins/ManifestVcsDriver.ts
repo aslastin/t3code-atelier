@@ -27,7 +27,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as VcsDriver from "../vcs/VcsDriver.ts";
 import { worktreeProjectFolder } from "../workspace/worktreeProjectPath.ts";
 import { filterPatch, makePluginCheckpoints } from "./pluginCheckpoints.ts";
-import { pluginMarksBeforeGit } from "./VcsPluginDrivers.ts";
+import { pluginMarksBeforeGit, withoutFirmlink } from "./VcsPluginDrivers.ts";
 import { makePluginCommandRunner, type PluginCommandRunner } from "./pluginCommandRunner.ts";
 import { checkpointStrategies, supportsWorktrees, usesPlaceholder } from "./pluginManifest.ts";
 
@@ -124,18 +124,14 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
     return foundReal === physical.root ? found : physical;
   });
   // macOS firmlinks: `/System/Volumes/Data/Users/…` and `/Users/…` are one folder, and
-  // `realPath` keeps whichever spelling it was given, so both are compared without the prefix.
-  const real = (target: string) =>
-    fs.realPath(target).pipe(
-      Effect.orElseSucceed(() => path.resolve(target)),
-      Effect.map((resolved) =>
-        resolved === "/System/Volumes/Data"
-          ? "/"
-          : resolved.startsWith("/System/Volumes/Data/")
-            ? resolved.slice("/System/Volumes/Data".length)
-            : resolved,
-      ),
-    );
+  // `realPath` keeps whichever spelling it was given. The prefix goes only when both spellings
+  // are the same folder on disk, which is never so elsewhere or for paths that are not firmlinked.
+  const real = Effect.fnUntraced(function* (target: string) {
+    const resolved = yield* fs
+      .realPath(target)
+      .pipe(Effect.orElseSucceed(() => path.resolve(target)));
+    return yield* withoutFirmlink(fs, resolved);
+  });
 
   const repositoryRoot = Effect.fn("ManifestVcsDriver.repositoryRoot")(function* (cwd: string) {
     const found = yield* detect(cwd);

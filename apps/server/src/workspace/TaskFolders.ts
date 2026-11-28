@@ -35,7 +35,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
-import { VcsPluginDrivers } from "../plugins/VcsPluginDrivers.ts";
+import { VcsPluginDrivers, withoutFirmlink } from "../plugins/VcsPluginDrivers.ts";
 import {
   removeEmptyDirectory,
   type RemoveEmptyDirectoryError,
@@ -427,8 +427,12 @@ const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => undefined),
     );
     if (checkoutKind !== kind) return false;
+    // One folder however spelled, macOS firmlinks included.
     const real = (target: string) =>
-      fileSystem.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
+      fileSystem.realPath(target).pipe(
+        Effect.orElseSucceed(() => path.resolve(target)),
+        Effect.flatMap((resolved) => withoutFirmlink(fileSystem, resolved)),
+      );
     const target = yield* real(checkout.worktreePath);
     const listed = yield* git
       .listWorktrees(checkout.repositoryPath)

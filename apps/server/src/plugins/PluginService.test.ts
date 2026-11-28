@@ -1327,6 +1327,21 @@ describe("ManifestVcsDriver", () => {
       }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
+  it.live("native snapshots never reuse a dropped snapshot's name", () =>
+    Effect.gen(function* () {
+      const { driver, repository } = yield* setup({ checkpoints: ["native"] });
+      const checkpoints = driver!.checkpoints;
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("1") });
+      yield* checkpoints.deleteCheckpointRefs({ cwd: repository, checkpointRefs: [ref("0")] });
+      NodeFS.writeFileSync(`${repository}/a.txt`, "later\n");
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("2") });
+      // Restoring the second snapshot brings back its own bytes, not the third's.
+      yield* checkpoints.restoreCheckpoint({ cwd: repository, checkpointRef: ref("1") });
+      assert.strictEqual(NodeFS.readFileSync(`${repository}/a.txt`, "utf8"), "one\n");
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   it.live("changed-files restores nothing through a linked folder or into a nested scope", () =>
     Effect.gen(function* () {
       const { driver, repository, plugins } = yield* setup({ checkpoints: ["changed-files"] });
@@ -1613,6 +1628,24 @@ describe("ManifestVcsDriver", () => {
       NodeFS.mkdirSync(`${repository}/vendor/.git`);
       NodeFS.writeFileSync(`${repository}/vendor/theirs.txt`, "theirs\n");
       NodeFS.writeFileSync(`${repository}/mine.txt`, "mine\n");
+      // Inside a committed Git repository, a child whose `.git` Git cannot read is no repository
+      // of its own: it is left out, not copied through the repository around it.
+      NodeChildProcess.execFileSync("git", ["init", "--quiet", repository]);
+      NodeChildProcess.execFileSync("git", [
+        "-C",
+        repository,
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        "outer",
+      ]);
+      NodeFS.mkdirSync(`${repository}/broken/.git`, { recursive: true });
+      NodeFS.writeFileSync(`${repository}/broken/inner.txt`, "inner\n");
       // A Git repository without a first commit has nothing to stage; it does not fail the copy.
       NodeChildProcess.execFileSync("git", ["init", "--quiet", `${repository}/fresh`]);
       NodeFS.writeFileSync(`${repository}/fresh/draft.txt`, "draft\n");
@@ -1634,10 +1667,13 @@ describe("ManifestVcsDriver", () => {
       assert.notInclude(withNested, "vendor/");
       assert.notInclude(withNested, "mirror.git/");
       assert.notInclude(withNested, "fresh/");
+      assert.notInclude(withNested, "broken/");
       yield* checkpoints.deleteCheckpointRefs({ cwd: repository, checkpointRefs: [ref("v")] });
       NodeFS.rmSync(`${repository}/vendor`, { recursive: true });
       NodeFS.rmSync(`${repository}/mirror.git`, { recursive: true });
       NodeFS.rmSync(`${repository}/fresh`, { recursive: true });
+      NodeFS.rmSync(`${repository}/broken`, { recursive: true });
+      NodeFS.rmSync(`${repository}/.git`, { recursive: true });
       NodeFS.rmSync(`${repository}/mine.txt`);
 
       // A project two folders down is saved, and restored, whole: Git stages nothing when an
