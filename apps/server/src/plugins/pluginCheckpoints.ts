@@ -1198,6 +1198,12 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     // A mount is never listed through; restores refuse or keep it, as a nested repository.
     const root = yield* fs.stat(location.root).pipe(Effect.orElseSucceed(() => null));
     if (root !== null && root.dev !== info.dev) return [];
+    // Nor a folder reached through a linked parent, which a restore refuses: it is elsewhere.
+    const parts = folder.split("/");
+    for (let index = 1; index < parts.length; index++) {
+      const parent = path.join(location.root, ...parts.slice(0, index));
+      if (Option.isSome(yield* fs.readLink(parent).pipe(Effect.option))) return [];
+    }
     // A link is removed itself; its target, maybe outside the checkout, is never visited.
     return ((yield* walk(absolute)) ?? [])
       .filter((entry) => entry.kind === "file" || entry.kind === "link")

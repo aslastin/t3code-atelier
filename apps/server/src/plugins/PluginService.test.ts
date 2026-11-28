@@ -1038,6 +1038,40 @@ describe("ManifestVcsDriver", () => {
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 
+  it.live("changed-files checks a restore without listing a folder behind a linked parent", () =>
+    Effect.gen(function* () {
+      const realFs = yield* FileSystem.FileSystem;
+      const reads: string[] = [];
+      const tracked = FileSystem.FileSystem.of({
+        ...realFs,
+        readDirectory: (target, options) => {
+          reads.push(target);
+          return realFs.readDirectory(target, options);
+        },
+      });
+      yield* Effect.gen(function* () {
+        const { driver, repository } = yield* setup({ checkpoints: ["changed-files"] });
+        const checkpoints = driver!.checkpoints;
+        NodeFS.writeFileSync(`${repository}/sub/b.txt`, "changed\n");
+        yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("0") });
+        // sub/ is now a link to a folder where b.txt is a folder of its own.
+        const elsewhere = NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-kite-elsewhere-`);
+        NodeFS.mkdirSync(`${elsewhere}/b.txt/deep`, { recursive: true });
+        NodeFS.writeFileSync(`${elsewhere}/b.txt/deep/one`, "theirs\n");
+        NodeFS.rmSync(`${repository}/sub`, { recursive: true });
+        NodeFS.symlinkSync(elsewhere, `${repository}/sub`);
+        reads.length = 0;
+        assert.isFalse(
+          yield* checkpoints.verifyRestorable!({ cwd: repository, checkpointRef: ref("0") }),
+        );
+        assert.deepStrictEqual(
+          reads.filter((target) => target.includes("b.txt")),
+          [],
+        );
+      }).pipe(Effect.provideService(FileSystem.FileSystem, tracked));
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+
   it.live("changed-files restores nothing through a linked folder or into a nested scope", () =>
     Effect.gen(function* () {
       const { driver, repository, plugins } = yield* setup({ checkpoints: ["changed-files"] });
