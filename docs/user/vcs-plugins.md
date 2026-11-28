@@ -29,8 +29,9 @@ one closer to the project folder wins; in the same folder, the plugin wins. Avoi
 plugins whose markers can sit in the same folder: only one of them owns it.
 
 In a plugin's repository, even while the plugin is off or its installed copy is invalid (until it
-is removed), and in a project folder that holds one
-a level or two down, or another file system mounted at any depth, T3 Code does not walk or index
+is removed), in a project folder outside Git that holds one a level or two down, and in any
+project folder with another file system mounted at any depth below it, T3 Code does not walk or
+index
 the project's files: a large repository or a network mount could make that slow or download every
 file. File mentions (`@`), the file tree's filter, and text search (`Ctrl+Shift+F` / `⌘⇧F`) say
 file search is not available, though `@` still finds threads and models by name. Opening a link by

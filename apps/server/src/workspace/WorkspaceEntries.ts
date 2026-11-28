@@ -197,6 +197,23 @@ export function parseMountPoints(output: string, platform: string): ReadonlyArra
   });
 }
 
+/** Atelier fork: whether a mount point lies strictly inside `root`. */
+export function hasMountBelow(
+  root: string,
+  points: ReadonlyArray<string>,
+  path: Path.Path,
+): boolean {
+  return points.some((point) => {
+    const relative = path.relative(root, point);
+    return (
+      relative !== "" &&
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative)
+    );
+  });
+}
+
 /** @public */
 export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
@@ -233,8 +250,8 @@ export const make = Effect.gen(function* () {
   });
 
   // A folder that holds a plugin's checkout a level or two down, such as a home folder or a
-  // wrapper of repositories, walks into it as well. Probed as the folder scan does, and
-  // remembered for a while: it reads the folder's children and theirs.
+  // wrapper of repositories, walks into it as well. Probed as the folder scan does, outside Git,
+  // and remembered for a while: it reads the folder's children and theirs.
   const holdsPluginCheckout = new Map<string, { readonly at: number; readonly holds: boolean }>();
   // A checkout can be another file system, such as a FUSE mount, at any depth: none is walked.
   const platform = yield* HostProcess.Platform;
@@ -284,7 +301,23 @@ export const make = Effect.gen(function* () {
       now - known.at < (known.holds ? PLUGIN_CHECKOUT_PROBE_TTL_MS : PLUGIN_CHECKOUT_MISS_TTL_MS)
     )
       return known.holds;
+    const root = yield* Effect.promise(() => NodeFSP.realpath(cwd).catch(() => path.resolve(cwd)));
+    // In a Git repository, only the mount table is asked: Arc's checkouts are mounts, and Git
+    // users keep the search they had, without folder reads on each probe.
+    const inGit = yield* Effect.promise(async () => {
+      for (let folder = root; ; folder = path.dirname(folder)) {
+        if (
+          await NodeFSP.access(path.join(folder, ".git")).then(
+            () => true,
+            () => false,
+          )
+        )
+          return true;
+        if (path.dirname(folder) === folder) return false;
+      }
+    });
     const probed = yield* Effect.promise(async () => {
+      if (inGit) return false;
       const marked = async (folder: string) => {
         for (const marker of markers) {
           if (
@@ -325,21 +358,8 @@ export const make = Effect.gen(function* () {
       }
       return false;
     });
-    const root = yield* Effect.promise(() => NodeFSP.realpath(cwd).catch(() => path.resolve(cwd)));
     const points = yield* mountPoints(now);
-    const holds =
-      probed ||
-      found ||
-      points === null ||
-      points.some((point) => {
-        const relative = path.relative(root, point);
-        return (
-          relative !== "" &&
-          relative !== ".." &&
-          !relative.startsWith(`..${path.sep}`) &&
-          !path.isAbsolute(relative)
-        );
-      });
+    const holds = probed || found || points === null || hasMountBelow(root, points, path);
     holdsPluginCheckout.set(cwd, { at: now, holds });
     return holds;
   });

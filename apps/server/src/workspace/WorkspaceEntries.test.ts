@@ -1307,24 +1307,65 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
       }).pipe(Effect.provide(TestClock.layer())),
     );
 
-    it("reads mount points from mount and /proc/self/mounts output", () => {
-      expect(
-        WorkspaceEntries.parseMountPoints(
+    it.effect("reads mount points from mount and /proc/self/mounts output", () =>
+      Effect.gen(function* () {
+        expect(
+          WorkspaceEntries.parseMountPoints(
+            [
+              "/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)",
+              "map auto_home on /System/Volumes/Data/home (autofs, automounted, nobrowse)",
+              "kite on /Users/me/my mono (macfuse_kite, nodev, nosuid, mounted by me)",
+            ].join("\n"),
+            "darwin",
+          ),
+        ).toEqual(["/", "/System/Volumes/Data/home", "/Users/me/my mono"]);
+        expect(
+          WorkspaceEntries.parseMountPoints(
+            "/dev/sda1 / ext4 rw 0 0\nkite /home/me/my\\040mono fuse.kite rw 0 0\n",
+            "linux",
+          ),
+        ).toEqual(["/", "/home/me/my mono"]);
+        // A Linux host as it is: kernel and snap mounts, and FUSE checkouts, escaped as the kernel
+        // writes them.
+        const linux = WorkspaceEntries.parseMountPoints(
           [
-            "/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)",
-            "map auto_home on /System/Volumes/Data/home (autofs, automounted, nobrowse)",
-            "kite on /Users/me/my mono (macfuse_kite, nodev, nosuid, mounted by me)",
+            "sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0",
+            "proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0",
+            "/dev/nvme0n1p2 / ext4 rw,relatime,errors=remount-ro 0 0",
+            "tmpfs /run/user/1000 tmpfs rw,nosuid,nodev,relatime,size=3270364k,mode=700 0 0",
+            "/dev/loop3 /snap/core22/1612 squashfs ro,nodev,relatime 0 0",
+            "kite /home/me/mono fuse.kite rw,nosuid,nodev,relatime,user_id=1000,group_id=1000 0 0",
+            "kite /home/me/work/wt\\011tab\\134x fuse.kite rw,nosuid,nodev,relatime 0 0",
           ].join("\n"),
-          "darwin",
-        ),
-      ).toEqual(["/", "/System/Volumes/Data/home", "/Users/me/my mono"]);
-      expect(
-        WorkspaceEntries.parseMountPoints(
-          "/dev/sda1 / ext4 rw 0 0\nkite /home/me/my\\040mono fuse.kite rw 0 0\n",
           "linux",
-        ),
-      ).toEqual(["/", "/home/me/my mono"]);
-    });
+        );
+        expect(linux).toContain("/home/me/work/wt\ttab\\x");
+        const path = yield* Path.Path;
+        // A mount at any depth below the project counts; the project's own and those above do not.
+        expect(WorkspaceEntries.hasMountBelow("/home/me", linux, path)).toBe(true);
+        expect(WorkspaceEntries.hasMountBelow("/home/me/work", linux, path)).toBe(true);
+        expect(WorkspaceEntries.hasMountBelow("/home/me/mono", linux, path)).toBe(false);
+        expect(WorkspaceEntries.hasMountBelow("/home/me/mono/src", linux, path)).toBe(false);
+        expect(WorkspaceEntries.hasMountBelow("/home/me/monorepo", linux, path)).toBe(false);
+        expect(WorkspaceEntries.hasMountBelow("/srv/project", linux, path)).toBe(false);
+      }),
+    );
+
+    it.effect("probes no folders for a checkout in a Git repository, only the mount table", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir({ git: true });
+        yield* writeTextFile(cwd, "vendor/mono/.kite/HEAD", "main\n");
+        yield* writeTextFile(cwd, "src/index.ts");
+        const inPlugin = Effect.provideService(VcsPluginDrivers, {
+          installedMarkers: () => [".kite/HEAD"],
+        } as unknown as VcsPluginDrivers["Service"]);
+        const result = yield* searchWorkspaceEntries({ cwd, query: "index", limit: 10 }).pipe(
+          inPlugin,
+        );
+        expect(result.unavailable).toBeUndefined();
+        expect(result.entries.map((entry) => entry.path)).toContain("src/index.ts");
+      }),
+    );
 
     it.effect("drops an index made before a plugin claimed the folder", () =>
       Effect.gen(function* () {
