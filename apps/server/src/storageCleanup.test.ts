@@ -550,7 +550,7 @@ const cleanupFixture = (
             })),
           listLocalBranchNames: () => Effect.sync(() => pluginStatus.repositoryBranches),
           // The project's own repository belongs to the Kite plugin.
-          localStatus: () => Effect.succeed({ capabilities: { kind: "kite" } }),
+          vcsKind: () => Effect.succeed("kite"),
           removeWorktree: (input: { readonly path: string }) =>
             fs.remove(input.path, { recursive: true }).pipe(Effect.orDie),
         }),

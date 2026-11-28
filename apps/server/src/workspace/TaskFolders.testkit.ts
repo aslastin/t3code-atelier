@@ -101,13 +101,13 @@ export const layerTaskFoldersWithGit = (state: TaskFoldersTestState) => {
         currentBranch: (cwd) => succeeds(cwd, ["symbolic-ref", "--short", "--quiet", "HEAD"]),
         listWorktrees: () => Effect.sync(() => state.pluginWorktrees ?? []),
         // The VCS a folder answers to, by the marker a test gave it.
-        localStatus: ({ cwd }) =>
+        vcsKind: (cwd) =>
           Effect.gen(function* () {
             for (const kind of ["kite", "other"]) {
               if (yield* fs.exists(`${cwd}/.${kind}/HEAD`).pipe(Effect.orElseSucceed(() => false)))
-                return { capabilities: { kind } } as never;
+                return kind as never;
             }
-            return { capabilities: { kind: "git" } } as never;
+            return "git" as never;
           }),
       });
     }),

@@ -31,6 +31,7 @@ import {
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   type VcsStatusResult,
+  type VcsDriverKind,
 } from "@t3tools/contracts";
 
 import {
@@ -64,6 +65,11 @@ export class GitWorkflowService extends Context.Service<
       input: VcsStatusInput,
       options?: GitManager.GitLocalStatusOptions,
     ) => Effect.Effect<VcsStatusLocalResult, GitManagerServiceError>;
+    /**
+     * Atelier fork: the VCS a folder answers to, found by its markers alone: no status runs, so
+     * callers that only need the kind skip a plugin's process spawns. Null outside a repository.
+     */
+    readonly vcsKind: (cwd: string) => Effect.Effect<VcsDriverKind | null, GitManagerServiceError>;
     readonly currentBranch: (cwd: string) => Effect.Effect<string | null, GitManagerServiceError>;
     readonly upstreamDivergence: (cwd: string) => Effect.Effect<
       {
@@ -615,6 +621,9 @@ export const make = Effect.gen(function* () {
         ? gitManager.localStatus(input, options)
         : Effect.map(driverStatus(handle, input), toLocalStatusPart);
       return withCapabilities(handle, local);
+    }),
+    vcsKind: Effect.fn("GitWorkflowService.vcsKind")(function* (cwd) {
+      return (yield* detectWorkflow("GitWorkflowService.vcsKind", cwd))?.kind ?? null;
     }),
     currentBranch: Effect.fn("GitWorkflowService.currentBranch")(function* (cwd) {
       const handle = yield* detectWorkflow("GitWorkflowService.currentBranch", cwd);

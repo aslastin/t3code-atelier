@@ -408,18 +408,17 @@ const make = Effect.gen(function* () {
   // Null when the repository's VCS did not answer.
   const pluginOwnsRepository = Effect.fnUntraced(function* (checkout: TaskFolderCheckout) {
     if (plugins?.hasAny() !== true) return false;
-    const status = yield* git
-      .localStatus({ cwd: checkout.repositoryPath })
-      .pipe(Effect.orElseSucceed(() => null));
-    if (status === null) return null;
-    const kind = status.capabilities?.kind;
-    return kind !== undefined && kind !== GIT_VCS_KIND;
+    const kind = yield* git
+      .vcsKind(checkout.repositoryPath)
+      .pipe(Effect.orElseSucceed(() => undefined));
+    if (kind === undefined) return null;
+    return kind !== null && kind !== GIT_VCS_KIND;
   });
   const listedPluginCheckout = Effect.fnUntraced(function* (checkout: TaskFolderCheckout) {
     if (plugins?.hasAny() !== true) return false;
     const kindOf = (cwd: string) =>
-      git.localStatus({ cwd }).pipe(
-        Effect.map((status) => status.capabilities?.kind),
+      git.vcsKind(cwd).pipe(
+        Effect.map((kind) => kind ?? undefined),
         Effect.orElseSucceed(() => undefined),
       );
     const kind = yield* kindOf(checkout.repositoryPath);
@@ -624,8 +623,8 @@ const make = Effect.gen(function* () {
   const defaultBranchOf = Effect.fnUntraced(function* (cwd: string) {
     const kind =
       plugins?.hasAny() === true
-        ? yield* git.localStatus({ cwd }).pipe(
-            Effect.map((status) => status.capabilities?.kind),
+        ? yield* git.vcsKind(cwd).pipe(
+            Effect.map((kind) => kind ?? undefined),
             Effect.orElseSucceed(() => undefined),
           )
         : undefined;

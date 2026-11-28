@@ -395,14 +395,14 @@ const make = Effect.gen(function* () {
   };
   // A VCS plugin's worktree: the plugin that owns the project lists it, and the folder carries
   // that plugin's marker. Its kind, or null for anything else.
+  // By markers alone: a sweep asks once per thread worktree, and a plugin's status spawns.
   const projectPlugin = Effect.fnUntraced(function* (projectRoot: string) {
-    const project = yield* gitWorkflow
-      .localStatus({ cwd: projectRoot })
-      .pipe(Effect.orElseSucceed(() => null));
-    if (project === null) return "unanswered" as const;
-    const kind = project.capabilities?.kind;
-    const plugin = kind === undefined ? undefined : plugins?.describe(kind);
-    return kind === undefined || plugin === undefined ? null : { kind, plugin };
+    const kind = yield* gitWorkflow
+      .vcsKind(projectRoot)
+      .pipe(Effect.orElseSucceed(() => undefined));
+    if (kind === undefined) return "unanswered" as const;
+    const plugin = kind === null ? undefined : plugins?.describe(kind);
+    return kind === null || plugin === undefined ? null : { kind, plugin };
   });
   const pluginWorktreeKind = Effect.fnUntraced(function* (
     worktreePath: string,
