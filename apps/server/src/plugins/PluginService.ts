@@ -231,10 +231,18 @@ const make = Effect.gen(function* () {
     // An installed copy remembers its markers; a folder being imported is not installed yet.
     const installed = pluginDirectory === path.join(directory, folder);
     const known = installed ? yield* readKnownMarkers : {};
-    const markers = [...new Set([...named, ...(known[folder] ?? [])])];
+    const remembered = Object.hasOwn(known, folder) ? known[folder]! : [];
+    // What this server already guarded counts too, should the file above not have been written.
+    const markers = [
+      ...new Set([
+        ...named,
+        ...remembered,
+        ...(installed ? (entries.get(folder)?.markers ?? []) : []),
+      ]),
+    ];
     if (installed && valid !== null) {
       const current = valid.detect.markers;
-      const stored = known[folder] ?? [];
+      const stored = remembered;
       if (current.length !== stored.length || current.some((marker, i) => marker !== stored[i]))
         yield* writeKnownMarkers({ ...known, [folder]: current });
     }
@@ -598,7 +606,7 @@ const make = Effect.gen(function* () {
           const disabled = yield* readDisabled;
           if (disabled.delete(folder)) yield* writeDisabled(disabled);
           const known = yield* readKnownMarkers;
-          if (folder in known) {
+          if (Object.hasOwn(known, folder)) {
             const { [folder]: _removed, ...rest } = known;
             yield* writeKnownMarkers(rest);
           }
@@ -770,9 +778,8 @@ export const layerInstalledMarkers = Layer.effect(
     // Set-aside copies and imports in progress start with a dot.
     for (const name of names.filter((entry) => !entry.startsWith(".")).toSorted()) {
       markers.push(...(yield* readManifest(fs, path, path.join(directory, name))).markers);
-      markers.push(
-        ...((yield* readKnownMarkersFile(fs, path.join(directory, MARKERS_FILE_NAME)))[name] ?? []),
-      );
+      const known = yield* readKnownMarkersFile(fs, path.join(directory, MARKERS_FILE_NAME));
+      if (Object.hasOwn(known, name)) markers.push(...known[name]!);
     }
     return VcsPluginDrivers.of({
       current: Effect.succeed(new Map()),

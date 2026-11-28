@@ -248,6 +248,26 @@ describe("PluginService", () => {
       assert.deepStrictEqual(offlineUnparsed.installedMarkers(), [".kite/HEAD"]);
       NodeFS.writeFileSync(manifestPath, manifestText);
       yield* plugins.recheck("kite");
+      // Nor when that file could not be written: the running server keeps what it guarded.
+      const knownFile = `${home}/plugins/.markers.json`;
+      NodeFS.rmSync(knownFile);
+      NodeFS.mkdirSync(knownFile);
+      yield* plugins.recheck("kite");
+      NodeFS.writeFileSync(manifestPath, "{");
+      yield* plugins.recheck("kite");
+      assert.deepStrictEqual(drivers.installedMarkers(), [".kite/HEAD"]);
+      NodeFS.rmSync(knownFile, { recursive: true });
+      NodeFS.writeFileSync(manifestPath, manifestText);
+      yield* plugins.recheck("kite");
+      // An id that names an object property is a plugin like any other.
+      yield* plugins.importFolder(
+        writeFakeVcsPlugin(NodeFS.mkdtempSync(`${NodeOS.tmpdir()}/t3-constructor-plugin-`), {
+          id: "constructor",
+          extraManifest: { detect: { markers: [".ctor/HEAD"] } },
+        }),
+      );
+      assert.include(drivers.installedMarkers(), ".ctor/HEAD");
+      yield* plugins.remove("constructor");
 
       // Disable and Remove are the way back out.
       const disabled = yield* plugins.setEnabled("kite", false);
@@ -1548,6 +1568,8 @@ describe("ManifestVcsDriver", () => {
       );
       NodeFS.mkdirSync(`${repository}/vendor/.other`, { recursive: true });
       NodeFS.writeFileSync(`${repository}/vendor/.other/HEAD`, "main\n");
+      // A `.git` beside its marker does not hand it to Git: the plugin wins in the same folder.
+      NodeFS.mkdirSync(`${repository}/vendor/.git`);
       NodeFS.writeFileSync(`${repository}/vendor/theirs.txt`, "theirs\n");
       NodeFS.writeFileSync(`${repository}/mine.txt`, "mine\n");
       yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("v") });
@@ -1562,6 +1584,32 @@ describe("ManifestVcsDriver", () => {
       yield* checkpoints.deleteCheckpointRefs({ cwd: repository, checkpointRefs: [ref("v")] });
       NodeFS.rmSync(`${repository}/vendor`, { recursive: true });
       NodeFS.rmSync(`${repository}/mine.txt`);
+
+      // A project two folders down is saved, and restored, whole: Git stages nothing when an
+      // exclusion such as `.kite` lies outside such a path.
+      const sub = `${repository}/packages/ui`;
+      NodeFS.mkdirSync(sub, { recursive: true });
+      NodeFS.writeFileSync(`${sub}/b.txt`, "two\n");
+      // An unreadable folder of the VCS's own metadata is never entered.
+      NodeFS.mkdirSync(`${repository}/.kite/private`);
+      NodeFS.chmodSync(`${repository}/.kite/private`, 0o000);
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (NodeFS.existsSync(`${repository}/.kite/private`))
+            NodeFS.chmodSync(`${repository}/.kite/private`, 0o755);
+        }),
+      );
+      yield* checkpoints.captureCheckpoint({ cwd: repository, checkpointRef: ref("p") });
+      yield* checkpoints.deleteCheckpointRefs({ cwd: repository, checkpointRefs: [ref("p")] });
+      yield* checkpoints.captureCheckpoint({ cwd: sub, checkpointRef: ref("s") });
+      NodeFS.writeFileSync(`${sub}/b.txt`, "changed\n");
+      assert.isTrue(yield* checkpoints.verifyRestorable!({ cwd: sub, checkpointRef: ref("s") }));
+      yield* checkpoints.restoreCheckpoint({ cwd: sub, checkpointRef: ref("s") });
+      assert.strictEqual(NodeFS.readFileSync(`${sub}/b.txt`, "utf8"), "two\n");
+      NodeFS.chmodSync(`${repository}/.kite/private`, 0o755);
+      NodeFS.rmSync(`${repository}/.kite/private`, { recursive: true });
+      yield* checkpoints.deleteCheckpointRefs({ cwd: sub, checkpointRefs: [ref("s")] });
+      NodeFS.rmSync(`${repository}/packages`, { recursive: true });
 
       // A Git repository made inside since is saved as its commit alone, so it is never removed.
       const tool = `${repository}/vendor/tool`;
@@ -1653,6 +1701,18 @@ describe("ManifestVcsDriver", () => {
         NodeChildProcess.execFileSync("git", [`--git-dir=${home}/${shadows[0]}`, ...args], {
           encoding: "utf8",
         });
+      // A ref Git cannot delete now still loses its record: a record kept for a retry would read
+      // as a checkpoint still there, such as an earlier rewind's.
+      const locked = `${home}/${shadows[0]}/${owned[0]!.checkpointRef}.lock`;
+      NodeFS.writeFileSync(locked, "");
+      yield* checkpoints.deleteCheckpointRefs({
+        cwd: owned[0]!.repositoryRoot,
+        checkpointRefs: [CheckpointRef.make(owned[0]!.checkpointRef)],
+      });
+      assert.lengthOf(yield* recorded, owned.length - 1);
+      NodeFS.rmSync(locked);
+      // The ref it left keeps only its own objects.
+      shadowGit("update-ref", "-d", owned[0]!.checkpointRef);
       // Past Git's threshold, deleting snapshots lets Git collect those older than two weeks.
       // A user's `gc.pruneExpire=now` does not shorten that: a capture's fresh objects stay.
       shadowGit("config", "gc.auto", "1");
@@ -1683,15 +1743,6 @@ describe("ManifestVcsDriver", () => {
           ).trim(),
         );
       }
-      // A ref Git cannot delete now keeps its record, so the next cleanup tries again.
-      const locked = `${home}/${shadows[0]}/${owned[0]!.checkpointRef}.lock`;
-      NodeFS.writeFileSync(locked, "");
-      yield* checkpoints.deleteCheckpointRefs({
-        cwd: owned[0]!.repositoryRoot,
-        checkpointRefs: [CheckpointRef.make(owned[0]!.checkpointRef)],
-      });
-      assert.lengthOf(yield* recorded, owned.length);
-      NodeFS.rmSync(locked);
       yield* checkpoints.deleteCheckpointRefs({
         cwd: owned[0]!.repositoryRoot,
         checkpointRefs: owned.map((record) => CheckpointRef.make(record.checkpointRef)),

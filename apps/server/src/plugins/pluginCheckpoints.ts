@@ -615,20 +615,41 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     excludes: ReadonlyArray<string>,
   ) {
     const scope = location.scope === "" ? location.root : path.join(location.root, location.scope);
-    const walked = yield* walk(scope, true, true);
+    const prefix = location.scope === "" ? "" : `${location.scope}/`;
+    // Git stages nothing when an exclusion lies outside the one path it was given, so only
+    // those inside the project folder are passed.
+    const inScopeExcludes = [...context.metadataFolders, ...excludes].filter(
+      (exclude) => prefix === "" || exclude.startsWith(prefix),
+    );
+    const [rootInfo, scopeInfo] = yield* Effect.all([fs.stat(location.root), fs.stat(scope)]).pipe(
+      Effect.mapError(() => unsupported("captureCheckpoint", `${scope} could not be read.`)),
+    );
+    if (rootInfo.dev !== scopeInfo.dev)
+      return yield* unsupported(
+        "captureCheckpoint",
+        `${location.scope} is another file system mounted in the checkout, so it is not copied.`,
+      );
+    const walked = yield* walk(scope, true, true, (relative) =>
+      inScopeExcludes.some((exclude) => `${prefix}${relative}` === exclude),
+    );
     if (walked === null)
       return yield* unsupported("captureCheckpoint", `${location.scope || "."} could not be read.`);
-    const prefix = location.scope === "" ? "" : `${location.scope}/`;
+    const pluginMarkers = context.repositoryMarkers();
     const nested: string[] = [];
     for (const entry of walked) {
       if (entry.kind === "mount") nested.push(`${prefix}${entry.path}`);
-      else if (
-        entry.kind === "repository" &&
-        !(yield* fs
-          .exists(path.join(scope, entry.path, ".git"))
-          .pipe(Effect.orElseSucceed(() => false)))
-      )
-        nested.push(`${prefix}${entry.path}`);
+      if (entry.kind !== "repository") continue;
+      // In the same folder a plugin's marker wins over `.git`, as everywhere else.
+      for (const marker of pluginMarkers) {
+        if (
+          yield* fs
+            .exists(path.join(scope, entry.path, marker))
+            .pipe(Effect.orElseSucceed(() => true))
+        ) {
+          nested.push(`${prefix}${entry.path}`);
+          break;
+        }
+      }
     }
     yield* git(
       location,
@@ -638,9 +659,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
         "--all",
         "--",
         location.scope === "" ? ":(top)" : `:(top,literal)${location.scope}`,
-        ...[...context.metadataFolders, ...excludes, ...nested].map(
-          (exclude) => `:(top,literal,exclude)${exclude}`,
-        ),
+        ...[...inScopeExcludes, ...nested].map((exclude) => `:(top,literal,exclude)${exclude}`),
       ],
       { index },
     );
@@ -860,6 +879,8 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
     stopAtRepositories = false,
     // The folder itself is the checkout being walked, not a repository inside it.
     ownRoot = false,
+    // Folders, relative to `absolute`, never entered.
+    skip: (relative: string) => boolean = () => false,
   ) {
     const found: Array<{
       readonly path: string;
@@ -899,7 +920,7 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           continue;
         }
         found.push({ path: entry, kind: folder ? "folder" : "file" });
-        if (folder) pending.push(entry);
+        if (folder && !skip(entry)) pending.push(entry);
       }
     }
     return found;
@@ -1395,20 +1416,13 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
           cwd: shadowRoot,
           bare: true,
         }).pipe(Effect.result);
-        // A ref still there keeps its record, so the next cleanup tries again. With the shadow
-        // repository gone there is nothing left to delete.
-        if (
-          deleted._tag === "Failure" &&
-          (yield* fs
-            .exists(path.join(location.shadow, "HEAD"))
-            .pipe(Effect.orElseSucceed(() => true)))
-        ) {
+        // The record goes either way: one kept for a retry would read as a checkpoint still
+        // there, such as an earlier rewind's. A ref left behind only keeps its objects.
+        if (deleted._tag === "Failure")
           yield* Effect.logWarning("VCS plugin checkpoint ref deletion failed", {
             checkpointRef,
             error: deleted.failure,
           });
-          continue;
-        }
         shadowRefsDeleted = true;
         yield* forget;
         continue;
