@@ -769,7 +769,7 @@ export const make = Effect.gen(function* () {
         const pluginRepository = yield* inPluginRepository(normalizedCwd);
         // Asked even when the probe already says so, so the checkout is remembered after the
         // probe's own finding goes away.
-        const marked = !pluginRepository && (yield* holdsMarkedFolder(normalizedCwd, entries));
+        const marked = yield* holdsMarkedFolder(normalizedCwd, entries);
         const walk =
           pluginRepository || marked || (yield* containsPluginCheckout(normalizedCwd))
             ? { treeWalkUnavailable: true }

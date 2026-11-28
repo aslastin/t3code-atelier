@@ -1307,6 +1307,30 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
       }).pipe(Effect.provide(TestClock.layer())),
     );
 
+    it.effect(
+      "remembers a listed checkout inside a plugin's repository after that plugin goes",
+      () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTempDir({ git: true });
+          yield* writeTextFile(cwd, ".kite/HEAD", "main\n");
+          yield* writeTextFile(cwd, "a/b/child/.other/HEAD", "main\n");
+          const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+          const withMarkers = (markers: ReadonlyArray<string>) =>
+            Effect.provideService(VcsPluginDrivers, {
+              installedMarkers: () => markers,
+            } as unknown as VcsPluginDrivers["Service"]);
+          yield* workspaceEntries
+            .list({ cwd, directoryPath: "a/b" })
+            .pipe(withMarkers([".kite/HEAD", ".other/HEAD"]));
+          // Kite is removed; the other plugin's checkout found in `a/b` still stops the walk.
+          expect(
+            (yield* workspaceEntries
+              .list({ cwd, directoryPath: "" })
+              .pipe(withMarkers([".other/HEAD"]))).treeWalkUnavailable,
+          ).toBe(true);
+        }),
+    );
+
     it.effect("reads mount points from mount and /proc/self/mounts output", () =>
       Effect.gen(function* () {
         expect(
