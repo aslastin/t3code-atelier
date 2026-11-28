@@ -416,18 +416,17 @@ const make = Effect.gen(function* () {
   });
   const listedPluginCheckout = Effect.fnUntraced(function* (checkout: TaskFolderCheckout) {
     if (plugins?.hasAny() !== true) return false;
-    const kindOf = (cwd: string) =>
-      git.vcsKind(cwd).pipe(
-        Effect.map((kind) => kind ?? undefined),
-        Effect.orElseSucceed(() => undefined),
-      );
-    const kind = yield* kindOf(checkout.repositoryPath);
-    if (
-      kind === undefined ||
-      kind === GIT_VCS_KIND ||
-      (yield* kindOf(checkout.worktreePath)) !== kind
-    )
-      return false;
+    const kind = yield* git.vcsKind(checkout.repositoryPath).pipe(
+      Effect.map((found) => found ?? undefined),
+      Effect.orElseSucceed(() => undefined),
+    );
+    if (kind === undefined || kind === GIT_VCS_KIND) return false;
+    // The checkout itself must answer: a marker left behind with its store gone is no checkout.
+    const checkoutKind = yield* git.localStatus({ cwd: checkout.worktreePath }).pipe(
+      Effect.map((status) => status.capabilities?.kind),
+      Effect.orElseSucceed(() => undefined),
+    );
+    if (checkoutKind !== kind) return false;
     const real = (target: string) =>
       fileSystem.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
     const target = yield* real(checkout.worktreePath);

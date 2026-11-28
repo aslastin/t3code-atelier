@@ -608,24 +608,22 @@ export const makePluginCheckpoints = Effect.fn("pluginCheckpoints.make")(functio
   };
 
   // Whether `folder` is a Git checkout with a commit to stage as a gitlink: Git refuses to add one
-  // without, and fails the whole capture. A gitfile (a worktree or submodule) is taken as having
-  // one; Git reports otherwise if it does not.
+  // without, and fails the whole capture.
   const hasCommit = Effect.fnUntraced(function* (folder: string) {
-    const dotGit = path.join(folder, ".git");
-    const info = yield* fs.stat(dotGit).pipe(Effect.option);
-    if (Option.isNone(info)) return false;
-    if (info.value.type !== "Directory") return true;
-    const head = (yield* fs
-      .readFileString(path.join(dotGit, "HEAD"))
-      .pipe(Effect.orElseSucceed(() => ""))).trim();
-    const ref = /^ref: (refs\/\S+)$/.exec(head)?.[1];
-    if (ref === undefined) return /^[0-9a-f]{40,64}$/.test(head);
-    if (yield* fs.exists(path.join(dotGit, ref)).pipe(Effect.orElseSucceed(() => false)))
-      return true;
-    const packed = yield* fs
-      .readFileString(path.join(dotGit, "packed-refs"))
-      .pipe(Effect.orElseSucceed(() => ""));
-    return packed.split("\n").some((line) => line.endsWith(` ${ref}`));
+    if (!(yield* fs.exists(path.join(folder, ".git")).pipe(Effect.orElseSucceed(() => false))))
+      return false;
+    // Git itself answers, whatever its layout: a gitfile, reftable refs, or an unborn branch.
+    const result = yield* vcsProcess
+      .run({
+        operation: "pluginCheckpoints.hasCommit",
+        command: "git",
+        args: ["rev-parse", "--verify", "--quiet", "HEAD"],
+        cwd: folder,
+        allowNonZeroExit: true,
+        timeoutMs: CHECKPOINT_TIMEOUT_MS,
+      })
+      .pipe(Effect.orElseSucceed(() => null));
+    return result !== null && result.exitCode === 0;
   });
 
   // A mount or another plugin's checkout inside is left out: Git would read all of it. A Git

@@ -123,8 +123,19 @@ export const makeManifestVcsDriver = Effect.fn("ManifestVcsDriver.make")(functio
     const foundReal = yield* fs.realPath(found.root).pipe(Effect.orElseSucceed(() => found.root));
     return foundReal === physical.root ? found : physical;
   });
+  // macOS firmlinks: `/System/Volumes/Data/Users/…` and `/Users/…` are one folder, and
+  // `realPath` keeps whichever spelling it was given, so both are compared without the prefix.
   const real = (target: string) =>
-    fs.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
+    fs.realPath(target).pipe(
+      Effect.orElseSucceed(() => path.resolve(target)),
+      Effect.map((resolved) =>
+        resolved === "/System/Volumes/Data"
+          ? "/"
+          : resolved.startsWith("/System/Volumes/Data/")
+            ? resolved.slice("/System/Volumes/Data".length)
+            : resolved,
+      ),
+    );
 
   const repositoryRoot = Effect.fn("ManifestVcsDriver.repositoryRoot")(function* (cwd: string) {
     const found = yield* detect(cwd);

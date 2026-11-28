@@ -367,6 +367,11 @@ it.live("gives a VCS plugin's project folder a checkout, not links to the origin
     const unlisted = yield* restore.pipe(Effect.flip);
     assert.include(unlisted.detail, "is not a worktree of");
     state.pluginWorktrees = [shop, checkout];
+    // A marker left behind with its store gone answers no status: it is not the thread's.
+    state.brokenCheckouts = [checkout];
+    const broken = yield* restore.pipe(Effect.flip);
+    assert.include(broken.detail, "is not a worktree of");
+    state.brokenCheckouts = [];
     yield* restore;
     // A plugin may keep a Git clone of its own there; its marker still decides.
     yield* fileSystem.makeDirectory(path.join(checkout, ".git"));

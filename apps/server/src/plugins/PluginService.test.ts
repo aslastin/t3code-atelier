@@ -284,6 +284,21 @@ describe("PluginService", () => {
       assert.deepStrictEqual(offlineChanged.installedMarkers(), [".kite/STORE"]);
       NodeFS.writeFileSync(manifestPath, manifestText);
       yield* plugins.recheck("kite");
+      // A manifest the server refuses, such as one whose id no longer matches its folder, is
+      // refused offline too: the markers it last guarded stay.
+      NodeFS.writeFileSync(
+        manifestPath,
+        JSON.stringify({ ...changed, id: "renamed", detect: { markers: [".kite/STORE"] } }),
+      );
+      const offlineRenamed = yield* VcsPluginDrivers.pipe(
+        Effect.provide(
+          PluginService.layerInstalledMarkers.pipe(
+            Layer.provide(ServerConfig.layerTest(home, home)),
+          ),
+        ),
+      );
+      assert.sameMembers([...offlineRenamed.installedMarkers()], [".kite/STORE", ".kite/HEAD"]);
+      NodeFS.writeFileSync(manifestPath, manifestText);
 
       // Disable and Remove are the way back out.
       const disabled = yield* plugins.setEnabled("kite", false);
@@ -644,6 +659,16 @@ describe("ManifestVcsDriver", () => {
       NodeFS.rmSync(worktree.path, { recursive: true });
       NodeFS.renameSync(`${worktree.path}-moved`, worktree.path);
 
+      // On macOS a firmlinked spelling of the repository is still the repository. Elsewhere the
+      // spelling does not exist and the case is skipped.
+      const aliased = `/System/Volumes/Data${NodeFS.realpathSync(repository)}`;
+      if (NodeFS.existsSync(aliased)) {
+        const aliasRefused = yield* workflow.removeWorktree!({
+          cwd: `${repository}/sub`,
+          path: aliased,
+        }).pipe(Effect.flip);
+        assert.include(aliasRefused.message, "not a worktree");
+      }
       // A Git repository nested in the checkout names itself, not the checkout around it.
       NodeFS.mkdirSync(`${worktree.path}/inner/.git`, { recursive: true });
       const nested = yield* workflow.removeWorktree!({

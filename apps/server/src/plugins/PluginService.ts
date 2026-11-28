@@ -782,8 +782,13 @@ export const layerInstalledMarkers = Layer.effect(
     // Set-aside copies and imports in progress start with a dot.
     for (const name of names.filter((entry) => !entry.startsWith(".")).toSorted()) {
       const read = yield* readManifest(fs, path, path.join(directory, name));
-      // A valid manifest names its own markers; remembered ones guard only while it is invalid.
-      if (read.manifest !== null) {
+      // A valid manifest names its own markers; remembered ones guard only while it is invalid,
+      // as the server judges it: its id matching the folder, and the files it names present.
+      const valid =
+        read.manifest !== null &&
+        read.manifest.id === name &&
+        (yield* checkPluginFiles(fs, path, path.join(directory, name), read.manifest)).length === 0;
+      if (valid && read.manifest !== null) {
         markers.push(...read.manifest.detect.markers);
         continue;
       }

@@ -33,6 +33,8 @@ export interface TaskFoldersTestState {
   pluginCreated?: Array<{ readonly path: string; readonly refName: string }>;
   /** The branch a VCS plugin names instead of the one asked for. */
   pluginNamesBranch?: string;
+  /** Checkouts whose plugin status fails, as one whose store is gone. */
+  brokenCheckouts?: ReadonlyArray<string>;
 }
 
 /**
@@ -51,6 +53,13 @@ export const layerTaskFoldersWithGit = (state: TaskFoldersTestState) => {
       // A Kite repository, marked by `.kite/HEAD`, answers through its plugin instead of Git.
       const isKite = (cwd: string) =>
         fs.exists(`${cwd}/.kite/HEAD`).pipe(Effect.orElseSucceed(() => false));
+      const markedKind = Effect.fnUntraced(function* (cwd: string) {
+        for (const kind of ["kite", "other"]) {
+          if (yield* fs.exists(`${cwd}/.${kind}/HEAD`).pipe(Effect.orElseSucceed(() => false)))
+            return kind as never;
+        }
+        return "git" as never;
+      });
       return Layer.mock(GitWorkflowService.GitWorkflowService)({
         createWorktree: (input, options) =>
           Effect.gen(function* () {
@@ -101,14 +110,11 @@ export const layerTaskFoldersWithGit = (state: TaskFoldersTestState) => {
         currentBranch: (cwd) => succeeds(cwd, ["symbolic-ref", "--short", "--quiet", "HEAD"]),
         listWorktrees: () => Effect.sync(() => state.pluginWorktrees ?? []),
         // The VCS a folder answers to, by the marker a test gave it.
-        vcsKind: (cwd) =>
-          Effect.gen(function* () {
-            for (const kind of ["kite", "other"]) {
-              if (yield* fs.exists(`${cwd}/.${kind}/HEAD`).pipe(Effect.orElseSucceed(() => false)))
-                return kind as never;
-            }
-            return "git" as never;
-          }),
+        vcsKind: (cwd) => markedKind(cwd),
+        localStatus: ({ cwd }) =>
+          (state.brokenCheckouts ?? []).includes(cwd)
+            ? Effect.fail("its store is gone" as never)
+            : Effect.map(markedKind(cwd), (kind) => ({ capabilities: { kind } }) as never),
       });
     }),
   );
