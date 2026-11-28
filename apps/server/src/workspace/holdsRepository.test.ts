@@ -39,7 +39,12 @@ it.layer(NodeServices.layer)("holdsRepository", (it) => {
                 ),
               ),
         });
-      for (const mount of [path.join(root, "notes"), path.join(root, "clone", ".git"), root]) {
+      for (const mount of [
+        path.join(root, "notes"),
+        path.join(root, "clone", ".git"),
+        path.join(root, "clone", ".git", "objects"),
+        root,
+      ]) {
         assert.isTrue(yield* holdsRepository(mountedAt(mount), path, root, [], gitless));
       }
     }).pipe(Effect.scoped),

@@ -15,7 +15,7 @@ export const holdsRepository = Effect.fn("holdsRepository")(
     root: string,
     markers: ReadonlyArray<string>,
     // Off for walks that only guard plugin checkouts and mounts: a `.git` folder holds HEAD,
-    // objects and refs too, and is not walked.
+    // objects and refs too. It is still walked for mounts inside it.
     options: { readonly bareRepositories?: boolean } = {},
   ) {
     const bareRepositories = options.bareRepositories !== false;
@@ -41,7 +41,6 @@ export const holdsRepository = Effect.fn("holdsRepository")(
         const info = yield* fileSystem.stat(child);
         if (info.type !== "Directory") continue;
         if (info.dev !== device) return true;
-        if (!bareRepositories && entry.toLowerCase() === ".git") continue;
         queue.push(child);
       }
     }
